@@ -55,18 +55,21 @@ Three exit-side primitives that share the unlock-callback skeleton and the `_tak
 
 | Path | Change |
 |---|---|
-| `src/UniSmartWallet.sol` | Add three external functions + their internal `_handleClose` / `_handleDecrease` / `_handlePoke` bodies; remove `"NotImplemented"` stubs from task 003 |
-| `test/UniSmartWallet.t.sol` | Append the 9 tests; helper that simulates a swap through the position's range so fees actually accrue |
+| `src/UniSmartWallet.sol` | Add three external functions + their internal handlers; share `_withdrawLiquidity` helper; add `RemoveParams` struct, new events (`PositionClosed`, `PositionDecreased`, `FeesCollected`), new errors (`UnknownPosition`, `ZeroDelta`, `DeltaExceedsLiquidity`); add `_saltIndexPlusOne` mapping + `_removeSalt` for O(1) splice; drop the now-unused `NotImplemented` error |
+| `test/helpers/V4WalletTestBase.sol` | **New** shared abstract `Test` base — deploys PoolManager, 2 MockERC20s, initializes a hookless pool at tick 0, deploys+funds the wallet |
+| `test/UniSmartWalletOpenPosition.t.sol` | Refactored to inherit `V4WalletTestBase` (boilerplate setUp gone) |
+| `test/UniSmartWalletExitPositions.t.sol` | **New** file, 11 tests; setUp adds `PoolSwapTest` router + funded trader. Helper `_swapThroughRange` generates fees |
+| `test/UniSmartWalletPoolWiring.t.sol` | Drop the dispatcher-routing test (all four op handlers are now real; routing is covered by open/close/decrease/poke suites) |
 
 ## Acceptance
 
 ```bash
 forge fmt --check
 forge build --sizes
-forge test --match-path test/UniSmartWallet.t.sol -vvv
+forge test --match-path "test/*.t.sol" -vvv
 ```
 
-All listed tests pass; full prior suite still passes.
+65 tests total: 18 auth/execute + 13 pool-wiring + 11 PositionMath + 12 openPosition + 11 exit-primitives.
 
 ## Notes for implementer
 
