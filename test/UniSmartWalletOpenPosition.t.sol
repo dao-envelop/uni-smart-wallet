@@ -1,66 +1,16 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {Test} from "forge-std/Test.sol";
 import {UniSmartWallet} from "../src/UniSmartWallet.sol";
-import {PositionMath} from "../src/lib/PositionMath.sol";
 
-import {PoolManager} from "@uniswap/v4-core/src/PoolManager.sol";
-import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
-import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
-import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
-import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 
 import {MockERC20} from "./helpers/Mocks.sol";
+import {V4WalletTestBase} from "./helpers/V4WalletTestBase.sol";
 
-contract UniSmartWalletOpenPositionTest is Test {
-    using StateLibrary for IPoolManager;
-
-    UniSmartWallet internal wallet;
-    PoolManager internal poolManager;
-    MockERC20 internal tokenA;
-    MockERC20 internal tokenB;
-    Currency internal currency0;
-    Currency internal currency1;
-
-    PoolKey internal key;
-
-    address internal owner = address(0xA11CE);
-    address internal alice = address(0xB0B);
-    address internal bot = address(0xB07);
-
-    int24 internal constant SPACING = 60;
-    uint160 internal sqrtPriceAtTick0;
-
-    function setUp() public {
-        poolManager = new PoolManager(address(this));
-
-        tokenA = new MockERC20();
-        tokenB = new MockERC20();
-        (Currency a, Currency b) = address(tokenA) < address(tokenB)
-            ? (Currency.wrap(address(tokenA)), Currency.wrap(address(tokenB)))
-            : (Currency.wrap(address(tokenB)), Currency.wrap(address(tokenA)));
-        currency0 = a;
-        currency1 = b;
-
-        sqrtPriceAtTick0 = TickMath.getSqrtPriceAtTick(0);
-
-        key = PoolKey({
-            currency0: currency0, currency1: currency1, fee: 3000, tickSpacing: SPACING, hooks: IHooks(address(0))
-        });
-        poolManager.initialize(key, sqrtPriceAtTick0);
-
-        vm.prank(owner);
-        wallet = new UniSmartWallet(IPoolManager(address(poolManager)));
-
-        // Fund the wallet generously so settle never accidentally fails for non-balance reasons.
-        MockERC20(Currency.unwrap(currency0)).mint(address(wallet), 1_000e18);
-        MockERC20(Currency.unwrap(currency1)).mint(address(wallet), 1_000e18);
-    }
-
+contract UniSmartWalletOpenPositionTest is V4WalletTestBase {
     // ────────── happy path ──────────
 
     function test_openPosition_byNFTOwner_succeeds() public {
@@ -139,7 +89,7 @@ contract UniSmartWalletOpenPositionTest is Test {
     function test_openPosition_disallowedHook_reverts() public {
         address badHook = address(0xBADC0DE);
         PoolKey memory badKey = PoolKey({
-            currency0: currency0, currency1: currency1, fee: 3000, tickSpacing: SPACING, hooks: IHooks(badHook)
+            currency0: currency0, currency1: currency1, fee: FEE, tickSpacing: SPACING, hooks: IHooks(badHook)
         });
 
         vm.prank(owner);
@@ -178,7 +128,7 @@ contract UniSmartWalletOpenPositionTest is Test {
         // amount0Max=1 wei → any non-zero owed0 fails. With tick=0 and a symmetric range,
         // both owed0 and owed1 are non-zero for liquidity > 0.
         vm.prank(owner);
-        vm.expectRevert(); // ExceedsAmount0Max with specific values; the values are deterministic but verbose
+        vm.expectRevert();
         wallet.openPosition(key, -SPACING, SPACING, 1e15, bytes32(uint256(50)), 0, 1, type(uint128).max);
     }
 
@@ -191,7 +141,6 @@ contract UniSmartWalletOpenPositionTest is Test {
     // ────────── insufficient wallet balance ──────────
 
     function test_openPosition_insufficientBalance_reverts() public {
-        // Drain wallet of currency0 so settle for currency0 fails (ERC20 transfer revert).
         uint256 balance = MockERC20(Currency.unwrap(currency0)).balanceOf(address(wallet));
         vm.prank(owner);
         wallet.executeEncodedTx(
@@ -199,7 +148,7 @@ contract UniSmartWalletOpenPositionTest is Test {
         );
 
         vm.prank(owner);
-        vm.expectRevert(); // ERC20InsufficientBalance / similar from inside settle's transfer
+        vm.expectRevert();
         wallet.openPosition(key, -SPACING, SPACING, 1e15, bytes32(uint256(60)), 0, type(uint128).max, type(uint128).max);
     }
 }

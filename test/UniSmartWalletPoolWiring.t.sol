@@ -48,21 +48,9 @@ contract UniSmartWalletPoolWiringTest is Test {
         wallet.unlockCallback(abi.encode(UniSmartWallet.Op.OPEN, bytes("")));
     }
 
-    function test_unlockCallback_fromPoolManager_dispatchesToStub() public {
-        // Spoof PoolManager as caller. CLOSE / DECREASE / POKE handlers still revert
-        // NotImplemented (filled in by #5); OPEN is exercised by openPosition tests.
-        vm.prank(address(poolManager));
-        vm.expectRevert(abi.encodeWithSelector(UniSmartWallet.NotImplemented.selector, UniSmartWallet.Op.CLOSE));
-        wallet.unlockCallback(abi.encode(UniSmartWallet.Op.CLOSE, bytes("")));
-
-        vm.prank(address(poolManager));
-        vm.expectRevert(abi.encodeWithSelector(UniSmartWallet.NotImplemented.selector, UniSmartWallet.Op.DECREASE));
-        wallet.unlockCallback(abi.encode(UniSmartWallet.Op.DECREASE, bytes("")));
-
-        vm.prank(address(poolManager));
-        vm.expectRevert(abi.encodeWithSelector(UniSmartWallet.NotImplemented.selector, UniSmartWallet.Op.POKE));
-        wallet.unlockCallback(abi.encode(UniSmartWallet.Op.POKE, bytes("")));
-    }
+    // Dispatcher-routing test removed: after #4/#5 all four op handlers are real
+    // (no NotImplemented stubs left). End-to-end dispatch is now covered by the
+    // openPosition / closePosition / decreasePosition / pokePosition test suites.
 
     // ────────── Hook whitelist ──────────
 

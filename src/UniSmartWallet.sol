@@ -49,6 +49,8 @@ contract UniSmartWallet is SmartWallet, ERC721, IUnlockCallback, ReentrancyGuard
 
     mapping(bytes32 => Position) public positions;
     bytes32[] public openSalts;
+    /// @dev 1-based index into openSalts so 0 means "not present". Enables O(1) splice.
+    mapping(bytes32 => uint256) private _saltIndexPlusOne;
 
     /// @notice Local hook whitelist. Constructor seeds address(0)=true (hookless pools).
     mapping(address => bool) public allowedHooks;
@@ -71,6 +73,16 @@ contract UniSmartWallet is SmartWallet, ERC721, IUnlockCallback, ReentrancyGuard
         uint256 amount0Used,
         uint256 amount1Used
     );
+    event PositionClosed(bytes32 indexed salt, uint256 principal0, uint256 principal1, uint256 fees0, uint256 fees1);
+    event PositionDecreased(
+        bytes32 indexed salt,
+        uint128 deltaLiquidity,
+        uint256 principal0,
+        uint256 principal1,
+        uint256 fees0,
+        uint256 fees1
+    );
+    event FeesCollected(bytes32 indexed salt, uint256 fees0, uint256 fees1);
 
     error SingletonAlreadyMinted();
     error SingletonBurnForbidden();
@@ -79,7 +91,6 @@ contract UniSmartWallet is SmartWallet, ERC721, IUnlockCallback, ReentrancyGuard
     error ZeroOperator();
     error NotPoolManager();
     error UnknownOp(uint8 op);
-    error NotImplemented(Op op);
     error SaltCollision(bytes32 salt);
     error ZeroLiquidity();
     error HookNotAllowed(address hook);
@@ -87,6 +98,9 @@ contract UniSmartWallet is SmartWallet, ERC721, IUnlockCallback, ReentrancyGuard
     error PoolLiquidityBelowMin(uint128 actual, uint128 required);
     error ExceedsAmount0Max(uint256 owed, uint128 cap);
     error ExceedsAmount1Max(uint256 owed, uint128 cap);
+    error UnknownPosition(bytes32 salt);
+    error ZeroDelta();
+    error DeltaExceedsLiquidity(uint128 delta, uint128 current);
 
     bool private _singletonMinted;
 
@@ -306,21 +320,157 @@ contract UniSmartWallet is SmartWallet, ERC721, IUnlockCallback, ReentrancyGuard
             openedAt: uint64(block.timestamp)
         });
         openSalts.push(p.salt);
+        _saltIndexPlusOne[p.salt] = openSalts.length;
 
         emit PositionOpened(p.salt, p.key.toId(), p.tickLower, p.tickUpper, p.liquidity, owed0, owed1);
         return "";
     }
 
-    function _handleClose(bytes memory) internal virtual returns (bytes memory) {
-        revert NotImplemented(Op.CLOSE);
+    struct RemoveParams {
+        PoolKey key;
+        int24 tickLower;
+        int24 tickUpper;
+        uint128 deltaLiquidity;
+        bytes32 salt;
     }
 
-    function _handleDecrease(bytes memory) internal virtual returns (bytes memory) {
-        revert NotImplemented(Op.DECREASE);
+    // ────────── Position ops: close / decrease / poke ──────────
+
+    function closePosition(bytes32 salt) external onlyAuthorized nonReentrant {
+        Position memory p = positions[salt];
+        if (p.liquidity == 0) revert UnknownPosition(salt);
+
+        POOL_MANAGER.unlock(
+            abi.encode(
+                Op.CLOSE,
+                abi.encode(
+                    RemoveParams({
+                        key: p.key,
+                        tickLower: p.tickLower,
+                        tickUpper: p.tickUpper,
+                        deltaLiquidity: p.liquidity,
+                        salt: salt
+                    })
+                )
+            )
+        );
     }
 
-    function _handlePoke(bytes memory) internal virtual returns (bytes memory) {
-        revert NotImplemented(Op.POKE);
+    function decreasePosition(bytes32 salt, uint128 deltaLiquidity) external onlyAuthorized nonReentrant {
+        Position memory p = positions[salt];
+        if (p.liquidity == 0) revert UnknownPosition(salt);
+        if (deltaLiquidity == 0) revert ZeroDelta();
+        if (deltaLiquidity > p.liquidity) revert DeltaExceedsLiquidity(deltaLiquidity, p.liquidity);
+
+        POOL_MANAGER.unlock(
+            abi.encode(
+                Op.DECREASE,
+                abi.encode(
+                    RemoveParams({
+                        key: p.key,
+                        tickLower: p.tickLower,
+                        tickUpper: p.tickUpper,
+                        deltaLiquidity: deltaLiquidity,
+                        salt: salt
+                    })
+                )
+            )
+        );
+    }
+
+    function pokePosition(bytes32 salt) external onlyAuthorized nonReentrant {
+        Position memory p = positions[salt];
+        if (p.liquidity == 0) revert UnknownPosition(salt);
+
+        POOL_MANAGER.unlock(
+            abi.encode(
+                Op.POKE,
+                abi.encode(
+                    RemoveParams({
+                        key: p.key, tickLower: p.tickLower, tickUpper: p.tickUpper, deltaLiquidity: 0, salt: salt
+                    })
+                )
+            )
+        );
+    }
+
+    function _handleClose(bytes memory payload) internal virtual returns (bytes memory) {
+        RemoveParams memory r = abi.decode(payload, (RemoveParams));
+        (uint256 owed0, uint256 owed1, uint256 fees0, uint256 fees1) = _withdrawLiquidity(r);
+
+        // Full close: clear registry entry.
+        _removeSalt(r.salt);
+        delete positions[r.salt];
+
+        emit PositionClosed(r.salt, owed0 - fees0, owed1 - fees1, fees0, fees1);
+        return "";
+    }
+
+    function _handleDecrease(bytes memory payload) internal virtual returns (bytes memory) {
+        RemoveParams memory r = abi.decode(payload, (RemoveParams));
+        (uint256 owed0, uint256 owed1, uint256 fees0, uint256 fees1) = _withdrawLiquidity(r);
+
+        positions[r.salt].liquidity -= r.deltaLiquidity;
+        // We don't auto-close here even if liquidity hits 0 — the operator can call
+        // closePosition explicitly if they want the registry entry cleared.
+
+        emit PositionDecreased(r.salt, r.deltaLiquidity, owed0 - fees0, owed1 - fees1, fees0, fees1);
+        return "";
+    }
+
+    function _handlePoke(bytes memory payload) internal virtual returns (bytes memory) {
+        RemoveParams memory r = abi.decode(payload, (RemoveParams));
+        // deltaLiquidity == 0 in payload — modifyLiquidity(0) releases the fees-owed delta only.
+        (uint256 owed0, uint256 owed1,,) = _withdrawLiquidity(r);
+
+        emit FeesCollected(r.salt, owed0, owed1);
+        return "";
+    }
+
+    /// @dev Shared body for close/decrease/poke: call modifyLiquidity(-deltaLiquidity),
+    /// take both currencies to the wallet, return (owed0, owed1, fees0, fees1).
+    function _withdrawLiquidity(RemoveParams memory r)
+        internal
+        returns (uint256 owed0, uint256 owed1, uint256 fees0, uint256 fees1)
+    {
+        (BalanceDelta delta, BalanceDelta feesAccrued) = POOL_MANAGER.modifyLiquidity(
+            r.key,
+            ModifyLiquidityParams({
+                tickLower: r.tickLower,
+                tickUpper: r.tickUpper,
+                liquidityDelta: -int256(uint256(r.deltaLiquidity)),
+                salt: r.salt
+            }),
+            ""
+        );
+
+        int128 d0 = delta.amount0();
+        int128 d1 = delta.amount1();
+        owed0 = d0 > 0 ? uint256(uint128(d0)) : 0;
+        owed1 = d1 > 0 ? uint256(uint128(d1)) : 0;
+
+        int128 f0 = feesAccrued.amount0();
+        int128 f1 = feesAccrued.amount1();
+        fees0 = f0 > 0 ? uint256(uint128(f0)) : 0;
+        fees1 = f1 > 0 ? uint256(uint128(f1)) : 0;
+
+        if (owed0 > 0) r.key.currency0.take(POOL_MANAGER, address(this), owed0, false);
+        if (owed1 > 0) r.key.currency1.take(POOL_MANAGER, address(this), owed1, false);
+    }
+
+    /// @dev O(1) swap-and-pop removal from openSalts using _saltIndexPlusOne.
+    function _removeSalt(bytes32 salt) internal {
+        uint256 idxPlusOne = _saltIndexPlusOne[salt];
+        if (idxPlusOne == 0) return; // defensive — shouldn't happen if positions[salt] was set
+        uint256 idx = idxPlusOne - 1;
+        uint256 lastIdx = openSalts.length - 1;
+        if (idx != lastIdx) {
+            bytes32 lastSalt = openSalts[lastIdx];
+            openSalts[idx] = lastSalt;
+            _saltIndexPlusOne[lastSalt] = idx + 1;
+        }
+        openSalts.pop();
+        delete _saltIndexPlusOne[salt];
     }
 
     // ────────── Views ──────────
