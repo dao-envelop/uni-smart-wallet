@@ -93,6 +93,25 @@ contract UniSmartWallet is SmartWallet, ERC721 {
         delete _operatorList;
     }
 
+    /// @notice Execute an arbitrary call from the wallet. Withdrawals are a special case
+    /// (empty data ⇒ native send via parent's Address.sendValue; non-empty ⇒ functionCallWithValue).
+    /// Restricted to the NFT owner — operators must not be able to drain capital.
+    function executeEncodedTx(address target, uint256 value, bytes memory data)
+        external
+        onlyOwnerNFT
+        returns (bytes memory)
+    {
+        return _executeEncodedTx(target, value, data);
+    }
+
+    function executeEncodedTxBatch(address[] calldata targets, uint256[] calldata values, bytes[] memory datas)
+        external
+        onlyOwnerNFT
+        returns (bytes[] memory)
+    {
+        return _executeEncodedTxBatch(targets, values, datas);
+    }
+
     function supportsInterface(bytes4 interfaceId) public view virtual override(ERC721, ERC1155Holder) returns (bool) {
         //TODO  add current contract interfaceinterfaceId == type(IERC721).interfaceId ||
         return interfaceId == type(IERC721).interfaceId || interfaceId == type(IERC721Metadata).interfaceId
