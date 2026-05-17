@@ -67,21 +67,21 @@ Ship the headline write path. Operator (or NFT owner) calls `openPosition` with 
 
 | Path | Change |
 |---|---|
-| `src/UniSmartWallet.sol` | Add `openPosition`, `_handleOpen`, settlement helpers, events |
+| `src/UniSmartWallet.sol` | Add `OpenParams` struct, `openPosition` external, `_handleOpen` callback body, `ReentrancyGuard` to inheritance, V4 imports (`StateLibrary`, `CurrencySettler`, `BalanceDelta`, `ModifyLiquidityParams`, `PoolId`, `Currency`), new errors/events |
 | `src/lib/PositionMath.sol` | New library |
-| `test/UniSmartWallet.t.sol` | Append open-position tests; deploy a v4-core `PoolManager` and a hookless pool in `setUp` (using `Deployers` from `v4-core/test/utils` if convenient) |
-| `test/PositionMath.t.sol` | New unit tests for the math library |
+| `test/UniSmartWalletOpenPosition.t.sol` | **New file** with 12 tests; `setUp` deploys a real `PoolManager`, two `MockERC20` tokens, initializes a hookless `PoolKey` at tick 0, deploys the wallet, funds it |
+| `test/PositionMath.t.sol` | **New file**; library calls are inlined so revert-asserting tests go through a tiny `PositionMathWrapper` contract |
+| `test/UniSmartWalletPoolWiring.t.sol` | Drop the `Op.OPEN` arm of `test_unlockCallback_fromPoolManager_dispatchesToStub` (OPEN is no longer a stub); still asserts CLOSE / DECREASE / POKE revert `NotImplemented` |
 
 ## Acceptance
 
 ```bash
 forge fmt --check
 forge build --sizes
-forge test --match-path test/UniSmartWallet.t.sol -vvv
-forge test --match-path test/PositionMath.t.sol -vvv
+forge test --match-path "test/*.t.sol" -vvv
 ```
 
-All listed tests pass; prior tests still pass.
+55 tests total (18 auth/execute + 14 pool-wiring + 11 PositionMath + 12 openPosition) all pass.
 
 ## Notes for implementer
 
