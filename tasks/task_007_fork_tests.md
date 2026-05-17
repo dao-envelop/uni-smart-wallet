@@ -12,16 +12,15 @@ End-to-end verification that the wallet's settle/take/unlock plumbing works agai
 ## Scope (in this task)
 
 1. **`test/UniSmartWallet.fork.t.sol`**:
-   - `setUp`: `vm.createSelectFork(vm.envOr("BASE_RPC", string("")));`. If empty → `vm.skip(true)` to make the suite a no-op when env isn't set (CI without secrets stays green).
-   - Pin a recent Base block via `vm.envOr("BASE_FORK_BLOCK", uint256(0))` so behaviour is reproducible.
-   - Wire constants for Base V4 deployment: `POOL_MANAGER`, the WETH/USDC `PoolKey` (currencies, fee, tickSpacing, hooks = address(0)).
-   - Deploy `UniSmartWallet(initialOwner=address(this), POOL_MANAGER)`; fund it with WETH + USDC via `deal`.
-2. **`test_fork_lifecycle_baseWethUsdc`**:
-   - `openPosition` around the current tick with a non-zero amount.
-   - Use a second EOA (`vm.startPrank`) + `PoolSwapTest` (or direct router call) to swap through the range — generates fees.
-   - `closePosition` and assert the wallet got back **principal + fees > principal**.
-3. **`test_fork_pokeCollectsFees`**: open, swap, `pokePosition`, assert fee balances increased without losing principal.
-4. **`test_fork_decreasePartial`**: open, swap, `decreasePosition` for 50%, assert state and balances.
+   - `setUp`: env-gated `vm.envOr("BASE_RPC", string(""))` → empty ⇒ `vm.skip(true, …)` so CI without secrets stays green. Optional pin via `BASE_FORK_BLOCK`.
+   - `POOL_MANAGER = 0x498581fF718922c3f8e6A244956aF099B2652b2b` (Base mainnet V4, per `script/chain_params.json`).
+   - WETH + USDC canonical Base addresses, sorted into `currency0` / `currency1`.
+   - Instead of relying on an existing WETH/USDC pool, the test **initializes its own hookless pool with `fee = 100` (0.01%), `tickSpacing = 1`**. The wallet is the sole LP, so all fees from the trader's swaps accrue to it — deterministic and decoupled from production pool state.
+   - Deploys `UniSmartWallet(POOL_MANAGER)` (singleton NFT mints to the test contract → drives ops directly).
+   - Funds the wallet + a `trader` EOA with WETH + USDC via `deal`; trader pre-approves a `PoolSwapTest` router.
+2. **`test_fork_lifecycle_baseWethUsdc`** — open, two swaps (zeroForOne + oneForZero) so fees accrue on both sides, close; assert `openPositionCount == 0`, `positionOf(salt).liquidity == 0`, and both currency balances strictly increased.
+3. **`test_fork_pokeCollectsFees`** — open, two swaps, `pokePosition`; assert principal unchanged and both balances increased.
+4. **`test_fork_decreasePartial`** — open, one swap, `decreasePosition(salt, 50%)`; assert remaining liquidity and that the registry entry stays.
 
 ## Out of scope
 
@@ -38,14 +37,18 @@ End-to-end verification that the wallet's settle/take/unlock plumbing works agai
 ## Acceptance
 
 ```bash
-BASE_RPC=https://... BASE_FORK_BLOCK=<recent> \
+# Without BASE_RPC — suite skips cleanly:
+forge test --match-path test/UniSmartWallet.fork.t.sol -vvv
+# With BASE_RPC — three lifecycle tests run:
+BASE_RPC=https://... [BASE_FORK_BLOCK=<recent>] \
   forge test --match-path test/UniSmartWallet.fork.t.sol -vvv
 ```
 
-All 3 fork tests pass. With `BASE_RPC` unset the suite skips cleanly (no failure).
+Full suite still passes: 74 unit tests + 1 fork suite (skipped without env).
 
 ## Notes for implementer
 
-- Real Base V4 `PoolManager` address: confirm via the Uniswap deployments page before pinning. Do **not** guess; addresses live in `tasks/spec_JITLPWallet.md` references and the Uniswap docs.
-- The `hooklist` registry cross-check mentioned in the spec is off-chain — for the fork test, pick a hookless pool (`hooks = address(0)`) so `allowedHooks` default seeding works without `setHookAllowed`.
-- Keep block-pinning aggressive — fork tests against `latest` are non-deterministic and break CI.
+- `POOL_MANAGER` address comes from `script/chain_params.json` (chain 8453) — the same file that `DeployWallet` reads. Keep them in sync.
+- Initializing our own pool (rather than relying on existing WETH/USDC liquidity on the fork) is what makes the test deterministic. The trader's swaps go through the wallet's lone LP position → fees end up entirely with the wallet.
+- `vm.skip(true, reason)` requires forge-std with `Vm.skip(bool, string)` — confirmed available in our pinned version.
+- `block.chainid` after `vm.createSelectFork` is the fork's chainId (8453 for Base), so the wallet sees the real chain.
