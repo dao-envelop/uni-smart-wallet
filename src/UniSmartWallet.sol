@@ -11,9 +11,19 @@ import "@openzeppelin/contracts/interfaces/IERC4906.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IUnlockCallback} from "@uniswap/v4-core/src/interfaces/callback/IUnlockCallback.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
+import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
+import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IHookRegistry} from "./interfaces/IHookRegistry.sol";
+import {PositionMath} from "./lib/PositionMath.sol";
 
-contract UniSmartWallet is SmartWallet, ERC721, IUnlockCallback {
+contract UniSmartWallet is SmartWallet, ERC721, IUnlockCallback, ReentrancyGuard {
+    using StateLibrary for IPoolManager;
+    using CurrencySettler for Currency;
     uint256 public constant ORACLE_TYPE = 2002;
     uint256 public constant TOKEN_ID = 1;
     string public constant DEFAULT_BASE_URI = "https://api.envelop.is/uniwallet/";
@@ -52,6 +62,15 @@ contract UniSmartWallet is SmartWallet, ERC721, IUnlockCallback {
     event OperatorSet(address indexed operator, bool allowed);
     event HookAllowed(address indexed hook, bool allowed);
     event HookRegistrySet(address indexed registry);
+    event PositionOpened(
+        bytes32 indexed salt,
+        PoolId indexed poolId,
+        int24 tickLower,
+        int24 tickUpper,
+        uint128 liquidity,
+        uint256 amount0Used,
+        uint256 amount1Used
+    );
 
     error SingletonAlreadyMinted();
     error SingletonBurnForbidden();
@@ -61,6 +80,13 @@ contract UniSmartWallet is SmartWallet, ERC721, IUnlockCallback {
     error NotPoolManager();
     error UnknownOp(uint8 op);
     error NotImplemented(Op op);
+    error SaltCollision(bytes32 salt);
+    error ZeroLiquidity();
+    error HookNotAllowed(address hook);
+    error PoolUninitialized();
+    error PoolLiquidityBelowMin(uint128 actual, uint128 required);
+    error ExceedsAmount0Max(uint256 owed, uint128 cap);
+    error ExceedsAmount1Max(uint256 owed, uint128 cap);
 
     bool private _singletonMinted;
 
@@ -185,8 +211,104 @@ contract UniSmartWallet is SmartWallet, ERC721, IUnlockCallback {
         revert UnknownOp(uint8(op));
     }
 
-    function _handleOpen(bytes memory) internal virtual returns (bytes memory) {
-        revert NotImplemented(Op.OPEN);
+    struct OpenParams {
+        PoolKey key;
+        int24 tickLower;
+        int24 tickUpper;
+        uint128 liquidity;
+        bytes32 salt;
+        uint128 amount0Max;
+        uint128 amount1Max;
+    }
+
+    // ────────── Position ops: open ──────────
+
+    /// @notice Open a concentrated-liquidity position in `key` at [tickLower, tickUpper].
+    /// Validates hook policy + pool existence + minimum pool liquidity, then unlocks PoolManager
+    /// to mint liquidity. Settlement comes from the wallet's own balance; per-currency owed
+    /// amounts must stay under amount0Max / amount1Max (slippage bound).
+    function openPosition(
+        PoolKey calldata key,
+        int24 tickLower,
+        int24 tickUpper,
+        uint128 liquidity,
+        bytes32 salt,
+        uint128 minPoolLiquidity,
+        uint128 amount0Max,
+        uint128 amount1Max
+    ) external onlyAuthorized nonReentrant {
+        if (positions[salt].liquidity != 0) revert SaltCollision(salt);
+        if (liquidity == 0) revert ZeroLiquidity();
+
+        address hookAddr = address(key.hooks);
+        if (!_isHookAllowed(hookAddr)) revert HookNotAllowed(hookAddr);
+
+        PoolId id = key.toId();
+        (uint160 sqrtPriceX96,,,) = POOL_MANAGER.getSlot0(id);
+        if (sqrtPriceX96 == 0) revert PoolUninitialized();
+
+        if (minPoolLiquidity != 0) {
+            uint128 poolLiq = POOL_MANAGER.getLiquidity(id);
+            if (poolLiq < minPoolLiquidity) revert PoolLiquidityBelowMin(poolLiq, minPoolLiquidity);
+        }
+
+        PositionMath.requireValidTickRange(tickLower, tickUpper, key.tickSpacing);
+
+        POOL_MANAGER.unlock(
+            abi.encode(
+                Op.OPEN,
+                abi.encode(
+                    OpenParams({
+                        key: key,
+                        tickLower: tickLower,
+                        tickUpper: tickUpper,
+                        liquidity: liquidity,
+                        salt: salt,
+                        amount0Max: amount0Max,
+                        amount1Max: amount1Max
+                    })
+                )
+            )
+        );
+    }
+
+    function _handleOpen(bytes memory payload) internal virtual returns (bytes memory) {
+        OpenParams memory p = abi.decode(payload, (OpenParams));
+
+        (BalanceDelta delta,) = POOL_MANAGER.modifyLiquidity(
+            p.key,
+            ModifyLiquidityParams({
+                tickLower: p.tickLower,
+                tickUpper: p.tickUpper,
+                liquidityDelta: int256(uint256(p.liquidity)),
+                salt: p.salt
+            }),
+            ""
+        );
+
+        // Adding liquidity → both deltas are <= 0 (we owe). Convert to owed amounts.
+        int128 d0 = delta.amount0();
+        int128 d1 = delta.amount1();
+        uint256 owed0 = d0 < 0 ? uint256(uint128(-d0)) : 0;
+        uint256 owed1 = d1 < 0 ? uint256(uint128(-d1)) : 0;
+
+        if (owed0 > p.amount0Max) revert ExceedsAmount0Max(owed0, p.amount0Max);
+        if (owed1 > p.amount1Max) revert ExceedsAmount1Max(owed1, p.amount1Max);
+
+        if (owed0 > 0) p.key.currency0.settle(POOL_MANAGER, address(this), owed0, false);
+        if (owed1 > 0) p.key.currency1.settle(POOL_MANAGER, address(this), owed1, false);
+
+        positions[p.salt] = Position({
+            key: p.key,
+            tickLower: p.tickLower,
+            tickUpper: p.tickUpper,
+            liquidity: p.liquidity,
+            openedAt: uint64(block.timestamp)
+        });
+        openSalts.push(p.salt);
+
+        emit PositionOpened(p.salt, p.key.toId(), p.tickLower, p.tickUpper, p.liquidity, owed0, owed1);
+        return "";
     }
 
     function _handleClose(bytes memory) internal virtual returns (bytes memory) {

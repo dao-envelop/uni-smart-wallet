@@ -49,12 +49,8 @@ contract UniSmartWalletPoolWiringTest is Test {
     }
 
     function test_unlockCallback_fromPoolManager_dispatchesToStub() public {
-        // Spoof PoolManager as caller. Each op handler reverts NotImplemented for now;
-        // this proves the dispatcher actually routes the decoded op.
-        vm.prank(address(poolManager));
-        vm.expectRevert(abi.encodeWithSelector(UniSmartWallet.NotImplemented.selector, UniSmartWallet.Op.OPEN));
-        wallet.unlockCallback(abi.encode(UniSmartWallet.Op.OPEN, bytes("")));
-
+        // Spoof PoolManager as caller. CLOSE / DECREASE / POKE handlers still revert
+        // NotImplemented (filled in by #5); OPEN is exercised by openPosition tests.
         vm.prank(address(poolManager));
         vm.expectRevert(abi.encodeWithSelector(UniSmartWallet.NotImplemented.selector, UniSmartWallet.Op.CLOSE));
         wallet.unlockCallback(abi.encode(UniSmartWallet.Op.CLOSE, bytes("")));
