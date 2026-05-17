@@ -1,0 +1,17 @@
+{
+  "lib/envelop-protocol-v2": {
+    "tag": {
+      "name": "2.2.1",
+      "rev": "48d23cddcc48f2846ae1914c8de690674b95afae"
+    }
+  },
+  "lib/forge-std": {
+    "tag": {
+      "name": "v1.16.1",
+      "rev": "620536fa5277db4e3fd46772d5cbc1ea0696fb43"
+    }
+  },
+  "lib/v4-hooks-public": {
+    "rev": "b53aa1d80efc82c1df6632daa14d0fce14616c8e"
+  }
+}
