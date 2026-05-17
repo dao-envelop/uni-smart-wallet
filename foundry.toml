@@ -10,6 +10,13 @@ optimizer_runs = 800
 via_ir = false
 ffi = true
 
+# The deploy script reads ./script/chain_params.json at runtime; tests write
+# temporary chain-config fixtures under ./test/ to exercise loadConfig.
+fs_permissions = [
+    { access = "read", path = "./script" },
+    { access = "read-write", path = "./test" },
+]
+
 [lint]
 exclude_lints = ["screaming-snake-case-immutable", "screaming-snake-case-const"]
 lint_on_build = false
