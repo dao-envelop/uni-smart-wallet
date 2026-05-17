@@ -73,7 +73,7 @@ Withdrawals stay `onlyOwnerNFT` — operators can manage positions but cannot dr
 
 ## Direct PoolManager integration
 
-Wallet implements `IUnlockCallback` and calls `poolManager.unlock(...)` directly. Pattern is identical to `src/SelfLPDirect.sol` in this repo — that contract already proves the direct-PoolManager LP pattern works (mint + settle + take + fee accounting via `feeGrowthInside`).
+Wallet implements `IUnlockCallback` and calls `poolManager.unlock(...)` directly. Pattern is modelled on `SelfLPDirect.sol` from a sibling project (external reference, not vendored here) — that contract demonstrates the direct-PoolManager LP pattern end-to-end (mint + settle + take + fee accounting via `feeGrowthInside`). We re-implement the same flow inline rather than importing or copying foreign sources.
 
 ### Why direct vs PositionManager
 
@@ -281,13 +281,14 @@ Transferring the ownership NFT (`safeTransferFrom`) atomically transfers all wal
 | `src/UniSmartWallet.sol` | Main contract; ERC-721 (singleton) + IUnlockCallback + position management |
 | `src/lib/PositionMath.sol` | Tick-spacing snapping, liquidity-from-amounts helpers (reuse from `SelfLPLib` if compatible) |
 | `script/DeployWallet.s.sol` | Deploy single wallet |
-| `test/UniSmartWallet.t.sol` | Forge tests: lifecycle, auth, edge cases |
+| `src/interfaces/IHookRegistry.sol` | View interface for optional external hook policy |
+| `test/UniSmartWallet.t.sol` | Forge tests: lifecycle, auth, edge cases (accreted across tasks 001–005) |
 | `test/UniSmartWallet.fork.t.sol` | Fork tests against live PoolManager + real pool |
 
 ## Reused Patterns
 
-- **`src/SelfLPDirect.sol`** (own repo) — direct PoolManager LP pattern; settle/take/unlock-callback dispatcher; serves as primary template
-- **`src/lib/SelfLPLib.sol`** — `computeRange`, `previewFeesETH` math utilities
+- **`SelfLPDirect.sol`** (external reference, sibling project — not in this repo) — direct PoolManager LP pattern; settle/take/unlock-callback dispatcher; serves as a design template only, re-implemented inline here
+- **`SelfLPLib.sol`** (external reference, sibling project — not in this repo) — `computeRange`, `previewFeesETH` math utilities; `src/lib/PositionMath.sol` re-implements the helpers we actually need
 - **`@uniswap/v4-core/test/utils/CurrencySettler.sol`** — `Currency.settle()` and `poolManager.take()` patterns for native + ERC-20
 - **OpenZeppelin `ERC721`** — base for singleton NFT
 - **OpenZeppelin `ReentrancyGuard`** — withdraw + position operations protection
@@ -366,13 +367,13 @@ forge test --fork-url $BASE_RPC --match-path ./test/UniSmartWallet.fork.t.sol
 
 | Risk | Severity | Mitigation |
 |------|----------|------------|
-| Wallet contract bug → all funds drained | 🔴 Critical | Comprehensive audit; reuse audited `SelfLPDirect` patterns |
+| Wallet contract bug → all funds drained | 🔴 Critical | Comprehensive audit; mirror battle-tested `SelfLPDirect` settle/take patterns (external reference) |
 | Lost NFT = lost wallet access permanently | 🔴 High | Standard NFT custody best practices; doc warns explicitly |
 | Operator misuse — opens/closes with adverse params | 🟡 Medium | Operators cannot withdraw; slippage bounds limit damage; revoke if needed |
 | IL on long-held positions | 🟡 Medium | Inherent risk of LP; not a contract risk |
 | Salt collision unintentional reuse | 🟢 Low | Revert on collision |
 | Singleton NFT mint loophole | 🔴 High | Override `_mint` to forbid post-constructor minting; tests verify |
-| Direct PoolManager flash-accounting bug | 🟡 Medium | Reuse battle-tested settle/take patterns from `SelfLPDirect` |
+| Direct PoolManager flash-accounting bug | 🟡 Medium | Mirror battle-tested settle/take patterns from `SelfLPDirect` (external reference) |
 | ERC-721 transfer reentrancy via `onERC721Received` | 🟡 Medium | `nonReentrant` on capital ops |
 | Operator opens position in pool with malicious hook → LP economics broken | 🔴 High | `allowedHooks` whitelist + optional `hookRegistry` validated in `openPosition` |
 | Operator typo in `PoolKey` → position opens in phantom uninitialized pool | 🟡 Medium | `openPosition` requires `StateLibrary.getSlot0(poolId).sqrtPriceX96 != 0` |
