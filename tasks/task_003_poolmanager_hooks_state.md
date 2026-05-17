@@ -58,19 +58,21 @@ Wire the wallet to a V4 `PoolManager` immutably, install the `unlockCallback` di
 
 | Path | Change |
 |---|---|
-| `src/UniSmartWallet.sol` | Constructor signature, `IUnlockCallback`, dispatcher, hook policy state + setters, position storage + views |
+| `src/UniSmartWallet.sol` | Constructor signature → `IPoolManager`, inherit `IUnlockCallback`, `Op` enum + dispatcher with stubbed handlers, hook policy state + setters + `_isHookAllowed`, position storage + views |
 | `src/interfaces/IHookRegistry.sol` | New file |
-| `test/UniSmartWallet.t.sol` | Update deploy helper, append 7 tests, add a `MockHookRegistry` helper |
+| `test/helpers/Mocks.sol` | **New shared mocks file** — `MockERC20` + `Echo` (extracted from `test/UniSmartWallet.t.sol`) and new `MockHookRegistry` |
+| `test/UniSmartWallet.t.sol` | Import shared mocks instead of inline; update deploy helper for `IPoolManager` constructor arg |
+| `test/UniSmartWalletPoolWiring.t.sol` | **New file** with the 14 task-003 tests (constructor wiring, unlock-callback gating + dispatch routing, hook setters/auth, `_isHookAllowed` branches via a `UniSmartWalletHookHarness`, views) |
 
 ## Acceptance
 
 ```bash
 forge fmt --check
 forge build --sizes
-forge test --match-path test/UniSmartWallet.t.sol -vvv
+forge test --match-path "test/UniSmartWallet*.t.sol" -vvv
 ```
 
-All new tests pass; tests from task 001 / 002 still pass after constructor change.
+All 18 task-001/002 tests still pass (after constructor cast to `IPoolManager`) and the 14 new task-003 tests in `test/UniSmartWalletPoolWiring.t.sol` pass.
 
 ## Notes for implementer
 

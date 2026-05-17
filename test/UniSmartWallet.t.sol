@@ -3,11 +3,12 @@ pragma solidity ^0.8.26;
 
 import {Test} from "forge-std/Test.sol";
 import {UniSmartWallet} from "../src/UniSmartWallet.sol";
-import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {MockERC20, Echo} from "./helpers/Mocks.sol";
 
 contract UniSmartWalletMintHarness is UniSmartWallet {
-    constructor(address pm) UniSmartWallet(pm) {}
+    constructor(IPoolManager pm) UniSmartWallet(pm) {}
 
     function exposedMint(address to, uint256 id) external {
         _mint(to, id);
@@ -18,27 +19,13 @@ contract UniSmartWalletMintHarness is UniSmartWallet {
     }
 }
 
-contract MockERC20 is ERC20 {
-    constructor() ERC20("Mock", "MCK") {}
-
-    function mint(address to, uint256 amount) external {
-        _mint(to, amount);
-    }
-}
-
-contract Echo {
-    function ping(bytes calldata data) external pure returns (bytes calldata) {
-        return data;
-    }
-}
-
 contract UniSmartWalletTest is Test {
     UniSmartWallet internal wallet;
     address internal owner = address(0xA11CE);
     address internal alice = address(0xB0B);
     address internal bot = address(0xB07);
     address internal bot2 = address(0xB072);
-    address internal poolManagerPlaceholder = address(0xCAFE);
+    IPoolManager internal poolManagerPlaceholder = IPoolManager(address(0xCAFE));
 
     event OperatorSet(address indexed operator, bool allowed);
 
