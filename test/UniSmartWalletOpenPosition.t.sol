@@ -2,6 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {UniSmartWallet} from "../src/UniSmartWallet.sol";
+import {V4PositionManager} from "../src/abstract/V4PositionManager.sol";
 
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
@@ -29,7 +30,7 @@ contract UniSmartWalletOpenPositionTest is V4WalletTestBase {
         );
 
         assertEq(wallet.openPositionCount(), 1);
-        UniSmartWallet.Position memory p = wallet.positionOf(salt);
+        V4PositionManager.Position memory p = wallet.positionOf(salt);
         assertEq(p.liquidity, 1e15);
         assertEq(p.tickLower, -SPACING);
         assertEq(p.tickUpper, SPACING);
@@ -73,14 +74,14 @@ contract UniSmartWalletOpenPositionTest is V4WalletTestBase {
         bytes32 salt = bytes32(uint256(10));
         vm.startPrank(owner);
         wallet.openPosition(key, -SPACING, SPACING, 1e15, salt, 0, type(uint128).max, type(uint128).max);
-        vm.expectRevert(abi.encodeWithSelector(UniSmartWallet.SaltCollision.selector, salt));
+        vm.expectRevert(abi.encodeWithSelector(V4PositionManager.SaltCollision.selector, salt));
         wallet.openPosition(key, -SPACING, SPACING, 1e15, salt, 0, type(uint128).max, type(uint128).max);
         vm.stopPrank();
     }
 
     function test_openPosition_zeroLiquidity_reverts() public {
         vm.prank(owner);
-        vm.expectRevert(UniSmartWallet.ZeroLiquidity.selector);
+        vm.expectRevert(V4PositionManager.ZeroLiquidity.selector);
         wallet.openPosition(key, -SPACING, SPACING, 0, bytes32(uint256(11)), 0, type(uint128).max, type(uint128).max);
     }
 
@@ -93,7 +94,7 @@ contract UniSmartWalletOpenPositionTest is V4WalletTestBase {
         });
 
         vm.prank(owner);
-        vm.expectRevert(abi.encodeWithSelector(UniSmartWallet.HookNotAllowed.selector, badHook));
+        vm.expectRevert(abi.encodeWithSelector(V4PositionManager.HookNotAllowed.selector, badHook));
         wallet.openPosition(
             badKey, -SPACING, SPACING, 1e15, bytes32(uint256(20)), 0, type(uint128).max, type(uint128).max
         );
@@ -108,7 +109,7 @@ contract UniSmartWalletOpenPositionTest is V4WalletTestBase {
         });
 
         vm.prank(owner);
-        vm.expectRevert(UniSmartWallet.PoolUninitialized.selector);
+        vm.expectRevert(V4PositionManager.PoolUninitialized.selector);
         wallet.openPosition(phantom, -200, 200, 1e15, bytes32(uint256(30)), 0, type(uint128).max, type(uint128).max);
     }
 
@@ -116,7 +117,7 @@ contract UniSmartWalletOpenPositionTest is V4WalletTestBase {
         // Pool is initialized but has zero liquidity in-range → getLiquidity returns 0.
         uint128 floor = 1_000;
         vm.prank(owner);
-        vm.expectRevert(abi.encodeWithSelector(UniSmartWallet.PoolLiquidityBelowMin.selector, uint128(0), floor));
+        vm.expectRevert(abi.encodeWithSelector(V4PositionManager.PoolLiquidityBelowMin.selector, uint128(0), floor));
         wallet.openPosition(
             key, -SPACING, SPACING, 1e15, bytes32(uint256(40)), floor, type(uint128).max, type(uint128).max
         );

@@ -2,6 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {UniSmartWallet} from "../src/UniSmartWallet.sol";
+import {V4PositionManager} from "../src/abstract/V4PositionManager.sol";
 
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
@@ -103,7 +104,7 @@ contract UniSmartWalletExitPositionsTest is V4WalletTestBase {
     function test_closePosition_unknownSalt_reverts() public {
         bytes32 salt = bytes32(uint256(99));
         vm.prank(owner);
-        vm.expectRevert(abi.encodeWithSelector(UniSmartWallet.UnknownPosition.selector, salt));
+        vm.expectRevert(abi.encodeWithSelector(V4PositionManager.UnknownPosition.selector, salt));
         wallet.closePosition(salt);
     }
 
@@ -116,7 +117,7 @@ contract UniSmartWalletExitPositionsTest is V4WalletTestBase {
         vm.prank(owner);
         wallet.decreasePosition(salt, 4e17);
 
-        UniSmartWallet.Position memory p = wallet.positionOf(salt);
+        V4PositionManager.Position memory p = wallet.positionOf(salt);
         assertEq(p.liquidity, 6e17);
         // Position still in registry.
         assertEq(wallet.openPositionCount(), 1);
@@ -127,7 +128,7 @@ contract UniSmartWalletExitPositionsTest is V4WalletTestBase {
         _open(salt, 1e18);
 
         vm.prank(owner);
-        vm.expectRevert(UniSmartWallet.ZeroDelta.selector);
+        vm.expectRevert(V4PositionManager.ZeroDelta.selector);
         wallet.decreasePosition(salt, 0);
     }
 
@@ -137,7 +138,7 @@ contract UniSmartWalletExitPositionsTest is V4WalletTestBase {
 
         vm.prank(owner);
         vm.expectRevert(
-            abi.encodeWithSelector(UniSmartWallet.DeltaExceedsLiquidity.selector, uint128(2e18), uint128(1e18))
+            abi.encodeWithSelector(V4PositionManager.DeltaExceedsLiquidity.selector, uint128(2e18), uint128(1e18))
         );
         wallet.decreasePosition(salt, 2e18);
     }
@@ -145,7 +146,7 @@ contract UniSmartWalletExitPositionsTest is V4WalletTestBase {
     function test_decreasePosition_unknownSalt_reverts() public {
         bytes32 salt = bytes32(uint256(13));
         vm.prank(owner);
-        vm.expectRevert(abi.encodeWithSelector(UniSmartWallet.UnknownPosition.selector, salt));
+        vm.expectRevert(abi.encodeWithSelector(V4PositionManager.UnknownPosition.selector, salt));
         wallet.decreasePosition(salt, 1e15);
     }
 
@@ -174,7 +175,7 @@ contract UniSmartWalletExitPositionsTest is V4WalletTestBase {
 
     function test_pokePosition_unknownSalt_reverts() public {
         vm.prank(owner);
-        vm.expectRevert(abi.encodeWithSelector(UniSmartWallet.UnknownPosition.selector, bytes32(uint256(21))));
+        vm.expectRevert(abi.encodeWithSelector(V4PositionManager.UnknownPosition.selector, bytes32(uint256(21))));
         wallet.pokePosition(bytes32(uint256(21)));
     }
 

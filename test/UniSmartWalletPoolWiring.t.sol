@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 
 import {Test} from "forge-std/Test.sol";
 import {UniSmartWallet} from "../src/UniSmartWallet.sol";
+import {V4PositionManager} from "../src/abstract/V4PositionManager.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {MockHookRegistry} from "./helpers/Mocks.sol";
@@ -44,8 +45,8 @@ contract UniSmartWalletPoolWiringTest is Test {
 
     function test_unlockCallback_rejectsNonPoolManager() public {
         // Caller is `this` (the test), not POOL_MANAGER → must revert.
-        vm.expectRevert(UniSmartWallet.NotPoolManager.selector);
-        wallet.unlockCallback(abi.encode(UniSmartWallet.Op.OPEN, bytes("")));
+        vm.expectRevert(V4PositionManager.NotPoolManager.selector);
+        wallet.unlockCallback(abi.encode(V4PositionManager.Op.OPEN, bytes("")));
     }
 
     // Dispatcher-routing test removed: after #4/#5 all four op handlers are real
@@ -140,7 +141,7 @@ contract UniSmartWalletPoolWiringTest is Test {
 
     function test_views_empty() public view {
         assertEq(wallet.openPositionCount(), 0);
-        UniSmartWallet.Position memory p = wallet.positionOf(bytes32(uint256(123)));
+        V4PositionManager.Position memory p = wallet.positionOf(bytes32(uint256(123)));
         assertEq(p.liquidity, 0);
         assertEq(p.openedAt, 0);
     }

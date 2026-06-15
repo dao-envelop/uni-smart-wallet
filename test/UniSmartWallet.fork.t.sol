@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 
 import {Test} from "forge-std/Test.sol";
 import {UniSmartWallet} from "../src/UniSmartWallet.sol";
+import {V4PositionManager} from "../src/abstract/V4PositionManager.sol";
 
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
@@ -176,7 +177,7 @@ contract UniSmartWalletForkTest is Test {
 
         wallet.decreasePosition(salt, 5e14);
 
-        UniSmartWallet.Position memory p = wallet.positionOf(salt);
+        V4PositionManager.Position memory p = wallet.positionOf(salt);
         assertEq(p.liquidity, 5e14);
         assertEq(wallet.openPositionCount(), 1, "decrease should not remove the entry");
     }
