@@ -227,8 +227,7 @@ abstract contract V4PositionManager is IUnlockCallback, ReentrancyGuard {
             liquidity: p.liquidity,
             openedAt: uint64(block.timestamp)
         });
-        openSalts.push(p.salt);
-        _saltIndexPlusOne[p.salt] = openSalts.length;
+        _registerSalt(p.salt);
 
         emit PositionOpened(p.salt, p.key.toId(), p.tickLower, p.tickUpper, p.liquidity, owed0, owed1);
         return "";
@@ -350,6 +349,14 @@ abstract contract V4PositionManager is IUnlockCallback, ReentrancyGuard {
 
         if (owed0 > 0) _take(r.key.currency0, address(this), owed0);
         if (owed1 > 0) _take(r.key.currency1, address(this), owed1);
+    }
+
+    /// @dev Register a new salt in the open-position index (push + 1-based index).
+    /// Shared by `_handleOpen` and subclass flows (e.g. allocate) so the O(1) registry
+    /// bookkeeping lives in one place.
+    function _registerSalt(bytes32 salt) internal {
+        openSalts.push(salt);
+        _saltIndexPlusOne[salt] = openSalts.length;
     }
 
     /// @dev O(1) swap-and-pop removal from openSalts using _saltIndexPlusOne.

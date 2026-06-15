@@ -32,7 +32,9 @@ library PositionMath {
     ///   - tickLower < tickUpper
     ///   - both ticks are multiples of spacing
     ///   - both ticks are within the spacing-adjusted usable bounds
-    function requireValidTickRange(int24 tickLower, int24 tickUpper, int24 spacing) internal pure {
+    /// @dev `public` so the bytecode is deployed once as a linked library, keeping the
+    /// contracts that use it (UniSmartWallet / StableLPManager) under the EIP-170 size limit.
+    function requireValidTickRange(int24 tickLower, int24 tickUpper, int24 spacing) public pure {
         if (tickLower >= tickUpper) revert InvalidTickRange(tickLower, tickUpper);
         if (tickLower % spacing != 0) revert TickNotMultipleOfSpacing(tickLower, spacing);
         if (tickUpper % spacing != 0) revert TickNotMultipleOfSpacing(tickUpper, spacing);
@@ -41,13 +43,14 @@ library PositionMath {
     }
 
     /// @notice Thin pass-through to LiquidityAmounts.getLiquidityForAmounts.
+    /// @dev `public` (linked library) — see {requireValidTickRange}.
     function liquidityFromAmounts(
         uint160 sqrtPriceX96,
         int24 tickLower,
         int24 tickUpper,
         uint256 amount0,
         uint256 amount1
-    ) internal pure returns (uint128) {
+    ) public pure returns (uint128) {
         return LiquidityAmounts.getLiquidityForAmounts(
             sqrtPriceX96,
             TickMath.getSqrtPriceAtTick(tickLower),
