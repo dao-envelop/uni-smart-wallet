@@ -2,6 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {UniSmartWallet} from "../src/UniSmartWallet.sol";
+import {SingletonNFTOwned} from "../src/abstract/SingletonNFTOwned.sol";
 import {V4PositionManager} from "../src/abstract/V4PositionManager.sol";
 
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
@@ -97,7 +98,7 @@ contract UniSmartWalletExitPositionsTest is V4WalletTestBase {
         _open(salt, 1e18);
 
         vm.prank(alice);
-        vm.expectRevert(UniSmartWallet.NotAuthorized.selector);
+        vm.expectRevert(SingletonNFTOwned.NotAuthorized.selector);
         wallet.closePosition(salt);
     }
 

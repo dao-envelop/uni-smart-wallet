@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 
 import {Test} from "forge-std/Test.sol";
 import {UniSmartWallet} from "../src/UniSmartWallet.sol";
+import {SingletonNFTOwned} from "../src/abstract/SingletonNFTOwned.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {MockERC20, Echo} from "./helpers/Mocks.sol";
@@ -43,7 +44,7 @@ contract UniSmartWalletTest is Test {
     function test_singletonNFT_cannotMintMore() public {
         vm.prank(owner);
         UniSmartWalletMintHarness h = new UniSmartWalletMintHarness(poolManagerPlaceholder);
-        vm.expectRevert(UniSmartWallet.SingletonAlreadyMinted.selector);
+        vm.expectRevert(SingletonNFTOwned.SingletonAlreadyMinted.selector);
         h.exposedMint(alice, 2);
     }
 
@@ -51,7 +52,7 @@ contract UniSmartWalletTest is Test {
         vm.prank(owner);
         UniSmartWalletMintHarness h = new UniSmartWalletMintHarness(poolManagerPlaceholder);
         uint256 id = h.TOKEN_ID();
-        vm.expectRevert(UniSmartWallet.SingletonBurnForbidden.selector);
+        vm.expectRevert(SingletonNFTOwned.SingletonBurnForbidden.selector);
         h.exposedBurn(id);
     }
 
@@ -66,7 +67,7 @@ contract UniSmartWalletTest is Test {
 
         // Old owner can no longer call onlyOwnerNFT-gated functions.
         vm.prank(owner);
-        vm.expectRevert(UniSmartWallet.NotOwnerNFT.selector);
+        vm.expectRevert(SingletonNFTOwned.NotOwnerNFT.selector);
         wallet.setOperator(bot, true);
 
         // New owner can.
@@ -107,13 +108,13 @@ contract UniSmartWalletTest is Test {
 
     function test_setOperator_byNonOwner_reverts() public {
         vm.prank(alice);
-        vm.expectRevert(UniSmartWallet.NotOwnerNFT.selector);
+        vm.expectRevert(SingletonNFTOwned.NotOwnerNFT.selector);
         wallet.setOperator(bot, true);
     }
 
     function test_setOperator_zeroAddress_reverts() public {
         vm.prank(owner);
-        vm.expectRevert(UniSmartWallet.ZeroOperator.selector);
+        vm.expectRevert(SingletonNFTOwned.ZeroOperator.selector);
         wallet.setOperator(address(0), true);
     }
 
@@ -181,7 +182,7 @@ contract UniSmartWalletTest is Test {
     function test_executeEncodedTx_byNonOwner_reverts() public {
         vm.deal(address(wallet), 1 ether);
         vm.prank(alice);
-        vm.expectRevert(UniSmartWallet.NotOwnerNFT.selector);
+        vm.expectRevert(SingletonNFTOwned.NotOwnerNFT.selector);
         wallet.executeEncodedTx(payable(alice), 1 ether, "");
     }
 
@@ -193,7 +194,7 @@ contract UniSmartWalletTest is Test {
 
         // Operator can drive position ops (future tasks) but must NOT execute arbitrary calls.
         vm.prank(bot);
-        vm.expectRevert(UniSmartWallet.NotOwnerNFT.selector);
+        vm.expectRevert(SingletonNFTOwned.NotOwnerNFT.selector);
         wallet.executeEncodedTx(payable(bot), 1 ether, "");
     }
 
@@ -248,7 +249,7 @@ contract UniSmartWalletTest is Test {
         bytes[] memory datas = new bytes[](0);
 
         vm.prank(alice);
-        vm.expectRevert(UniSmartWallet.NotOwnerNFT.selector);
+        vm.expectRevert(SingletonNFTOwned.NotOwnerNFT.selector);
         wallet.executeEncodedTxBatch(targets, values, datas);
     }
 }

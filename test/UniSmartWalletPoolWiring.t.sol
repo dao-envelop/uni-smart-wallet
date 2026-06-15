@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 
 import {Test} from "forge-std/Test.sol";
 import {UniSmartWallet} from "../src/UniSmartWallet.sol";
+import {SingletonNFTOwned} from "../src/abstract/SingletonNFTOwned.sol";
 import {V4PositionManager} from "../src/abstract/V4PositionManager.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
@@ -70,7 +71,7 @@ contract UniSmartWalletPoolWiringTest is Test {
 
     function test_setHookAllowed_byNonOwner_reverts() public {
         vm.prank(alice);
-        vm.expectRevert(UniSmartWallet.NotOwnerNFT.selector);
+        vm.expectRevert(SingletonNFTOwned.NotOwnerNFT.selector);
         wallet.setHookAllowed(hookAddr, true);
     }
 
@@ -87,7 +88,7 @@ contract UniSmartWalletPoolWiringTest is Test {
 
     function test_setHookRegistry_byNonOwner_reverts() public {
         vm.prank(alice);
-        vm.expectRevert(UniSmartWallet.NotOwnerNFT.selector);
+        vm.expectRevert(SingletonNFTOwned.NotOwnerNFT.selector);
         wallet.setHookRegistry(address(0xDEAD));
     }
 
