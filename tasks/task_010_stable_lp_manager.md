@@ -29,14 +29,12 @@ NFT-owned manager for stable-pair liquidity (spec: `tasks/spec_StableLPManager.m
 `WithdrawForwarder` (Phase 2); `reinvestRemainder` on withdraw (field reserved; residuals return
 to the manager in Phase 1).
 
-## KNOWN ISSUE — exceeds EIP-170 size limit
+## KNOWN ISSUE — exceeds EIP-170 size limit (RESOLVED in task 011)
 
-`StableLPManager` runtime bytecode is ~28.9 KB, over the 24,576-byte limit (margin ~ −4.3 KB).
-It passes all tests (Foundry's test VM doesn't enforce the limit) but is **NOT deployable to
-mainnet/L2s as a single contract**. `via_ir` can't be enabled (v4-core `PoolManager` hits a Yul
-stack-too-deep); lowering optimizer runs saves <0.5 KB. A structural reduction is required before
-deployment — recommended: move the allocate/withdraw/reinvest handlers into a delegatecalled logic
-contract sharing storage. Tracked for a follow-up; pushed as-is for review.
+As first shipped, `StableLPManager` runtime bytecode was ~28.9 KB, over the 24,576-byte limit.
+**Resolved in `tasks/task_011_stable_lp_size.md`** (size now ~23.7 KB, margin ~ +0.9 KB) by dropping
+`SmartWallet`, going batch-only for owner calls, and stripping unused base handlers. See task 011 for
+the API surface that was trimmed.
 
 ## Verification
 

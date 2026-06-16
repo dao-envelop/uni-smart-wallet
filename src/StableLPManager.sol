@@ -4,9 +4,9 @@
 
 pragma solidity ^0.8.20;
 
-import "@envelop-v2/src/impl/SmartWallet.sol";
 import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import "@openzeppelin/contracts/interfaces/IERC4906.sol";
+import {Address} from "@openzeppelin/contracts/utils/Address.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
@@ -25,10 +25,12 @@ import {PositionMath} from "./lib/PositionMath.sol";
 /// (`allocate`). Its headline feature is `withdrawTo`: deliver any managed stable to an
 /// arbitrary recipient via the v4-native `take`, so the requested stable never lands on the
 /// manager's or owner's ERC-20 balance.
-/// @dev Reuses {SingletonNFTOwned} (auth), {V4PositionManager} (V4 mechanics), {SmartWallet}
-/// (custody). Deployed as an EIP-1167 clone — no constructor runs for clones, so config is
-/// injected via one-shot `initialize` and name/symbol are returned as constants.
-contract StableLPManager is SingletonNFTOwned, SmartWallet, V4PositionManager {
+/// @dev Reuses {SingletonNFTOwned} (auth) and {V4PositionManager} (V4 mechanics). It is
+/// ERC20-only custody (accepts native via `receive`, no NFT/ERC1155 holders) and exposes a
+/// single batch escape hatch (`executeEncodedTxBatch`) instead of inheriting Envelop's
+/// SmartWallet — this keeps the clone implementation under the EIP-170 size limit. Deployed
+/// as an EIP-1167 clone; config is injected via one-shot `initialize`, name/symbol are constants.
+contract StableLPManager is SingletonNFTOwned, V4PositionManager {
     using StateLibrary for IPoolManager;
     using TransientStateLibrary for IPoolManager;
 
@@ -131,6 +133,7 @@ contract StableLPManager is SingletonNFTOwned, SmartWallet, V4PositionManager {
     error RecipientZero();
     error QuoteSplitMismatch(uint256 sumQuoteIn, uint256 totalQuote);
     error ZeroAmount();
+    error ArrayLengthMismatch();
 
     /// @dev Locks the implementation instance. Clones get fresh storage (`_initialized == false`)
     /// and never run this constructor.
@@ -152,7 +155,7 @@ contract StableLPManager is SingletonNFTOwned, SmartWallet, V4PositionManager {
             PoolConfig calldata c = p.pools[i];
             PositionMath.requireValidTickRange(c.tickLower, c.tickUpper, c.key.tickSpacing);
             pools[i] = c;
-            isManagedStable[_otherSide(c.key, p.quote)] = true;
+            isManagedStable[_pairSide(c.key.currency0, c.key.currency1)] = true;
             sum += c.weightBps;
         }
         if (sum != TOTAL_BPS) revert WeightsNotFull(sum);
@@ -179,13 +182,22 @@ contract StableLPManager is SingletonNFTOwned, SmartWallet, V4PositionManager {
         return "eStableLP";
     }
 
-    // ────────── Op dispatch (extends base 0–3) ──────────
+    /// @dev Accept native transfers (e.g. gas refunds / dust). No NFT/ERC1155 custody.
+    receive() external payable {}
 
-    function _dispatchExtraOp(uint8 op, bytes memory payload) internal override returns (bytes memory) {
+    // ────────── Unlock dispatch ──────────
+
+    /// @notice Fully overrides the base dispatcher to route ONLY the ops this product uses.
+    /// Omitting OPEN/CLOSE makes the base's open/close handlers unreachable, so the compiler
+    /// strips them — a deliberate bytecode-size reduction (keeps the clone under EIP-170).
+    function unlockCallback(bytes calldata data) external override returns (bytes memory) {
+        if (msg.sender != address(_poolManager())) revert NotPoolManager();
+        (uint8 op, bytes memory payload) = abi.decode(data, (uint8, bytes));
+        if (op == uint8(Op.POKE)) return _handlePoke(payload); // claimFees
         if (op == OP_ALLOCATE) return _handleAllocate(payload);
         if (op == OP_WITHDRAW_TO) return _handleWithdrawTo(payload);
         if (op == OP_REINVEST) return _handleReinvest(payload);
-        return super._dispatchExtraOp(op, payload);
+        revert UnknownOp(op);
     }
 
     // ────────── allocate ──────────
@@ -232,13 +244,27 @@ contract StableLPManager is SingletonNFTOwned, SmartWallet, V4PositionManager {
         }
 
         uint256 quoteForLp = leg.quoteIn - leg.swapQuoteToPair;
-        (uint160 sqrtP,,,) = _pm.getSlot0(P.key.toId());
         (uint256 amount0, uint256 amount1) = quoteIsZero ? (quoteForLp, pairForLp) : (pairForLp, quoteForLp);
+        L = _addLiquidity(leg.poolIndex, amount0, amount1, leg.minLiquidity, leg.amount0Max, leg.amount1Max);
+    }
+
+    /// @dev Shared by allocate and reinvest: size liquidity at the current price, add it,
+    /// enforce slippage caps, and record/merge the position. Settlement is the caller's job.
+    function _addLiquidity(
+        uint8 poolIndex,
+        uint256 amount0,
+        uint256 amount1,
+        uint128 minLiq,
+        uint128 max0,
+        uint128 max1
+    ) internal returns (uint128 L) {
+        PoolConfig memory P = pools[poolIndex];
+        bytes32 salt = _saltFor(poolIndex);
+        (uint160 sqrtP,,,) = _pm.getSlot0(P.key.toId());
 
         L = PositionMath.liquidityFromAmounts(sqrtP, P.tickLower, P.tickUpper, amount0, amount1);
-        if (L < leg.minLiquidity) revert MinLiquidityNotMet(L, leg.minLiquidity);
+        if (L < minLiq) revert MinLiquidityNotMet(L, minLiq);
 
-        bytes32 salt = _saltFor(leg.poolIndex);
         (BalanceDelta ad,) = _pm.modifyLiquidity(
             P.key,
             ModifyLiquidityParams({
@@ -246,7 +272,7 @@ contract StableLPManager is SingletonNFTOwned, SmartWallet, V4PositionManager {
             }),
             ""
         );
-        _enforceCaps(ad, leg.amount0Max, leg.amount1Max);
+        _enforceCaps(ad, max0, max1);
 
         if (positions[salt].liquidity == 0) {
             positions[salt] = Position({
@@ -354,42 +380,21 @@ contract StableLPManager is SingletonNFTOwned, SmartWallet, V4PositionManager {
             ""
         );
 
-        bool quoteIsZero = _isQuoteCurrency0(P.key);
         if (leg.swapQuoteToPair > 0) {
-            _swap(P.key, quoteIsZero, -int256(leg.swapQuoteToPair), leg.swapPriceLimit);
+            _swap(P.key, _isQuoteCurrency0(P.key), -int256(leg.swapQuoteToPair), leg.swapPriceLimit);
         }
 
         // Size the add from the realized (positive) deltas of the two pool currencies.
-        (uint160 sqrtP,,,) = _pm.getSlot0(P.key.toId());
         int256 d0 = _pm.currencyDelta(address(this), P.key.currency0);
         int256 d1 = _pm.currencyDelta(address(this), P.key.currency1);
-        uint256 amount0 = d0 > 0 ? uint256(d0) : 0;
-        uint256 amount1 = d1 > 0 ? uint256(d1) : 0;
-
-        uint128 L = PositionMath.liquidityFromAmounts(sqrtP, P.tickLower, P.tickUpper, amount0, amount1);
-        if (L < leg.minLiquidity) revert MinLiquidityNotMet(L, leg.minLiquidity);
-
-        (BalanceDelta ad,) = _pm.modifyLiquidity(
-            P.key,
-            ModifyLiquidityParams({
-                tickLower: P.tickLower, tickUpper: P.tickUpper, liquidityDelta: int256(uint256(L)), salt: salt
-            }),
-            ""
+        uint128 L = _addLiquidity(
+            poolIndex,
+            d0 > 0 ? uint256(d0) : 0,
+            d1 > 0 ? uint256(d1) : 0,
+            leg.minLiquidity,
+            leg.amount0Max,
+            leg.amount1Max
         );
-        _enforceCaps(ad, leg.amount0Max, leg.amount1Max);
-
-        if (positions[salt].liquidity == 0) {
-            positions[salt] = Position({
-                key: P.key,
-                tickLower: P.tickLower,
-                tickUpper: P.tickUpper,
-                liquidity: L,
-                openedAt: uint64(block.timestamp)
-            });
-            _registerSalt(salt);
-        } else {
-            positions[salt].liquidity += L;
-        }
 
         _settleCurrency(P.key.currency0);
         _settleCurrency(P.key.currency1);
@@ -398,13 +403,6 @@ contract StableLPManager is SingletonNFTOwned, SmartWallet, V4PositionManager {
     }
 
     // ────────── Owner config / inherited entry points ──────────
-
-    function setPoolConfig(uint8 index, PoolConfig calldata config) external onlyOwnerNFT {
-        if (index >= 3) revert UnknownPool(index);
-        PositionMath.requireValidTickRange(config.tickLower, config.tickUpper, config.key.tickSpacing);
-        pools[index] = config;
-        isManagedStable[_otherSide(config.key, QUOTE)] = true;
-    }
 
     function setHookAllowed(address hook, bool allowed) external onlyOwnerNFT {
         allowedHooks[hook] = allowed;
@@ -416,28 +414,25 @@ contract StableLPManager is SingletonNFTOwned, SmartWallet, V4PositionManager {
         emit HookRegistrySet(registry);
     }
 
-    function executeEncodedTx(address target, uint256 value, bytes memory data)
+    /// @notice Owner escape hatch: execute a batch of arbitrary calls from the manager (e.g.
+    /// rescue tokens, claim airdrops, approve a spender). A single call is just a 1-element
+    /// batch. Empty `data[i]` ⇒ native send. Owner-only — operators cannot move capital out.
+    function executeEncodedTxBatch(address[] calldata targets, uint256[] calldata values, bytes[] calldata datas)
         external
         onlyOwnerNFT
-        returns (bytes memory)
+        returns (bytes[] memory results)
     {
-        return _executeEncodedTx(target, value, data);
-    }
-
-    function executeEncodedTxBatch(address[] calldata targets, uint256[] calldata values, bytes[] memory datas)
-        external
-        onlyOwnerNFT
-        returns (bytes[] memory)
-    {
-        return _executeEncodedTxBatch(targets, values, datas);
-    }
-
-    function decreasePosition(bytes32 salt, uint128 deltaLiquidity) external onlyAuthorized nonReentrant {
-        _decreasePosition(salt, deltaLiquidity);
-    }
-
-    function pokePosition(bytes32 salt) external onlyAuthorized nonReentrant {
-        _pokePosition(salt);
+        if (targets.length != values.length || targets.length != datas.length) {
+            revert ArrayLengthMismatch();
+        }
+        results = new bytes[](targets.length);
+        for (uint256 i = 0; i < targets.length; ++i) {
+            if (datas[i].length == 0) {
+                Address.sendValue(payable(targets[i]), values[i]);
+            } else {
+                results[i] = Address.functionCallWithValue(targets[i], datas[i], values[i]);
+            }
+        }
     }
 
     // ────────── Internal helpers ──────────
@@ -450,13 +445,10 @@ contract StableLPManager is SingletonNFTOwned, SmartWallet, V4PositionManager {
         return Currency.unwrap(key.currency0) == Currency.unwrap(QUOTE);
     }
 
-    function _otherSide(PoolKey calldata key, Currency quote) internal pure returns (Currency) {
-        return Currency.unwrap(key.currency0) == Currency.unwrap(quote) ? key.currency1 : key.currency0;
-    }
-
-    function _pairSide(uint8 i) internal view returns (Currency) {
-        PoolKey storage key = pools[i].key;
-        return Currency.unwrap(key.currency0) == Currency.unwrap(QUOTE) ? key.currency1 : key.currency0;
+    /// @dev The non-quote (pair) side of a pool — what `withdrawTo` can deliver besides QUOTE.
+    /// Takes the two currencies (not the whole PoolKey) to avoid struct memory copies.
+    function _pairSide(Currency c0, Currency c1) internal view returns (Currency) {
+        return Currency.unwrap(c0) == Currency.unwrap(QUOTE) ? c1 : c0;
     }
 
     function _enforceCaps(BalanceDelta ad, uint128 max0, uint128 max1) internal pure {
@@ -473,9 +465,9 @@ contract StableLPManager is SingletonNFTOwned, SmartWallet, V4PositionManager {
     /// are no-ops on the second pass (the delta is already zeroed).
     function _settleManaged() internal {
         _settleCurrency(QUOTE);
-        _settleCurrency(_pairSide(0));
-        _settleCurrency(_pairSide(1));
-        _settleCurrency(_pairSide(2));
+        _settleCurrency(_pairSide(pools[0].key.currency0, pools[0].key.currency1));
+        _settleCurrency(_pairSide(pools[1].key.currency0, pools[1].key.currency1));
+        _settleCurrency(_pairSide(pools[2].key.currency0, pools[2].key.currency1));
     }
 
     function _settleCurrency(Currency c) internal {
@@ -485,12 +477,5 @@ contract StableLPManager is SingletonNFTOwned, SmartWallet, V4PositionManager {
         } else if (d > 0) {
             _take(c, address(this), uint256(d));
         }
-    }
-
-    // ────────── ERC165 ──────────
-
-    function supportsInterface(bytes4 interfaceId) public view virtual override(ERC721, ERC1155Holder) returns (bool) {
-        return interfaceId == type(IERC721).interfaceId || interfaceId == type(IERC721Metadata).interfaceId
-            || super.supportsInterface(interfaceId);
     }
 }

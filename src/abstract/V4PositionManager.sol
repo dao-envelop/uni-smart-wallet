@@ -112,7 +112,7 @@ abstract contract V4PositionManager is IUnlockCallback, ReentrancyGuard {
     /// @notice Called by PoolManager after `unlock(...)`. Handles the canonical ops (0–3)
     /// and forwards anything else to `_dispatchExtraOp` so subclasses can add new ops
     /// (e.g. ALLOCATE / WITHDRAW_TO / REINVEST) without reimplementing the dispatcher.
-    function unlockCallback(bytes calldata data) external override returns (bytes memory) {
+    function unlockCallback(bytes calldata data) external virtual override returns (bytes memory) {
         if (msg.sender != address(_poolManager())) revert NotPoolManager();
         (uint8 op, bytes memory payload) = abi.decode(data, (uint8, bytes));
         if (op == uint8(Op.OPEN)) return _handleOpen(payload);
