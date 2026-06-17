@@ -5,6 +5,7 @@ import {StableLPTestBase} from "./helpers/StableLPTestBase.sol";
 import {StableLPManager} from "../src/StableLPManager.sol";
 import {SingletonNFTOwned} from "../src/abstract/SingletonNFTOwned.sol";
 import {V4PositionManager} from "../src/abstract/V4PositionManager.sol";
+import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 
 contract StableLPManagerAllocateTest is StableLPTestBase {
     function test_allocate_splitsAcrossThreePools_deltasNetToZero() public {
@@ -53,5 +54,15 @@ contract StableLPManagerAllocateTest is StableLPTestBase {
         vm.prank(owner);
         vm.expectRevert();
         mgr.allocate(p);
+    }
+
+    // ────────── hookless-only policy ──────────
+
+    function test_initialize_hookedPool_reverts() public {
+        address badHook = address(0xBADC0DE);
+        StableLPManager.InitParams memory p = _initParams(owner);
+        p.pools[1].key.hooks = IHooks(badHook); // a non-zero hook on one of the 3 pools
+        vm.expectRevert(abi.encodeWithSelector(V4PositionManager.HookNotAllowed.selector, badHook));
+        factory.createManager(p);
     }
 }

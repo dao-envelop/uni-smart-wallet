@@ -153,6 +153,8 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
         uint16 sum;
         for (uint8 i = 0; i < 3; ++i) {
             PoolConfig calldata c = p.pools[i];
+            // Hookless-only: a pool with a non-zero hook can break LP economics, so reject config outright.
+            if (address(c.key.hooks) != address(0)) revert HookNotAllowed(address(c.key.hooks));
             PositionMath.requireValidTickRange(c.tickLower, c.tickUpper, c.key.tickSpacing);
             pools[i] = c;
             isManagedStable[_pairSide(c.key.currency0, c.key.currency1)] = true;
@@ -160,7 +162,6 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
         }
         if (sum != TOTAL_BPS) revert WeightsNotFull(sum);
 
-        allowedHooks[address(0)] = true;
         _mintSingleton(p.owner);
 
         emit IERC4906.MetadataUpdate(TOKEN_ID);
@@ -403,16 +404,6 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
     }
 
     // ────────── Owner config / inherited entry points ──────────
-
-    function setHookAllowed(address hook, bool allowed) external onlyOwnerNFT {
-        allowedHooks[hook] = allowed;
-        emit HookAllowed(hook, allowed);
-    }
-
-    function setHookRegistry(address registry) external onlyOwnerNFT {
-        hookRegistry = registry;
-        emit HookRegistrySet(registry);
-    }
 
     /// @notice Owner escape hatch: execute a batch of arbitrary calls from the manager (e.g.
     /// rescue tokens, claim airdrops, approve a spender). A single call is just a 1-element

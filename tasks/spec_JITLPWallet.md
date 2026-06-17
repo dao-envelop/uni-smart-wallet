@@ -111,10 +111,8 @@ Before submitting `openPosition`, the operator should also cross-check `PoolKey.
 
 `openPosition` validates the provided `PoolKey` before any `modifyLiquidity` call:
 
-1. **Hook whitelist (hybrid).** Hooks with `beforeSwapReturnDelta` / `afterSwapReturnDelta` can break LP economics — async swaps, custom curves, fee-stealing — so opening a tactical LP into an unknown hook is unacceptable.
-   - Local mapping `allowedHooks[address]` managed by the NFT owner via `setHookAllowed`. Constructor seeds `allowedHooks[address(0)] = true` (standard hookless pools).
-   - Optional external `hookRegistry` (an `IHookRegistry` view contract) for delegating policy to an on-chain source. If non-zero, the registry must also approve the hook.
-   - Require: `allowedHooks[key.hooks] && (hookRegistry == address(0) || IHookRegistry(hookRegistry).isAllowed(key.hooks))`.
+1. **Hookless-only gate.** Hooks with `afterAddLiquidityReturnDelta` / `afterRemoveLiquidityReturnDelta` (and swap-return-delta variants) can break LP economics — async swaps, custom curves, fee/principal skimming — and the exit path has no slippage cap, so opening a tactical LP into *any* hooked pool is unacceptable. The product has no use case for hooked pools.
+   - Require: `address(key.hooks) == address(0)`, else revert `HookNotAllowed`. No configurable whitelist or external registry — pools with hooks are categorically rejected. (Deviation from the original hybrid-whitelist design — see `task_012_drop_hook_whitelist.md`.)
 2. **Pool initialized.** `StateLibrary.getSlot0(key.toId()).sqrtPriceX96 != 0`. Catches operator typos in `tickSpacing` / `fee` / `hooks` that would otherwise resolve to a phantom `PoolId` and silently open a position no swap will ever touch.
 3. **Minimum pool liquidity (optional).** `openPosition` accepts a `uint128 minPoolLiquidity` parameter (default `0`); if non-zero, require `StateLibrary.getLiquidity(key.toId()) >= minPoolLiquidity`.
 4. **Slippage protection.** `openPosition` accepts `uint128 amount0Max` and `uint128 amount1Max`; the unlock callback reverts if the resulting `BalanceDelta` exceeds either bound. Protects against adverse price moves between TX submission and inclusion.
@@ -125,7 +123,6 @@ Before submitting `openPosition`, the operator should also cross-check `PoolKey.
 Setup (one-time at deploy):
   - UniSmartWallet deployed with initialOwner
   - Singleton NFT (tokenId=0) minted to initialOwner
-  - allowedHooks[address(0)] = true
   - Wallet starts with zero balance
 
 Capital management:
@@ -135,7 +132,7 @@ Capital management:
 Open position (called by NFT owner or operator):
   - openPosition(poolKey, tickLower, tickUpper, liquidity, salt,
                  minPoolLiquidity, amount0Max, amount1Max)
-    → validate: allowedHooks + optional hookRegistry + getSlot0(poolId) != 0
+    → validate: key.hooks == address(0) + getSlot0(poolId) != 0
                  + (if minPoolLiquidity > 0) getLiquidity(poolId) >= minPoolLiquidity
     → poolManager.unlock(OPEN, ...)
     → callback: modifyLiquidity(+L) → BalanceDelta < 0 (we owe)
@@ -185,9 +182,7 @@ contract UniSmartWallet is ERC721, IUnlockCallback, ReentrancyGuard {
     mapping(address => bool) public operators;
     address[] internal _operatorList;  // tracked for auto-clear on NFT transfer
 
-    // ─── Hook policy (see "Pool Selection & Validation") ───
-    mapping(address => bool) public allowedHooks;  // local whitelist
-    address public hookRegistry;                   // optional IHookRegistry; 0 disables
+    // Hook policy is a hard hookless-only gate (no state) — see "Pool Selection & Validation".
 
     // ─── Capital management ───
     receive() external payable;  // anyone can deposit native
@@ -217,10 +212,6 @@ contract UniSmartWallet is ERC721, IUnlockCallback, ReentrancyGuard {
     // ─── Delegation ───
     function setOperator(address op, bool allowed) external onlyOwnerNFT;
 
-    // ─── Hook policy ───
-    function setHookAllowed(address hook, bool allowed) external onlyOwnerNFT;
-    function setHookRegistry(address registry) external onlyOwnerNFT;
-
     // ─── ERC-721 hardening ───
     // Override _update to clear operators on transfer and forbid additional mints
     // Override _burn to revert (singleton must not be destroyed)
@@ -235,10 +226,6 @@ contract UniSmartWallet is ERC721, IUnlockCallback, ReentrancyGuard {
         return ownerOf(OWNERSHIP_TOKEN_ID);
     }
 }
-
-interface IHookRegistry {
-    function isAllowed(address hook) external view returns (bool);
-}
 ```
 
 Constructor:
@@ -248,7 +235,6 @@ constructor(address initialOwner, IPoolManager poolManager_)
     ERC721("UniSmartWallet Ownership", "JLPW")
 {
     POOL_MANAGER = poolManager_;
-    allowedHooks[address(0)] = true;
     _mint(initialOwner, OWNERSHIP_TOKEN_ID);
 }
 ```
@@ -281,7 +267,6 @@ Transferring the ownership NFT (`safeTransferFrom`) atomically transfers all wal
 | `src/UniSmartWallet.sol` | Main contract; ERC-721 (singleton) + IUnlockCallback + position management |
 | `src/lib/PositionMath.sol` | Tick-spacing snapping, liquidity-from-amounts helpers (reuse from `SelfLPLib` if compatible) |
 | `script/DeployWallet.s.sol` | Deploy single wallet |
-| `src/interfaces/IHookRegistry.sol` | View interface for optional external hook policy |
 | `test/UniSmartWallet.t.sol` | Forge tests: lifecycle, auth, edge cases (accreted across tasks 001–005) |
 | `test/UniSmartWallet.fork.t.sol` | Fork tests against live PoolManager + real pool |
 
@@ -306,8 +291,8 @@ Transferring the ownership NFT (`safeTransferFrom`) atomically transfers all wal
 | `pokePosition` | Explicit call, `modifyLiquidity(0)` releases fees-owed delta |
 | Permissionless triggers | No — owner / operators only; this is a personal tool |
 | Single owner NFT | Yes — singleton, exactly one token ever; new wallet = new contract deploy |
-| Pool discovery | Off-chain (operator/bot via Trading API `/quote`); on-chain validates `allowedHooks` + pool existence |
-| Hook whitelist | Local `allowedHooks` mapping (default `{address(0)}`) + optional external `hookRegistry` |
+| Pool discovery | Off-chain (operator/bot via Trading API `/quote`); on-chain validates hookless + pool existence |
+| Hook policy | Hard hookless-only gate: `key.hooks == address(0)` else revert `HookNotAllowed`. No whitelist/registry (see `task_012`) |
 | Slippage protection | `openPosition` takes `amount0Max` / `amount1Max`; callback reverts on exceed |
 | Reentrancy | `nonReentrant` on `withdraw*` and on position operations (`open` / `close` / `decrease` / `poke`) |
 
@@ -333,15 +318,11 @@ Test cases:
 - `test_openPosition_saltCollision_reverts`
 - `test_openPosition_insufficientBalance_reverts`
 - `test_openPosition_disallowedHook_reverts`
-- `test_openPosition_allowedHook_succeeds`
+- `test_openPosition_hooklessPool_succeeds`
 - `test_openPosition_uninitializedPool_reverts`
 - `test_openPosition_belowMinLiquidity_reverts`
 - `test_openPosition_exceedsAmount0Max_reverts`
 - `test_openPosition_exceedsAmount1Max_reverts`
-- `test_setHookAllowed_byOwner_succeeds`
-- `test_setHookAllowed_byNonOwner_reverts`
-- `test_setHookRegistry_blocksWhenRegistryRejects`
-- `test_hookRegistryZero_fallsBackToLocalWhitelist`
 - `test_closePosition_byNFTOwner_succeeds_returnsCapitalPlusFees`
 - `test_decreasePosition_partial_succeeds`
 - `test_pokePosition_collectsFeesOnly`
@@ -375,6 +356,6 @@ forge test --fork-url $BASE_RPC --match-path ./test/UniSmartWallet.fork.t.sol
 | Singleton NFT mint loophole | 🔴 High | Override `_mint` to forbid post-constructor minting; tests verify |
 | Direct PoolManager flash-accounting bug | 🟡 Medium | Mirror battle-tested settle/take patterns from `SelfLPDirect` (external reference) |
 | ERC-721 transfer reentrancy via `onERC721Received` | 🟡 Medium | `nonReentrant` on capital ops |
-| Operator opens position in pool with malicious hook → LP economics broken | 🔴 High | `allowedHooks` whitelist + optional `hookRegistry` validated in `openPosition` |
+| Operator opens position in pool with malicious hook → LP economics broken | 🔴 High | Hard hookless-only gate (`key.hooks == address(0)`) in `openPosition`; operators can never route into a hooked pool |
 | Operator typo in `PoolKey` → position opens in phantom uninitialized pool | 🟡 Medium | `openPosition` requires `StateLibrary.getSlot0(poolId).sqrtPriceX96 != 0` |
 | Adverse price move between submit and inclusion | 🟡 Medium | `amount0Max` / `amount1Max` slippage bounds enforced in unlock callback |

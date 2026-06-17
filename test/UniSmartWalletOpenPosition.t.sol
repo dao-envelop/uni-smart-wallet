@@ -38,10 +38,8 @@ contract UniSmartWalletOpenPositionTest is V4WalletTestBase {
         assertEq(p.openedAt, uint64(block.timestamp));
     }
 
-    function test_openPosition_allowedHook_succeeds() public {
-        // address(0) hook is seeded in the constructor — happy path
-        // already covered above; this test re-asserts the property explicitly.
-        assertTrue(wallet.allowedHooks(address(0)));
+    function test_openPosition_hooklessPool_succeeds() public {
+        // Hookless pools (hooks == address(0)) are the only ones accepted; happy path.
         bytes32 salt = bytes32(uint256(2));
 
         vm.prank(owner);

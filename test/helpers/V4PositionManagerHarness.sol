@@ -20,7 +20,6 @@ contract V4PositionManagerHarness is V4PositionManager {
 
     constructor(IPoolManager pm) {
         PM = pm;
-        allowedHooks[address(0)] = true;
     }
 
     function _poolManager() internal view override returns (IPoolManager) {
@@ -52,18 +51,6 @@ contract V4PositionManagerHarness is V4PositionManager {
 
     function poke(bytes32 salt) external {
         _pokePosition(salt);
-    }
-
-    function isHookAllowed(address hook) external view returns (bool) {
-        return _isHookAllowed(hook);
-    }
-
-    function setHookAllowed(address hook, bool allowed) external {
-        allowedHooks[hook] = allowed;
-    }
-
-    function setHookRegistry(address registry) external {
-        hookRegistry = registry;
     }
 
     // ────────── Swap-then-add (extra op via the extensible dispatcher) ──────────
