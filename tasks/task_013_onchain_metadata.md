@@ -41,7 +41,11 @@ SVG summary card.
   real swaps, unknown salt ⇒ zeros (via a `PositionStateWrapper`).
 - `test/WalletPositionDescriptor.t.sol` — `tokenURI` is a valid `data:application/json;base64,` URI
   for empty and populated portfolios; no-descriptor ⇒ `""`; unminted id reverts; setter auth;
-  ERC-4906 `MetadataUpdate` on open/close; `supportsInterface(0x49064906)`.
+  ERC-4906 `MetadataUpdate` on open/close; `supportsInterface(0x49064906)`. Plus an **ffi** test that
+  base64-decodes the URI and asserts the rendered JSON fields (name, count, currencies, ticks,
+  principal, fees) match on-chain state via `stdJson`.
+- `test/UniSmartWallet.fork.t.sol` — `test_fork_tokenURI_withPositions`: two real positions against the
+  live Base PoolManager + fee accrual, then ffi-decode `tokenURI` and check content (env-gated by `BASE_RPC`).
 
 ## Result
 
