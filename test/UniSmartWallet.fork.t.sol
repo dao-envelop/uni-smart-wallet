@@ -2,8 +2,11 @@
 pragma solidity ^0.8.26;
 
 import {Test} from "forge-std/Test.sol";
+import {stdJson} from "forge-std/StdJson.sol";
+import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 import {UniSmartWallet} from "../src/UniSmartWallet.sol";
 import {V4PositionManager} from "../src/abstract/V4PositionManager.sol";
+import {WalletPositionDescriptor} from "../src/WalletPositionDescriptor.sol";
 
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
@@ -27,6 +30,9 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 ///     forge test --match-path test/UniSmartWallet.fork.t.sol -vvv
 contract UniSmartWalletForkTest is Test {
     using StateLibrary for IPoolManager;
+    using stdJson for string;
+
+    string internal constant JSON_PREFIX = "data:application/json;base64,";
 
     // Base mainnet V4 deployment (chainId 8453) per script/chain_params.json.
     IPoolManager internal constant POOL_MANAGER = IPoolManager(0x498581fF718922c3f8e6A244956aF099B2652b2b);
@@ -180,5 +186,45 @@ contract UniSmartWalletForkTest is Test {
         V4PositionManager.Position memory p = wallet.positionOf(salt);
         assertEq(p.liquidity, 5e14);
         assertEq(wallet.openPositionCount(), 1, "decrease should not remove the entry");
+    }
+
+    /// @notice On-chain `tokenURI` against the live PoolManager: two real positions + accrued fees,
+    /// ffi-decoded and checked against on-chain state.
+    function test_fork_tokenURI_withPositions() public {
+        if (!forkActive) return;
+
+        WalletPositionDescriptor descriptor = new WalletPositionDescriptor();
+        wallet.setPositionDescriptor(address(descriptor)); // msg.sender == this == NFT owner
+
+        _open(bytes32(uint256(10)), 1e15);
+        _open(bytes32(uint256(11)), 1e15);
+        _swapThroughRange(true, -1e12);
+        _swapThroughRange(false, -1e12);
+
+        string memory uri = wallet.tokenURI(1);
+        string memory json = _decodeJson(uri);
+
+        assertEq(json.readString(".name"), "Envelop UniSmartWallet #1", "name");
+        assertEq(json.readString(".attributes[0].value"), "2", "two open positions");
+        assertEq(
+            json.readString(".positions[0].currency0"), Strings.toHexString(Currency.unwrap(currency0)), "currency0"
+        );
+        assertGt(vm.parseUint(json.readString(".positions[0].fees0")), 0, "fees0 after swaps");
+        // second position is rendered too
+        assertEq(json.readString(".positions[1].liquidity"), "1000000000000000", "pos1 liquidity");
+    }
+
+    function _decodeJson(string memory dataUri) internal returns (string memory) {
+        bytes memory sb = bytes(dataUri);
+        bytes memory pb = bytes(JSON_PREFIX);
+        bytes memory out = new bytes(sb.length - pb.length);
+        for (uint256 i = 0; i < out.length; ++i) {
+            out[i] = sb[pb.length + i];
+        }
+        string[] memory cmd = new string[](3);
+        cmd[0] = "bash";
+        cmd[1] = "-c";
+        cmd[2] = string.concat("printf '%s' '", string(out), "' | base64 -d");
+        return string(vm.ffi(cmd));
     }
 }

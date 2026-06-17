@@ -7,6 +7,9 @@ import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {PoolSwapTest} from "@uniswap/v4-core/src/test/PoolSwapTest.sol";
 
+import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
+import {stdJson} from "forge-std/StdJson.sol";
+
 import {UniSmartWallet} from "../src/UniSmartWallet.sol";
 import {SingletonNFTOwned} from "../src/abstract/SingletonNFTOwned.sol";
 import {WalletPositionDescriptor} from "../src/WalletPositionDescriptor.sol";
@@ -14,6 +17,8 @@ import {MockERC20} from "./helpers/Mocks.sol";
 import {V4WalletTestBase} from "./helpers/V4WalletTestBase.sol";
 
 contract WalletPositionDescriptorTest is V4WalletTestBase {
+    using stdJson for string;
+
     WalletPositionDescriptor internal descriptor;
     PoolSwapTest internal swapRouter;
     address internal trader = address(0xCAFE);
@@ -83,6 +88,56 @@ contract WalletPositionDescriptorTest is V4WalletTestBase {
     function test_tokenURI_unmintedId_reverts() public {
         vm.expectRevert();
         wallet.tokenURI(2); // only TOKEN_ID = 1 exists
+    }
+
+    /// @notice Off-chain content check: ffi-decode the base64 JSON and assert the rendered
+    /// fields match on-chain state (name, position count, currencies, ticks, accrued fees).
+    function test_tokenURI_ffiDecode_contentMatchesState() public {
+        _open(bytes32(uint256(1)), -SPACING, SPACING);
+        _open(bytes32(uint256(2)), -2 * SPACING, 2 * SPACING);
+        _swap(true, -1e15);
+        _swap(false, -1e15);
+
+        string memory json = _decodeJson(wallet.tokenURI(1));
+
+        assertEq(json.readString(".name"), "Envelop UniSmartWallet #1", "name");
+        assertEq(json.readString(".attributes[0].value"), "2", "open position count");
+
+        // position 0 == first salt opened == range [-SPACING, SPACING]
+        assertEq(
+            json.readString(".positions[0].currency0"), Strings.toHexString(Currency.unwrap(currency0)), "currency0"
+        );
+        assertEq(
+            json.readString(".positions[0].currency1"), Strings.toHexString(Currency.unwrap(currency1)), "currency1"
+        );
+        assertEq(json.readInt(".positions[0].tickLower"), int256(int24(-SPACING)), "tickLower");
+        assertEq(json.readInt(".positions[0].tickUpper"), int256(int24(SPACING)), "tickUpper");
+        // numeric amounts/fees are rendered as JSON strings (full uint256 range)
+        assertGt(vm.parseUint(json.readString(".positions[0].amount0")), 0, "amount0");
+        assertGt(vm.parseUint(json.readString(".positions[0].fees0")), 0, "fees0 after swaps");
+        assertGt(vm.parseUint(json.readString(".positions[0].fees1")), 0, "fees1 after swaps");
+        // second position rendered too
+        assertEq(json.readInt(".positions[1].tickLower"), int256(int24(-2 * SPACING)), "pos1 tickLower");
+    }
+
+    /// @dev Strip the `data:application/json;base64,` prefix and base64-decode via ffi → raw JSON.
+    function _decodeJson(string memory dataUri) internal returns (string memory) {
+        string memory b64 = _afterPrefix(dataUri, JSON_PREFIX);
+        string[] memory cmd = new string[](3);
+        cmd[0] = "bash";
+        cmd[1] = "-c";
+        cmd[2] = string.concat("printf '%s' '", b64, "' | base64 -d");
+        return string(vm.ffi(cmd));
+    }
+
+    function _afterPrefix(string memory s, string memory p) internal pure returns (string memory) {
+        bytes memory sb = bytes(s);
+        bytes memory pb = bytes(p);
+        bytes memory out = new bytes(sb.length - pb.length);
+        for (uint256 i = 0; i < out.length; ++i) {
+            out[i] = sb[pb.length + i];
+        }
+        return string(out);
     }
 
     // ────────── descriptor setter ──────────
