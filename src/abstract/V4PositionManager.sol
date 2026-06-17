@@ -14,7 +14,6 @@ import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/Pool
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import {IHookRegistry} from "../interfaces/IHookRegistry.sol";
 import {PositionMath} from "../lib/PositionMath.sol";
 
 /// @title V4PositionManager
@@ -55,17 +54,8 @@ abstract contract V4PositionManager is IUnlockCallback, ReentrancyGuard {
     /// @dev 1-based index into openSalts so 0 means "not present". Enables O(1) splice.
     mapping(bytes32 => uint256) internal _saltIndexPlusOne;
 
-    /// @notice Local hook whitelist. Each subclass seeds address(0)=true (hookless pools)
-    /// in its init path (constructor or `initialize`) — never in a base constructor, because
-    /// clones do not run constructors.
-    mapping(address => bool) public allowedHooks;
-    /// @notice Optional external IHookRegistry. Zero ⇒ registry check skipped.
-    address public hookRegistry;
-
     // ────────── Events ──────────
 
-    event HookAllowed(address indexed hook, bool allowed);
-    event HookRegistrySet(address indexed registry);
     event PositionOpened(
         bytes32 indexed salt,
         PoolId indexed poolId,
@@ -157,8 +147,9 @@ abstract contract V4PositionManager is IUnlockCallback, ReentrancyGuard {
         if (positions[salt].liquidity != 0) revert SaltCollision(salt);
         if (liquidity == 0) revert ZeroLiquidity();
 
-        address hookAddr = address(key.hooks);
-        if (!_isHookAllowed(hookAddr)) revert HookNotAllowed(hookAddr);
+        // Hookless-only policy: a pool with a non-zero hook can break LP economics
+        // (e.g. afterRemoveLiquidityReturnDelta skimming the exit), so reject outright.
+        if (address(key.hooks) != address(0)) revert HookNotAllowed(address(key.hooks));
 
         // NB: keep `_poolManager()` calls inline (no local) — this function is already at the
         // stack-depth limit without via-ir; a cached IPoolManager local tips it over.
@@ -400,17 +391,6 @@ abstract contract V4PositionManager is IUnlockCallback, ReentrancyGuard {
     /// address without routing them through this contract's ERC-20 balance.
     function _take(Currency currency, address recipient, uint256 amount) internal {
         currency.take(_poolManager(), recipient, amount, false);
-    }
-
-    // ────────── Hook policy ──────────
-
-    /// @notice Hook is acceptable iff it's in the local whitelist AND
-    /// (no registry configured OR the registry also approves it).
-    function _isHookAllowed(address hook) internal view returns (bool) {
-        if (!allowedHooks[hook]) return false;
-        address reg = hookRegistry;
-        if (reg == address(0)) return true;
-        return IHookRegistry(reg).isAllowed(hook);
     }
 
     // ────────── Views ──────────

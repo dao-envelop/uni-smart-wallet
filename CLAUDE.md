@@ -47,7 +47,7 @@ The repo is the implementation home of **UniSmartWallet**, a contract that fuses
 
 Two modifiers, both keyed off `ownerOf(TOKEN_ID)`:
 
-- `onlyOwnerNFT` — gates everything that can drain capital: `executeEncodedTx`, `executeEncodedTxBatch`, `setOperator`, `setHookAllowed`, `setHookRegistry`. Operators **must not** get any of these — that would defeat the delegation invariant.
+- `onlyOwnerNFT` — gates everything that can drain capital: `executeEncodedTx`, `executeEncodedTxBatch`, `setOperator`. Operators **must not** get any of these — that would defeat the delegation invariant.
 - `onlyAuthorized` — owner-or-operator. Gates the four position primitives (`openPosition` / `closePosition` / `decreasePosition` / `pokePosition`) so the operator's bot can react fast without owner signing every TX.
 
 `setOperator` appends to `_operatorList`; the `_update` ERC-721 hook iterates that list on every transfer and resets `operators[*] = false` so the new NFT holder doesn't inherit unexpected delegations.
@@ -72,12 +72,12 @@ Two modifiers, both keyed off `ownerOf(TOKEN_ID)`:
 
 1. `positions[salt].liquidity == 0` (salt collision).
 2. `liquidity > 0`.
-3. `_isHookAllowed(key.hooks)` — local `allowedHooks` mapping (constructor seeds `address(0)`) AND, if `hookRegistry` is configured, registry approval (`IHookRegistry.isAllowed`).
+3. Hookless-only: `address(key.hooks) != address(0)` ⇒ revert `HookNotAllowed`. There is no configurable whitelist/registry — pools with hooks are categorically rejected. (`StableLPManager` enforces the same gate on its 3 configured pools in `initialize`.)
 4. `getSlot0(poolId).sqrtPriceX96 != 0` — catches operator typos that would otherwise resolve to a phantom uninitialized pool.
 5. Optional `getLiquidity(poolId) >= minPoolLiquidity`.
 6. `PositionMath.requireValidTickRange`.
 
-The hook check is the most security-load-bearing: hooks with `beforeSwapReturnDelta` / `afterSwapReturnDelta` can break LP economics, so an unknown hook must reject.
+The hook gate is the most security-load-bearing check: hooks with `afterAddLiquidityReturnDelta` / `afterRemoveLiquidityReturnDelta` can skim LP principal/fees (the exit path `_withdrawLiquidity` has no slippage cap), and it is the leash that makes operator delegation safe — operators open positions under `onlyAuthorized` but can never route into a hooked pool. The product has no need for hooked pools, so the gate is a hard `hooks == address(0)` rather than a whitelist.
 
 ### Envelop oracle compatibility
 
@@ -100,7 +100,7 @@ Tests are split by concern; each file boots only the scaffolding it needs:
 | File | Boots | Covers |
 |---|---|---|
 | `test/UniSmartWallet.t.sol` | wallet only | auth, operators, singleton invariant, `executeEncodedTx*` |
-| `test/UniSmartWalletPoolWiring.t.sol` | wallet + placeholder PoolManager | constructor wiring, `unlockCallback` gating, hook policy setters, views |
+| `test/UniSmartWalletPoolWiring.t.sol` | wallet + placeholder PoolManager | constructor wiring, `unlockCallback` gating, views |
 | `test/UniSmartWalletOpenPosition.t.sol` | `V4WalletTestBase` (real PoolManager + 2 tokens + initialized pool + funded wallet) | full `openPosition` paths |
 | `test/UniSmartWalletExitPositions.t.sol` | `V4WalletTestBase` + `PoolSwapTest` router + funded trader | `closePosition` / `decreasePosition` / `pokePosition`, fee accrual via real swaps, multi-salt registry consistency |
 | `test/PositionMath.t.sol` | none | library branch coverage via a `PositionMathWrapper` (library calls are inlined, so `vm.expectRevert` can't see them without an external boundary) |
@@ -109,13 +109,12 @@ Tests are split by concern; each file boots only the scaffolding it needs:
 
 Shared helpers in `test/helpers/`:
 
-- `Mocks.sol` — `MockERC20`, `Echo`, `MockHookRegistry`. **Add new mocks here**, don't redefine inline.
+- `Mocks.sol` — `MockERC20`, `Echo`. **Add new mocks here**, don't redefine inline.
 - `V4WalletTestBase.sol` — abstract `Test` base that deploys PoolManager + sorted MockERC20 pair + hookless pool + funded wallet. Any new test that needs the wallet wired to a real PoolManager should inherit from this.
 
-Two test harnesses live inline next to the suites that use them (each is scoped to one file's needs):
+One test harness lives inline next to the suite that uses it:
 
 - `UniSmartWalletMintHarness` — exposes internal `_mint` / `_burn` to verify the singleton invariant reverts.
-- `UniSmartWalletHookHarness` — exposes internal `_isHookAllowed` for direct branch coverage.
 
 ## Task and branch workflow
 

@@ -31,7 +31,6 @@ contract UniSmartWallet is SingletonNFTOwned, SmartWallet, V4PositionManager {
 
     constructor(IPoolManager poolManager_) ERC721("ERC721 Name", "ERC721 symbol") {
         POOL_MANAGER = poolManager_;
-        allowedHooks[address(0)] = true;
         _mintSingleton(msg.sender);
         emit IERC4906.MetadataUpdate(TOKEN_ID);
         // We use these events to be compatable with existing envelop oracle
@@ -61,18 +60,6 @@ contract UniSmartWallet is SingletonNFTOwned, SmartWallet, V4PositionManager {
         returns (bytes[] memory)
     {
         return _executeEncodedTxBatch(targets, values, datas);
-    }
-
-    // ────────── Hook policy (owner-gated setters over base storage) ──────────
-
-    function setHookAllowed(address hook, bool allowed) external onlyOwnerNFT {
-        allowedHooks[hook] = allowed;
-        emit HookAllowed(hook, allowed);
-    }
-
-    function setHookRegistry(address registry) external onlyOwnerNFT {
-        hookRegistry = registry;
-        emit HookRegistrySet(registry);
     }
 
     // ────────── Position ops (owner-or-operator wrappers over base) ──────────
