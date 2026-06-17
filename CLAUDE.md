@@ -83,6 +83,15 @@ The hook gate is the most security-load-bearing check: hooks with `afterAddLiqui
 
 The constructor emits `EnvelopV2OracleType(ORACLE_TYPE=2002, ...)` and `EnvelopWrappedV2(...)`. These exist purely so existing Envelop V2 oracles index this contract. Do **not** rename or drop them without coordinating with the Envelop side.
 
+### On-chain metadata (`tokenURI`)
+
+The wallet's `tokenURI(1)` renders the **portfolio of open positions** on-chain. It mirrors Uniswap's `PositionManager → IPositionDescriptor` split, adapted to a singleton-portfolio NFT (one token owns N salt-keyed positions, not one NFT per position):
+
+- `tokenURI` delegates to an external `IWalletDescriptor` set via `setPositionDescriptor` (owner-only). Zero address ⇒ returns `""` (never reverts). Rendering bytecode lives in the descriptor, **not** the wallet — mandatory for EIP-170 (the clone-deployed `StableLPManager` shares the same constraint).
+- `src/WalletPositionDescriptor.sol` iterates `openSalts`, values each position via `src/lib/PositionState.sol`, and emits a base64 `data:application/json` blob (per-position principal + uncollected fees + a simple SVG summary card).
+- `PositionState.value` is **view-only** (no `unlock`): principal via `SqrtPriceMath`, fees via `StateLibrary.getPositionInfo` (last) vs `getFeeGrowthInside` (now) — `fees = liquidity * ΔfeeGrowthInside / 2**128`. V4 has no `tokensOwed`; fees live entirely in feeGrowth.
+- **ERC-4906**: every position mutation (`openPosition`/`closePosition`/`decreasePosition`/`pokePosition`; `allocate`/`withdrawTo`/`reinvest`/`claimFees` on the manager) emits `MetadataUpdate(TOKEN_ID)` so marketplaces refresh. `supportsInterface` advertises `0x49064906`.
+
 ### Submodules and remappings
 
 Solidity dependencies are pulled via git submodules under `lib/` (`forge-std`, `envelop-protocol-v2`, `v4-hooks-public`). The bulk of `remappings.txt` re-exports paths *through* `v4-hooks-public` — meaning OZ, Uniswap v2/v3/v4 core/periphery, Permit2, Solady, etc. all resolve into nested subdirectories of `lib/v4-hooks-public/lib/...`. Two top-level remappings to know:
@@ -104,6 +113,8 @@ Tests are split by concern; each file boots only the scaffolding it needs:
 | `test/UniSmartWalletOpenPosition.t.sol` | `V4WalletTestBase` (real PoolManager + 2 tokens + initialized pool + funded wallet) | full `openPosition` paths |
 | `test/UniSmartWalletExitPositions.t.sol` | `V4WalletTestBase` + `PoolSwapTest` router + funded trader | `closePosition` / `decreasePosition` / `pokePosition`, fee accrual via real swaps, multi-salt registry consistency |
 | `test/PositionMath.t.sol` | none | library branch coverage via a `PositionMathWrapper` (library calls are inlined, so `vm.expectRevert` can't see them without an external boundary) |
+| `test/PositionState.t.sol` | `V4WalletTestBase` + `PoolSwapTest` | `PositionState.value` principal/fee math via a `PositionStateWrapper` (fees asserted after real swaps) |
+| `test/WalletPositionDescriptor.t.sol` | `V4WalletTestBase` + `PoolSwapTest` | `tokenURI` data-URI rendering (empty + populated portfolio), descriptor setter auth, ERC-4906 `MetadataUpdate` emits, `supportsInterface` |
 | `test/DeployWallet.t.sol` | `DeployWallet` script | `deployAndAssign` + `parseConfig` (inline JSON) + `loadConfig` (committed fixture under `test/fixtures/`) |
 | `test/UniSmartWallet.fork.t.sol` | live PoolManager via fork | end-to-end against real V4 on Base, env-gated by `BASE_RPC` |
 

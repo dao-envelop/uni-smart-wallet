@@ -17,6 +17,7 @@ import {TransientStateLibrary} from "@uniswap/v4-core/src/libraries/TransientSta
 import {SingletonNFTOwned} from "./abstract/SingletonNFTOwned.sol";
 import {V4PositionManager} from "./abstract/V4PositionManager.sol";
 import {PositionMath} from "./lib/PositionMath.sol";
+import {IWalletDescriptor} from "./interfaces/IWalletDescriptor.sol";
 
 /// @title StableLPManager
 /// @notice Clone-deployed, NFT-owned manager for stable-pair liquidity. The owner deposits
@@ -110,6 +111,9 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
     mapping(Currency => bool) public isManagedStable;
     bool private _initialized;
 
+    /// @notice External on-chain metadata renderer for `tokenURI`. Zero ⇒ `tokenURI` returns "".
+    address public positionDescriptor;
+
     // ────────── Events ──────────
 
     // Envelop oracle compatibility (same as UniSmartWallet).
@@ -183,6 +187,21 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
         return "eStableLP";
     }
 
+    /// @notice Set the external `tokenURI` renderer. Owner-only.
+    function setPositionDescriptor(address descriptor) external onlyOwnerNFT {
+        positionDescriptor = descriptor;
+        emit IERC4906.MetadataUpdate(TOKEN_ID);
+    }
+
+    /// @notice On-chain metadata for the singleton ownership token. Delegates to the configured
+    /// {IWalletDescriptor}; returns "" if none is set (never reverts).
+    function tokenURI(uint256 id) public view override returns (string memory) {
+        _requireOwned(id);
+        address descriptor = positionDescriptor;
+        if (descriptor == address(0)) return "";
+        return IWalletDescriptor(descriptor).tokenURI(address(this), id);
+    }
+
     /// @dev Accept native transfers (e.g. gas refunds / dust). No NFT/ERC1155 custody.
     receive() external payable {}
 
@@ -214,6 +233,7 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
         }
         if (sumQuote != p.totalQuote) revert QuoteSplitMismatch(sumQuote, p.totalQuote);
         _pm.unlock(abi.encode(OP_ALLOCATE, abi.encode(p)));
+        emit IERC4906.MetadataUpdate(TOKEN_ID);
     }
 
     function _handleAllocate(bytes memory payload) internal returns (bytes memory) {
@@ -304,6 +324,7 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
             if (s.liquidityToPull > have) revert DeltaExceedsLiquidity(s.liquidityToPull, have);
         }
         _pm.unlock(abi.encode(OP_WITHDRAW_TO, abi.encode(p)));
+        emit IERC4906.MetadataUpdate(TOKEN_ID);
     }
 
     function _handleWithdrawTo(bytes memory payload) internal returns (bytes memory) {
@@ -360,12 +381,14 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
     /// @notice Collect accrued fees on `salt` to the manager (no principal change).
     function claimFees(bytes32 salt) external onlyAuthorized nonReentrant {
         _pokePosition(salt);
+        emit IERC4906.MetadataUpdate(TOKEN_ID);
     }
 
     /// @notice Compound realized fees of one pool back into its position.
     function reinvest(uint8 poolIndex, AllocLeg calldata leg) external onlyAuthorized nonReentrant {
         if (poolIndex >= 3) revert UnknownPool(poolIndex);
         _pm.unlock(abi.encode(OP_REINVEST, abi.encode(poolIndex, leg)));
+        emit IERC4906.MetadataUpdate(TOKEN_ID);
     }
 
     function _handleReinvest(bytes memory payload) internal returns (bytes memory) {

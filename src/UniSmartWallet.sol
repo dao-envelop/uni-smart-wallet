@@ -11,6 +11,7 @@ import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {SingletonNFTOwned} from "./abstract/SingletonNFTOwned.sol";
 import {V4PositionManager} from "./abstract/V4PositionManager.sol";
+import {IWalletDescriptor} from "./interfaces/IWalletDescriptor.sol";
 
 /// @title UniSmartWallet
 /// @notice NFT-owned smart wallet with direct Uniswap V4 liquidity management. Auth
@@ -20,10 +21,12 @@ import {V4PositionManager} from "./abstract/V4PositionManager.sol";
 /// access-controlled entry points.
 contract UniSmartWallet is SingletonNFTOwned, SmartWallet, V4PositionManager {
     uint256 public constant ORACLE_TYPE = 2002;
-    string public constant DEFAULT_BASE_URI = "https://api.envelop.is/uniwallet/";
 
     /// @dev Directly deployed (not a clone), so the PoolManager can stay immutable.
     IPoolManager public immutable POOL_MANAGER;
+
+    /// @notice External on-chain metadata renderer for `tokenURI`. Zero ⇒ `tokenURI` returns "".
+    address public positionDescriptor;
 
     // We use these events to be compatable with existing envelop oracle
     event EnvelopV2OracleType(uint256 indexed oracleType, string contractName);
@@ -76,25 +79,46 @@ contract UniSmartWallet is SingletonNFTOwned, SmartWallet, V4PositionManager {
         uint128 amount1Max
     ) external onlyAuthorized nonReentrant {
         _openPosition(key, tickLower, tickUpper, liquidity, salt, minPoolLiquidity, amount0Max, amount1Max);
+        emit IERC4906.MetadataUpdate(TOKEN_ID);
     }
 
     function closePosition(bytes32 salt) external onlyAuthorized nonReentrant {
         _closePosition(salt);
+        emit IERC4906.MetadataUpdate(TOKEN_ID);
     }
 
     function decreasePosition(bytes32 salt, uint128 deltaLiquidity) external onlyAuthorized nonReentrant {
         _decreasePosition(salt, deltaLiquidity);
+        emit IERC4906.MetadataUpdate(TOKEN_ID);
     }
 
     function pokePosition(bytes32 salt) external onlyAuthorized nonReentrant {
         _pokePosition(salt);
+        emit IERC4906.MetadataUpdate(TOKEN_ID);
+    }
+
+    // ────────── Metadata ──────────
+
+    /// @notice Set the external `tokenURI` renderer. Owner-only.
+    function setPositionDescriptor(address descriptor) external onlyOwnerNFT {
+        positionDescriptor = descriptor;
+        emit IERC4906.MetadataUpdate(TOKEN_ID);
+    }
+
+    /// @notice On-chain metadata for the singleton ownership token. Delegates rendering to the
+    /// configured {IWalletDescriptor}; returns "" if none is set (never reverts).
+    function tokenURI(uint256 id) public view override returns (string memory) {
+        _requireOwned(id);
+        address descriptor = positionDescriptor;
+        if (descriptor == address(0)) return "";
+        return IWalletDescriptor(descriptor).tokenURI(address(this), id);
     }
 
     // ────────── Views ──────────
 
     function supportsInterface(bytes4 interfaceId) public view virtual override(ERC721, ERC1155Holder) returns (bool) {
-        //TODO  add current contract interfaceinterfaceId == type(IERC721).interfaceId ||
         return interfaceId == type(IERC721).interfaceId || interfaceId == type(IERC721Metadata).interfaceId
+            || interfaceId == bytes4(0x49064906) // ERC-4906 (metadata update)
             || super.supportsInterface(interfaceId);
     }
 }

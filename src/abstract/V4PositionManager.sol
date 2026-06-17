@@ -97,6 +97,12 @@ abstract contract V4PositionManager is IUnlockCallback, ReentrancyGuard {
     /// `immutable`; clone-deployed subclasses return a storage var set in `initialize`.
     function _poolManager() internal view virtual returns (IPoolManager);
 
+    /// @notice Public view over the resolved PoolManager, so off-chain readers and the
+    /// metadata descriptor can value positions via `StateLibrary` without an unlock.
+    function poolManager() external view returns (IPoolManager) {
+        return _poolManager();
+    }
+
     // ────────── Unlock callback (extensible dispatcher) ──────────
 
     /// @notice Called by PoolManager after `unlock(...)`. Handles the canonical ops (0–3)
