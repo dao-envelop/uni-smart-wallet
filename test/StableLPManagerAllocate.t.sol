@@ -6,6 +6,7 @@ import {StableLPManager} from "../src/StableLPManager.sol";
 import {SingletonNFTOwned} from "../src/abstract/SingletonNFTOwned.sol";
 import {V4PositionManager} from "../src/abstract/V4PositionManager.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
+import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 
 contract StableLPManagerAllocateTest is StableLPTestBase {
     function test_allocate_splitsAcrossThreePools_deltasNetToZero() public {
@@ -40,20 +41,28 @@ contract StableLPManagerAllocateTest is StableLPTestBase {
         mgr.allocate(_allocateParams(FUND));
     }
 
-    function test_allocate_quoteSplitMismatch_reverts() public {
-        StableLPManager.AllocateParams memory p = _allocateParams(FUND);
-        p.legs[0].quoteIn += 1; // Σ quoteIn no longer == totalQuote
+    function test_allocate_noLegs_reverts() public {
+        StableLPManager.AllocLeg[] memory legs = new StableLPManager.AllocLeg[](0);
         vm.prank(owner);
-        vm.expectRevert(abi.encodeWithSelector(StableLPManager.QuoteSplitMismatch.selector, FUND + 1, FUND));
-        mgr.allocate(p);
+        vm.expectRevert(StableLPManager.NoLegs.selector);
+        mgr.allocate(legs);
+    }
+
+    function test_allocate_unknownPool_reverts() public {
+        StableLPManager.AllocLeg[] memory legs = _allocateParams(FUND);
+        PoolId bogus = PoolId.wrap(bytes32(uint256(0xBAD))); // not a configured pool
+        legs[0].poolId = bogus;
+        vm.prank(owner);
+        vm.expectRevert(abi.encodeWithSelector(StableLPManager.UnknownPool.selector, bogus));
+        mgr.allocate(legs);
     }
 
     function test_allocate_belowMinLiquidity_reverts() public {
-        StableLPManager.AllocateParams memory p = _allocateParams(FUND);
-        p.legs[0].minLiquidity = type(uint128).max; // impossible floor
+        StableLPManager.AllocLeg[] memory legs = _allocateParams(FUND);
+        legs[0].minLiquidity = type(uint128).max; // impossible floor
         vm.prank(owner);
         vm.expectRevert();
-        mgr.allocate(p);
+        mgr.allocate(legs);
     }
 
     // ────────── hookless-only policy ──────────

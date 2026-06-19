@@ -70,17 +70,19 @@ contract StableLPManagerReinvestTest is StableLPTestBase {
         uint128 liqBefore = mgr.positionOf(_saltFor(0)).liquidity;
 
         StableLPManager.AllocLeg memory leg = StableLPManager.AllocLeg({
-            poolIndex: 0,
-            quoteIn: 0,
-            swapQuoteToPair: 0, // fees already span both sides (bidirectional volume)
+            poolId: poolKeys[0].toId(),
+            zeroForOne: false,
+            swapAmountIn: 0, // fees already span both sides (bidirectional volume)
             swapPriceLimit: 0,
+            amount0Desired: 0, // reinvest sizes the add from realized fee deltas, not these
+            amount1Desired: 0,
             minLiquidity: 0,
             amount0Max: type(uint128).max,
             amount1Max: type(uint128).max
         });
 
         vm.prank(owner);
-        mgr.reinvest(0, leg);
+        mgr.reinvest(leg);
 
         assertGt(mgr.positionOf(_saltFor(0)).liquidity, liqBefore, "liquidity compounded from realized fees");
     }

@@ -9,7 +9,8 @@ contract StableLPFactoryTest is StableLPTestBase {
     function test_factory_createManager_mintsSingletonToOwner() public view {
         assertEq(mgr.ownerOf(mgr.TOKEN_ID()), owner, "singleton minted to owner");
         assertEq(mgr.ownerNFTHolder(), owner);
-        assertEq(Currency.unwrap(mgr.QUOTE()), Currency.unwrap(USDT), "quote configured");
+        // managed stables = union of all pool currencies (USDT hub + the 3 pair sides here).
+        assertTrue(mgr.isManagedStable(USDT), "USDT managed");
         assertTrue(mgr.isManagedStable(USDC) && mgr.isManagedStable(DAI) && mgr.isManagedStable(USDe));
     }
 
@@ -25,10 +26,32 @@ contract StableLPFactoryTest is StableLPTestBase {
         mgr.initialize(_initParams(owner));
     }
 
-    function test_initialize_weightsNotFull_reverts() public {
+    function test_initialize_noPools_reverts() public {
         StableLPManager.InitParams memory p = _initParams(owner);
-        p.pools[0].weightBps = 1; // breaks the Σ == 10_000 invariant
-        vm.expectRevert(abi.encodeWithSelector(StableLPManager.WeightsNotFull.selector, uint16(1 + 3333 + 3333)));
+        p.pools = new StableLPManager.PoolConfig[](0);
+        vm.expectRevert(StableLPManager.NoPools.selector);
+        factory.createManager(p);
+    }
+
+    function test_initialize_tooManyPools_reverts() public {
+        StableLPManager.InitParams memory p = _initParams(owner);
+        uint256 n = uint256(mgr.MAX_POOLS()) + 1;
+        StableLPManager.PoolConfig[] memory many = new StableLPManager.PoolConfig[](n);
+        for (uint256 i = 0; i < n; ++i) {
+            many[i] = StableLPManager.PoolConfig({key: poolKeys[0], tickLower: TL, tickUpper: TU});
+        }
+        p.pools = many;
+        vm.expectRevert(abi.encodeWithSelector(StableLPManager.TooManyPools.selector, n));
+        factory.createManager(p);
+    }
+
+    function test_initialize_duplicatePool_reverts() public {
+        StableLPManager.InitParams memory p = _initParams(owner);
+        StableLPManager.PoolConfig[] memory dup = new StableLPManager.PoolConfig[](2);
+        dup[0] = StableLPManager.PoolConfig({key: poolKeys[0], tickLower: TL, tickUpper: TU});
+        dup[1] = StableLPManager.PoolConfig({key: poolKeys[0], tickLower: TL, tickUpper: TU}); // same poolId
+        p.pools = dup;
+        vm.expectRevert(abi.encodeWithSelector(StableLPManager.DuplicatePool.selector, poolKeys[0].toId()));
         factory.createManager(p);
     }
 

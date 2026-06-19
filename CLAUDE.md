@@ -72,7 +72,7 @@ Two modifiers, both keyed off `ownerOf(TOKEN_ID)`:
 
 1. `positions[salt].liquidity == 0` (salt collision).
 2. `liquidity > 0`.
-3. Hookless-only: `address(key.hooks) != address(0)` ⇒ revert `HookNotAllowed`. There is no configurable whitelist/registry — pools with hooks are categorically rejected. (`StableLPManager` enforces the same gate on its 3 configured pools in `initialize`.)
+3. Hookless-only: `address(key.hooks) != address(0)` ⇒ revert `HookNotAllowed`. There is no configurable whitelist/registry — pools with hooks are categorically rejected. (`StableLPManager` enforces the same gate on every configured pool in `initialize`.)
 4. `getSlot0(poolId).sqrtPriceX96 != 0` — catches operator typos that would otherwise resolve to a phantom uninitialized pool.
 5. Optional `getLiquidity(poolId) >= minPoolLiquidity`.
 6. `PositionMath.requireValidTickRange`.
