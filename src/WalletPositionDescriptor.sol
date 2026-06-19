@@ -21,7 +21,7 @@ contract WalletPositionDescriptor is IWalletDescriptor {
     /// @inheritdoc IWalletDescriptor
     function tokenURI(address wallet, uint256 tokenId) external view returns (string memory) {
         V4PositionManager w = V4PositionManager(wallet);
-        IPoolManager pm = w.poolManager();
+        IPoolManager pm = w.POOL_MANAGER();
         uint256 n = w.openPositionCount();
 
         string memory json = string.concat(

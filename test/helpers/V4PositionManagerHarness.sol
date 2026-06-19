@@ -11,20 +11,12 @@ import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.so
 /// @notice Minimal concrete subclass of {V4PositionManager} with NO access control,
 /// used to exercise the V4 mechanics (position lifecycle + swaps) in isolation from
 /// the NFT/operator authorization that lives in the product contracts.
-/// Mirrors how a real subclass wires `_poolManager()` and seeds the hookless pool.
+/// Mirrors how a real subclass wires the base `POOL_MANAGER` and seeds the hookless pool.
 contract V4PositionManagerHarness is V4PositionManager {
-    IPoolManager private immutable PM;
-
     /// @dev Demonstrates the swap-then-add netting an allocate-style flow relies on.
     uint8 internal constant SWAP_THEN_ADD = 100;
 
-    constructor(IPoolManager pm) {
-        PM = pm;
-    }
-
-    function _poolManager() internal view override returns (IPoolManager) {
-        return PM;
-    }
+    constructor(IPoolManager pm) V4PositionManager(pm) {}
 
     // ────────── Ungated pass-throughs to the base internals ──────────
 
@@ -70,7 +62,7 @@ contract V4PositionManagerHarness is V4PositionManager {
     /// per-currency delta in a single unlock — the core pattern `StableLPManager.allocate`
     /// will use. Proves the base's `_swap`/`_settle`/`_take` compose without `CurrencyNotSettled`.
     function swapThenAdd(SwapThenAddParams calldata p) external {
-        PM.unlock(abi.encode(SWAP_THEN_ADD, abi.encode(p)));
+        POOL_MANAGER.unlock(abi.encode(SWAP_THEN_ADD, abi.encode(p)));
     }
 
     function _dispatchExtraOp(uint8 op, bytes memory payload) internal override returns (bytes memory) {
@@ -83,7 +75,7 @@ contract V4PositionManagerHarness is V4PositionManager {
 
         BalanceDelta swapDelta = _swap(p.key, p.zeroForOne, p.swapAmount, p.sqrtPriceLimitX96);
 
-        (BalanceDelta addDelta,) = PM.modifyLiquidity(
+        (BalanceDelta addDelta,) = POOL_MANAGER.modifyLiquidity(
             p.key,
             ModifyLiquidityParams({
                 tickLower: p.tickLower,

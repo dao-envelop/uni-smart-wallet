@@ -97,3 +97,13 @@ sites and an immutable inlines its value at each site, which costs *more* byteco
 (no SLOAD per read), a smaller `InitParams`, and matching the per-chain-singleton reality / the
 `UniSmartWallet` immutable pattern. Tests deploy the impl with the PoolManager
 (`new StableLPManager(IPoolManager(address(poolManager)))`). 111 tests pass, 1 fork skipped.
+
+### `POOL_MANAGER` hoisted into the base
+
+Once both subclasses returned an `immutable POOL_MANAGER`, the `_poolManager()` seam (its only purpose
+was "direct deploy → immutable / clone → storage") had no remaining storage user. Hoisted a single
+`IPoolManager public immutable POOL_MANAGER` into `V4PositionManager` (set in its constructor;
+subclasses call `V4PositionManager(pm)`), and removed: the `virtual _poolManager()` + its overrides in
+both subclasses and the harness, the duplicate per-subclass immutable, and the redundant public
+`poolManager()` getter (the descriptor now reads `POOL_MANAGER()`). Net: one source of truth, less
+duplication, and `StableLPManager` reclaimed ~94 bytes (→ ~23,755, margin ~821). 111 tests pass.

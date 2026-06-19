@@ -103,10 +103,6 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
 
     // ────────── State ──────────
 
-    /// @notice The V4 PoolManager. A per-chain singleton, so it's an `immutable` on the
-    /// implementation — shared by every clone (immutables live in code, read via delegatecall),
-    /// which avoids a per-clone storage slot + SLOAD and drops it from `InitParams`.
-    IPoolManager public immutable POOL_MANAGER;
     PoolConfig[] public pools;
     /// @notice 1-based index of a pool in `pools` keyed by its poolId (0 ⇒ not configured).
     mapping(PoolId => uint256) internal _poolIndexPlusOne;
@@ -147,11 +143,10 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
     error ZeroAmount();
     error ArrayLengthMismatch();
 
-    /// @dev Sets the shared `POOL_MANAGER` immutable and locks the implementation instance. Clones
-    /// get fresh storage (`_initialized == false`), never run this constructor, but DO read the
-    /// implementation's `POOL_MANAGER` immutable through delegatecall.
-    constructor(IPoolManager poolManager_) ERC721("", "") {
-        POOL_MANAGER = poolManager_;
+    /// @dev Sets the shared `POOL_MANAGER` immutable (in the base) and locks the implementation
+    /// instance. Clones get fresh storage (`_initialized == false`), never run this constructor, but
+    /// DO read the implementation's `POOL_MANAGER` immutable through delegatecall.
+    constructor(IPoolManager poolManager_) ERC721("", "") V4PositionManager(poolManager_) {
         _initialized = true;
     }
 
@@ -193,10 +188,6 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
         }
     }
 
-    function _poolManager() internal view override returns (IPoolManager) {
-        return POOL_MANAGER;
-    }
-
     // Clones don't run the ERC721 constructor, so expose name/symbol as constants.
     function name() public pure override returns (string memory) {
         return "Envelop StableLP";
@@ -230,7 +221,7 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
     /// Omitting OPEN/CLOSE makes the base's open/close handlers unreachable, so the compiler
     /// strips them — a deliberate bytecode-size reduction (keeps the clone under EIP-170).
     function unlockCallback(bytes calldata data) external override returns (bytes memory) {
-        if (msg.sender != address(_poolManager())) revert NotPoolManager();
+        if (msg.sender != address(POOL_MANAGER)) revert NotPoolManager();
         (uint8 op, bytes memory payload) = abi.decode(data, (uint8, bytes));
         if (op == uint8(Op.POKE)) return _handlePoke(payload); // claimFees
         if (op == OP_ALLOCATE) return _handleAllocate(payload);
