@@ -121,7 +121,7 @@ contract StableLPManyPoolsTest is Test {
 
     function test_init_sevenPools_countsAndUnion() public {
         PoolManager pm = new PoolManager(address(this));
-        StableLPManager impl = new StableLPManager();
+        StableLPManager impl = new StableLPManager(IPoolManager(address(pm)));
         StableLPFactory factory = new StableLPFactory(address(impl));
 
         Currency hub = _tok();
@@ -135,11 +135,8 @@ contract StableLPManyPoolsTest is Test {
             });
         }
 
-        StableLPManager mgr = StableLPManager(
-            payable(factory.createManager(
-                    StableLPManager.InitParams({poolManager: address(pm), owner: owner, pools: cfgs})
-                ))
-        );
+        StableLPManager mgr =
+            StableLPManager(payable(factory.createManager(StableLPManager.InitParams({owner: owner, pools: cfgs}))));
 
         assertEq(mgr.poolCount(), 7, "seven pools configured");
         assertEq(mgr.managedStablesCount(), 8, "hub + 7 spokes");

@@ -62,7 +62,7 @@ abstract contract StableLPTestBase is Test {
             _seedPool(poolKeys[i]);
         }
 
-        impl = new StableLPManager();
+        impl = new StableLPManager(IPoolManager(address(poolManager)));
         factory = new StableLPFactory(address(impl));
         mgr = StableLPManager(payable(factory.createManager(_initParams(owner))));
 
@@ -104,7 +104,7 @@ abstract contract StableLPTestBase is Test {
         for (uint8 i = 0; i < 3; ++i) {
             cfgs[i] = StableLPManager.PoolConfig({key: poolKeys[i], tickLower: TL, tickUpper: TU});
         }
-        p = StableLPManager.InitParams({poolManager: address(poolManager), owner: owner_, pools: cfgs});
+        p = StableLPManager.InitParams({owner: owner_, pools: cfgs});
     }
 
     /// @dev Position salt == poolId (one position per pool).

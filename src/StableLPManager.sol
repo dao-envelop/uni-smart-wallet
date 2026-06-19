@@ -55,7 +55,6 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
     }
 
     struct InitParams {
-        address poolManager;
         address owner; // receives the singleton NFT
         PoolConfig[] pools; // 1..MAX_POOLS arbitrary stable pools
     }
@@ -104,7 +103,10 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
 
     // ────────── State ──────────
 
-    IPoolManager private _pm;
+    /// @notice The V4 PoolManager. A per-chain singleton, so it's an `immutable` on the
+    /// implementation — shared by every clone (immutables live in code, read via delegatecall),
+    /// which avoids a per-clone storage slot + SLOAD and drops it from `InitParams`.
+    IPoolManager public immutable POOL_MANAGER;
     PoolConfig[] public pools;
     /// @notice 1-based index of a pool in `pools` keyed by its poolId (0 ⇒ not configured).
     mapping(PoolId => uint256) internal _poolIndexPlusOne;
@@ -145,9 +147,11 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
     error ZeroAmount();
     error ArrayLengthMismatch();
 
-    /// @dev Locks the implementation instance. Clones get fresh storage (`_initialized == false`)
-    /// and never run this constructor.
-    constructor() ERC721("", "") {
+    /// @dev Sets the shared `POOL_MANAGER` immutable and locks the implementation instance. Clones
+    /// get fresh storage (`_initialized == false`), never run this constructor, but DO read the
+    /// implementation's `POOL_MANAGER` immutable through delegatecall.
+    constructor(IPoolManager poolManager_) ERC721("", "") {
+        POOL_MANAGER = poolManager_;
         _initialized = true;
     }
 
@@ -155,8 +159,6 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
     function initialize(InitParams calldata p) external {
         if (_initialized) revert AlreadyInitialized();
         _initialized = true;
-
-        _pm = IPoolManager(p.poolManager);
 
         uint256 n = p.pools.length;
         if (n == 0) revert NoPools();
@@ -180,7 +182,7 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
         emit IERC4906.MetadataUpdate(TOKEN_ID);
         emit EnvelopV2OracleType(ORACLE_TYPE, "StableLPManager");
         emit EnvelopWrappedV2(p.owner, TOKEN_ID, 0x0000, "");
-        emit Initialized(p.owner, p.poolManager, n);
+        emit Initialized(p.owner, address(POOL_MANAGER), n);
     }
 
     /// @dev Add a currency to the managed-stable set (dedup via the mapping).
@@ -192,7 +194,7 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
     }
 
     function _poolManager() internal view override returns (IPoolManager) {
-        return _pm;
+        return POOL_MANAGER;
     }
 
     // Clones don't run the ERC721 constructor, so expose name/symbol as constants.
@@ -243,7 +245,7 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
     /// the manager's balance; residuals net back to the manager. Operator-driven (off-chain sizing).
     function allocate(AllocLeg[] calldata legs) external onlyAuthorized nonReentrant {
         _validateLegs(legs);
-        _pm.unlock(abi.encode(OP_ALLOCATE, abi.encode(legs)));
+        POOL_MANAGER.unlock(abi.encode(OP_ALLOCATE, abi.encode(legs)));
         emit Allocated(legs.length);
         emit IERC4906.MetadataUpdate(TOKEN_ID);
     }
@@ -268,7 +270,7 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
             pre[i] = managedStables[i].balanceOfSelf();
         }
 
-        _pm.unlock(abi.encode(OP_ALLOCATE, abi.encode(legs)));
+        POOL_MANAGER.unlock(abi.encode(OP_ALLOCATE, abi.encode(legs)));
 
         // Only `stable` may have decreased; every other managed stable must end >= its pre-balance.
         for (uint256 i = 0; i < n; ++i) {
@@ -325,12 +327,12 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
         uint128 max1
     ) internal returns (uint128 L) {
         bytes32 salt = PoolId.unwrap(id);
-        (uint160 sqrtP,,,) = _pm.getSlot0(id);
+        (uint160 sqrtP,,,) = POOL_MANAGER.getSlot0(id);
 
         L = PositionMath.liquidityFromAmounts(sqrtP, P.tickLower, P.tickUpper, amount0, amount1);
         if (L < minLiq) revert MinLiquidityNotMet(L, minLiq);
 
-        (BalanceDelta ad,) = _pm.modifyLiquidity(
+        (BalanceDelta ad,) = POOL_MANAGER.modifyLiquidity(
             P.key,
             ModifyLiquidityParams({
                 tickLower: P.tickLower, tickUpper: P.tickUpper, liquidityDelta: int256(uint256(L)), salt: salt
@@ -367,7 +369,7 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
             uint128 have = positions[PoolId.unwrap(s.poolId)].liquidity;
             if (s.liquidityToPull > have) revert DeltaExceedsLiquidity(s.liquidityToPull, have);
         }
-        _pm.unlock(abi.encode(OP_WITHDRAW_TO, abi.encode(p)));
+        POOL_MANAGER.unlock(abi.encode(OP_WITHDRAW_TO, abi.encode(p)));
         emit IERC4906.MetadataUpdate(TOKEN_ID);
     }
 
@@ -386,7 +388,7 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
         }
 
         // 3. Guard: we must hold at least `amount` of the requested stable as a credit.
-        int256 got = _pm.currencyDelta(address(this), p.requestedStable);
+        int256 got = POOL_MANAGER.currencyDelta(address(this), p.requestedStable);
         if (got < int256(p.amount)) revert AmountNotDelivered(got > 0 ? uint256(got) : 0, p.amount);
 
         // 4. Deliver straight from PoolManager to recipient — bypasses our balance.
@@ -403,7 +405,7 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
         if (s.liquidityToPull == 0) return;
         bytes32 salt = PoolId.unwrap(s.poolId);
         PoolConfig memory P = pools[_indexOf(s.poolId)];
-        _pm.modifyLiquidity(
+        POOL_MANAGER.modifyLiquidity(
             P.key,
             ModifyLiquidityParams({
                 tickLower: P.tickLower,
@@ -431,7 +433,7 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
     /// @notice Compound realized fees of one pool back into its position. The pool is `leg.poolId`.
     function reinvest(AllocLeg calldata leg) external onlyAuthorized nonReentrant {
         _indexOf(leg.poolId); // reverts UnknownPool if not configured
-        _pm.unlock(abi.encode(OP_REINVEST, abi.encode(leg)));
+        POOL_MANAGER.unlock(abi.encode(OP_REINVEST, abi.encode(leg)));
         emit IERC4906.MetadataUpdate(TOKEN_ID);
     }
 
@@ -442,7 +444,7 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
 
         // Realize fees as a positive caller delta. We deliberately ignore the second return
         // (feesAccrued): a single-LP pool lets an actor donate-to-self to inflate it.
-        _pm.modifyLiquidity(
+        POOL_MANAGER.modifyLiquidity(
             P.key,
             ModifyLiquidityParams({tickLower: P.tickLower, tickUpper: P.tickUpper, liquidityDelta: 0, salt: salt}),
             ""
@@ -453,8 +455,8 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
         }
 
         // Size the add from the realized (positive) deltas of the two pool currencies.
-        int256 d0 = _pm.currencyDelta(address(this), P.key.currency0);
-        int256 d1 = _pm.currencyDelta(address(this), P.key.currency1);
+        int256 d0 = POOL_MANAGER.currencyDelta(address(this), P.key.currency0);
+        int256 d1 = POOL_MANAGER.currencyDelta(address(this), P.key.currency1);
         uint128 L = _addLiquidity(
             leg.poolId,
             P,
@@ -532,7 +534,7 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
     }
 
     function _settleCurrency(Currency c) internal {
-        int256 d = _pm.currencyDelta(address(this), c);
+        int256 d = POOL_MANAGER.currencyDelta(address(this), c);
         if (d < 0) {
             _settle(c, uint256(-d));
         } else if (d > 0) {

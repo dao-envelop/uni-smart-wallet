@@ -80,3 +80,20 @@ Review feedback removed two redundant identifiers (one pool = one position):
 
 Net effect on size: **smaller** — `StableLPManager` ~23,397 bytes (margin ~1,179), the salt
 simplification outweighed the lookup mapping. 111 tests pass, 1 fork test skipped without `BASE_RPC`.
+
+### `POOL_MANAGER` as a shared immutable
+
+The V4 PoolManager is a per-chain singleton, so it doesn't need to be per-clone config:
+
+- Replaced storage `IPoolManager _pm` (set in `initialize`) with `IPoolManager public immutable
+  POOL_MANAGER`, set in the implementation **constructor** (`constructor(IPoolManager)`). Clones read
+  it through delegatecall (immutables live in code, shared by all clones).
+- Dropped `InitParams.poolManager` — the factory clones an implementation already wired to the chain's
+  PoolManager. Factory code unchanged. `Initialized` event emits `address(POOL_MANAGER)`.
+
+Trade-off (corrected): this **does not shrink** the contract. `POOL_MANAGER` is read at ~13 call
+sites and an immutable inlines its value at each site, which costs *more* bytecode than a storage slot
++ SLOADs — runtime grew to ~23,849 bytes (margin ~727, still under EIP-170). The win is **runtime gas**
+(no SLOAD per read), a smaller `InitParams`, and matching the per-chain-singleton reality / the
+`UniSmartWallet` immutable pattern. Tests deploy the impl with the PoolManager
+(`new StableLPManager(IPoolManager(address(poolManager)))`). 111 tests pass, 1 fork skipped.
