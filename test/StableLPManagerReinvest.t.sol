@@ -71,9 +71,11 @@ contract StableLPManagerReinvestTest is StableLPTestBase {
 
         StableLPManager.AllocLeg memory leg = StableLPManager.AllocLeg({
             poolIndex: 0,
-            quoteIn: 0,
-            swapQuoteToPair: 0, // fees already span both sides (bidirectional volume)
+            zeroForOne: false,
+            swapAmountIn: 0, // fees already span both sides (bidirectional volume)
             swapPriceLimit: 0,
+            amount0Desired: 0, // reinvest sizes the add from realized fee deltas, not these
+            amount1Desired: 0,
             minLiquidity: 0,
             amount0Max: type(uint128).max,
             amount1Max: type(uint128).max

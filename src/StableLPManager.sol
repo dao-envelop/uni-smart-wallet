@@ -20,12 +20,13 @@ import {PositionMath} from "./lib/PositionMath.sol";
 import {IWalletDescriptor} from "./interfaces/IWalletDescriptor.sol";
 
 /// @title StableLPManager
-/// @notice Clone-deployed, NFT-owned manager for stable-pair liquidity. The owner deposits
-/// a single quote stable (e.g. USDT) and the manager auto-splits it across 3 fixed pools
-/// (e.g. USDC/USDT, DAI/USDT, USDe/USDT) by weight, swapping-then-LPing inside one unlock
-/// (`allocate`). Its headline feature is `withdrawTo`: deliver any managed stable to an
-/// arbitrary recipient via the v4-native `take`, so the requested stable never lands on the
-/// manager's or owner's ERC-20 balance.
+/// @notice Clone-deployed, NFT-owned manager for a configurable set of stable pools (arbitrary
+/// pairs — no common hub/quote required). The owner deposits any managed stable and the operator
+/// drives liquidity across the pools via `allocate` (auto: deploy whatever sits on balance) or
+/// `allocateFrom` (manual: deploy a specific just-deposited stable). Each leg is fully described
+/// off-chain (pool, optional pre-swap, desired add amounts, slippage caps). Its headline feature
+/// is `withdrawTo`: deliver any managed stable to an arbitrary recipient via the v4-native `take`,
+/// so the requested stable never lands on the manager's or owner's ERC-20 balance.
 /// @dev Reuses {SingletonNFTOwned} (auth) and {V4PositionManager} (V4 mechanics). It is
 /// ERC20-only custody (accepts native via `receive`, no NFT/ERC1155 holders) and exposes a
 /// single batch escape hatch (`executeEncodedTxBatch`) instead of inheriting Envelop's
@@ -36,7 +37,8 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
     using TransientStateLibrary for IPoolManager;
 
     uint256 public constant ORACLE_TYPE = 2002;
-    uint16 internal constant TOTAL_BPS = 10_000;
+    /// @notice Upper bound on configured pools — caps allocate/settle loop costs.
+    uint8 public constant MAX_POOLS = 8;
 
     // Op codes extending the base 0–3 set (see V4PositionManager).
     uint8 internal constant OP_ALLOCATE = 4;
@@ -46,36 +48,33 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
     // ────────── Config structs ──────────
 
     struct PoolConfig {
-        PoolKey key; // one of the 3 stable pools
-        Currency quoteSide; // which side of the pair is the QUOTE stable
+        PoolKey key; // a stable pool (arbitrary pair)
         int24 tickLower;
         int24 tickUpper;
-        uint16 weightBps; // split weight; Σ across the 3 pools == 10_000
         bytes32 baseSalt; // deterministic salt seed for this pool's position
     }
 
     struct InitParams {
         address poolManager;
         address owner; // receives the singleton NFT
-        PoolConfig[3] pools;
-        Currency quote; // the deposited quote stable
+        PoolConfig[] pools; // 1..MAX_POOLS arbitrary stable pools
     }
 
     // ────────── allocate structs ──────────
 
+    /// @notice One pool action: optionally pre-swap inside the pool to balance the sides, then add
+    /// liquidity with operator-sized desired amounts and slippage caps. Quote-agnostic — direction
+    /// and amounts are fully specified by the operator off-chain.
     struct AllocLeg {
-        uint8 poolIndex; // 0..2
-        uint256 quoteIn; // QUOTE assigned to this pool (Σ == totalQuote)
-        uint256 swapQuoteToPair; // QUOTE to swap into the pair token (exactIn)
+        uint8 poolIndex;
+        bool zeroForOne; // pre-swap direction (input side)
+        uint256 swapAmountIn; // exactIn into the pool; 0 = no pre-swap
         uint160 swapPriceLimit; // sqrtPriceLimitX96 — slippage guard on the swap
+        uint256 amount0Desired; // operator-sized add amounts
+        uint256 amount1Desired;
         uint128 minLiquidity; // floor on minted L (slippage on the add)
         uint128 amount0Max; // settle caps
         uint128 amount1Max;
-    }
-
-    struct AllocateParams {
-        uint256 totalQuote;
-        AllocLeg[] legs;
     }
 
     // ────────── withdrawTo structs ──────────
@@ -106,9 +105,10 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
     // ────────── State ──────────
 
     IPoolManager private _pm;
-    Currency public QUOTE;
-    PoolConfig[3] public pools;
+    PoolConfig[] public pools;
     mapping(Currency => bool) public isManagedStable;
+    /// @notice Enumerable union of all currencies across `pools` (for net settlement).
+    Currency[] public managedStables;
     bool private _initialized;
 
     /// @notice External on-chain metadata renderer for `tokenURI`. Zero ⇒ `tokenURI` returns "".
@@ -120,22 +120,25 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
     event EnvelopV2OracleType(uint256 indexed oracleType, string contractName);
     event EnvelopWrappedV2(address indexed creator, uint256 indexed wnftTokenId, bytes32 indexed rules, bytes data);
 
-    event Initialized(address indexed owner, address poolManager);
-    event Allocated(uint256 totalQuote, uint128 l0, uint128 l1, uint128 l2);
+    event Initialized(address indexed owner, address poolManager, uint256 poolCount);
+    event Allocated(uint256 legs);
     event WithdrawnTo(address indexed recipient, Currency indexed stable, uint256 amount);
     event Reinvested(bytes32 indexed salt, uint128 addedLiquidity);
 
     // ────────── Errors ──────────
 
     error AlreadyInitialized();
-    error WeightsNotFull(uint16 sum);
+    error NoPools();
+    error TooManyPools(uint256 n);
+    error NoLegs();
     error UnknownPool(uint8 index);
     error UnmanagedStable(Currency c);
     error AmountNotDelivered(uint256 got, uint256 want);
     error SwapSlippage(uint8 poolIndex);
     error MinLiquidityNotMet(uint128 got, uint128 min);
     error RecipientZero();
-    error QuoteSplitMismatch(uint256 sumQuoteIn, uint256 totalQuote);
+    error NotDeposited(Currency stable, uint256 have, uint256 want);
+    error UnexpectedStableSpend(Currency c);
     error ZeroAmount();
     error ArrayLengthMismatch();
 
@@ -151,27 +154,35 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
         _initialized = true;
 
         _pm = IPoolManager(p.poolManager);
-        QUOTE = p.quote;
-        isManagedStable[p.quote] = true;
 
-        uint16 sum;
-        for (uint8 i = 0; i < 3; ++i) {
+        uint256 n = p.pools.length;
+        if (n == 0) revert NoPools();
+        if (n > MAX_POOLS) revert TooManyPools(n);
+
+        for (uint256 i = 0; i < n; ++i) {
             PoolConfig calldata c = p.pools[i];
             // Hookless-only: a pool with a non-zero hook can break LP economics, so reject config outright.
             if (address(c.key.hooks) != address(0)) revert HookNotAllowed(address(c.key.hooks));
             PositionMath.requireValidTickRange(c.tickLower, c.tickUpper, c.key.tickSpacing);
-            pools[i] = c;
-            isManagedStable[_pairSide(c.key.currency0, c.key.currency1)] = true;
-            sum += c.weightBps;
+            pools.push(c);
+            _registerManaged(c.key.currency0);
+            _registerManaged(c.key.currency1);
         }
-        if (sum != TOTAL_BPS) revert WeightsNotFull(sum);
 
         _mintSingleton(p.owner);
 
         emit IERC4906.MetadataUpdate(TOKEN_ID);
         emit EnvelopV2OracleType(ORACLE_TYPE, "StableLPManager");
         emit EnvelopWrappedV2(p.owner, TOKEN_ID, 0x0000, "");
-        emit Initialized(p.owner, p.poolManager);
+        emit Initialized(p.owner, p.poolManager, n);
+    }
+
+    /// @dev Add a currency to the managed-stable set (dedup via the mapping).
+    function _registerManaged(Currency c) internal {
+        if (!isManagedStable[c]) {
+            isManagedStable[c] = true;
+            managedStables.push(c);
+        }
     }
 
     function _poolManager() internal view override returns (IPoolManager) {
@@ -222,51 +233,78 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
 
     // ────────── allocate ──────────
 
-    /// @notice Deposit `totalQuote` of QUOTE (already transferred in) and auto-split it across
-    /// the configured pools per `legs` (swap-then-LP in one unlock).
-    function allocate(AllocateParams calldata p) external onlyAuthorized nonReentrant {
-        if (p.totalQuote == 0) revert ZeroAmount();
-        uint256 sumQuote;
-        for (uint256 i = 0; i < p.legs.length; ++i) {
-            if (p.legs[i].poolIndex >= 3) revert UnknownPool(p.legs[i].poolIndex);
-            sumQuote += p.legs[i].quoteIn;
-        }
-        if (sumQuote != p.totalQuote) revert QuoteSplitMismatch(sumQuote, p.totalQuote);
-        _pm.unlock(abi.encode(OP_ALLOCATE, abi.encode(p)));
+    /// @notice Auto mode: deploy liquidity per `legs`, drawing from whatever managed stables sit on
+    /// the manager's balance; residuals net back to the manager. Operator-driven (off-chain sizing).
+    function allocate(AllocLeg[] calldata legs) external onlyAuthorized nonReentrant {
+        _validateLegs(legs);
+        _pm.unlock(abi.encode(OP_ALLOCATE, abi.encode(legs)));
+        emit Allocated(legs.length);
         emit IERC4906.MetadataUpdate(TOKEN_ID);
     }
 
+    /// @notice Manual mode: deploy a specific just-deposited `stable` (>= `amount` must already sit
+    /// on the manager). Guards that the operation draws down ONLY `stable` — no other managed stable
+    /// balance may decrease — so deposit-and-allocate can't dip into pre-existing holdings.
+    function allocateFrom(Currency stable, uint256 amount, AllocLeg[] calldata legs)
+        external
+        onlyAuthorized
+        nonReentrant
+    {
+        if (!isManagedStable[stable]) revert UnmanagedStable(stable);
+        if (amount == 0) revert ZeroAmount();
+        uint256 have = stable.balanceOfSelf();
+        if (have < amount) revert NotDeposited(stable, have, amount);
+        _validateLegs(legs);
+
+        uint256 n = managedStables.length;
+        uint256[] memory pre = new uint256[](n);
+        for (uint256 i = 0; i < n; ++i) {
+            pre[i] = managedStables[i].balanceOfSelf();
+        }
+
+        _pm.unlock(abi.encode(OP_ALLOCATE, abi.encode(legs)));
+
+        // Only `stable` may have decreased; every other managed stable must end >= its pre-balance.
+        for (uint256 i = 0; i < n; ++i) {
+            Currency c = managedStables[i];
+            if (Currency.unwrap(c) == Currency.unwrap(stable)) continue;
+            if (c.balanceOfSelf() < pre[i]) revert UnexpectedStableSpend(c);
+        }
+
+        emit Allocated(legs.length);
+        emit IERC4906.MetadataUpdate(TOKEN_ID);
+    }
+
+    function _validateLegs(AllocLeg[] calldata legs) internal view {
+        if (legs.length == 0) revert NoLegs();
+        uint256 np = pools.length;
+        for (uint256 i = 0; i < legs.length; ++i) {
+            if (legs[i].poolIndex >= np) revert UnknownPool(legs[i].poolIndex);
+        }
+    }
+
     function _handleAllocate(bytes memory payload) internal returns (bytes memory) {
-        AllocateParams memory p = abi.decode(payload, (AllocateParams));
-        uint128[3] memory minted;
-        for (uint256 i = 0; i < p.legs.length; ++i) {
-            minted[p.legs[i].poolIndex] += _allocateLeg(p.legs[i]);
+        AllocLeg[] memory legs = abi.decode(payload, (AllocLeg[]));
+        for (uint256 i = 0; i < legs.length; ++i) {
+            _allocateLeg(legs[i]);
         }
         _settleManaged();
-        emit Allocated(p.totalQuote, minted[0], minted[1], minted[2]);
         return "";
     }
 
-    /// @dev Per-leg: swap QUOTE→pair (exactIn), size liquidity at the post-swap price, add it,
-    /// enforce the slippage caps, and record/merge the position. Settlement is deferred to the
-    /// final `_settleManaged()` net pass.
+    /// @dev Per-leg: optional exactIn pre-swap to balance the sides, then add liquidity sized from
+    /// the operator's desired amounts. Settlement is deferred to the final `_settleManaged()` pass.
     function _allocateLeg(AllocLeg memory leg) internal returns (uint128 L) {
         PoolConfig memory P = pools[leg.poolIndex];
-        bool quoteIsZero = _isQuoteCurrency0(P.key);
-
-        uint256 pairForLp;
-        if (leg.swapQuoteToPair > 0) {
-            BalanceDelta sd = _swap(P.key, quoteIsZero, -int256(leg.swapQuoteToPair), leg.swapPriceLimit);
-            int128 quoteDelta = quoteIsZero ? sd.amount0() : sd.amount1();
-            // exactIn: a partial fill (price limit hit) leaves |quoteDelta| < requested input.
-            if (uint256(uint128(-quoteDelta)) < leg.swapQuoteToPair) revert SwapSlippage(leg.poolIndex);
-            int128 pairDelta = quoteIsZero ? sd.amount1() : sd.amount0();
-            pairForLp = pairDelta > 0 ? uint256(uint128(pairDelta)) : 0;
+        if (leg.swapAmountIn > 0) {
+            BalanceDelta sd = _swap(P.key, leg.zeroForOne, -int256(leg.swapAmountIn), leg.swapPriceLimit);
+            int128 inDelta = leg.zeroForOne ? sd.amount0() : sd.amount1();
+            // exactIn: a partial fill (price limit hit) leaves |inDelta| < requested input.
+            if (uint256(uint128(-inDelta)) < leg.swapAmountIn) revert SwapSlippage(leg.poolIndex);
         }
-
-        uint256 quoteForLp = leg.quoteIn - leg.swapQuoteToPair;
-        (uint256 amount0, uint256 amount1) = quoteIsZero ? (quoteForLp, pairForLp) : (pairForLp, quoteForLp);
-        L = _addLiquidity(leg.poolIndex, amount0, amount1, leg.minLiquidity, leg.amount0Max, leg.amount1Max);
+        L = _addLiquidity(
+            leg.poolIndex, leg.amount0Desired, leg.amount1Desired, leg.minLiquidity, leg.amount0Max, leg.amount1Max
+        );
     }
 
     /// @dev Shared by allocate and reinvest: size liquidity at the current price, add it,
@@ -319,7 +357,7 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
         if (p.amount == 0) revert ZeroAmount();
         for (uint256 i = 0; i < p.pulls.length; ++i) {
             WithdrawStep calldata s = p.pulls[i];
-            if (s.poolIndex >= 3) revert UnknownPool(s.poolIndex);
+            if (s.poolIndex >= pools.length) revert UnknownPool(s.poolIndex);
             uint128 have = positions[_saltFor(s.poolIndex)].liquidity;
             if (s.liquidityToPull > have) revert DeltaExceedsLiquidity(s.liquidityToPull, have);
         }
@@ -386,7 +424,7 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
 
     /// @notice Compound realized fees of one pool back into its position.
     function reinvest(uint8 poolIndex, AllocLeg calldata leg) external onlyAuthorized nonReentrant {
-        if (poolIndex >= 3) revert UnknownPool(poolIndex);
+        if (poolIndex >= pools.length) revert UnknownPool(poolIndex);
         _pm.unlock(abi.encode(OP_REINVEST, abi.encode(poolIndex, leg)));
         emit IERC4906.MetadataUpdate(TOKEN_ID);
     }
@@ -404,8 +442,8 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
             ""
         );
 
-        if (leg.swapQuoteToPair > 0) {
-            _swap(P.key, _isQuoteCurrency0(P.key), -int256(leg.swapQuoteToPair), leg.swapPriceLimit);
+        if (leg.swapAmountIn > 0) {
+            _swap(P.key, leg.zeroForOne, -int256(leg.swapAmountIn), leg.swapPriceLimit);
         }
 
         // Size the add from the realized (positive) deltas of the two pool currencies.
@@ -451,18 +489,18 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
 
     // ────────── Internal helpers ──────────
 
+    /// @notice Number of configured pools.
+    function poolCount() external view returns (uint256) {
+        return pools.length;
+    }
+
+    /// @notice Number of distinct managed stables (union of all pool currencies).
+    function managedStablesCount() external view returns (uint256) {
+        return managedStables.length;
+    }
+
     function _saltFor(uint8 i) internal view returns (bytes32) {
         return keccak256(abi.encode(pools[i].baseSalt, i));
-    }
-
-    function _isQuoteCurrency0(PoolKey memory key) internal view returns (bool) {
-        return Currency.unwrap(key.currency0) == Currency.unwrap(QUOTE);
-    }
-
-    /// @dev The non-quote (pair) side of a pool — what `withdrawTo` can deliver besides QUOTE.
-    /// Takes the two currencies (not the whole PoolKey) to avoid struct memory copies.
-    function _pairSide(Currency c0, Currency c1) internal view returns (Currency) {
-        return Currency.unwrap(c0) == Currency.unwrap(QUOTE) ? c1 : c0;
     }
 
     function _enforceCaps(BalanceDelta ad, uint128 max0, uint128 max1) internal pure {
@@ -474,14 +512,13 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
         if (owed1 > max1) revert ExceedsAmount1Max(owed1, max1);
     }
 
-    /// @dev Net every managed currency (QUOTE + 3 pair sides): settle negatives from the
-    /// manager balance, take positives (dust/residuals) to the manager. Duplicate currencies
-    /// are no-ops on the second pass (the delta is already zeroed).
+    /// @dev Net every managed currency: settle negatives from the manager balance, take positives
+    /// (dust/residuals) to the manager. Iterates the deduped `managedStables` union.
     function _settleManaged() internal {
-        _settleCurrency(QUOTE);
-        _settleCurrency(_pairSide(pools[0].key.currency0, pools[0].key.currency1));
-        _settleCurrency(_pairSide(pools[1].key.currency0, pools[1].key.currency1));
-        _settleCurrency(_pairSide(pools[2].key.currency0, pools[2].key.currency1));
+        uint256 n = managedStables.length;
+        for (uint256 i = 0; i < n; ++i) {
+            _settleCurrency(managedStables[i]);
+        }
     }
 
     function _settleCurrency(Currency c) internal {

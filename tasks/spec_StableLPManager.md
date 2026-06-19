@@ -1,5 +1,14 @@
 # StableLPManager — Multi-Pool Stable LP Manager with Indirect Withdraw
 
+> **⚠️ Superseded in part by v2 (`task_014_stable_lp_v2.md`).** The implemented contract drops the
+> single-`QUOTE` / three-fixed-pools / weight-split model described below. Current model: a
+> **dynamic set of arbitrary stable pools** (1..`MAX_POOLS`, no common hub required); **any** managed
+> stable can be deposited; liquidity is deployed by **operator-supplied legs** (each leg = pool +
+> optional pre-swap + desired add amounts + slippage caps) via `allocate` (auto: deploy whatever sits
+> on balance) or `allocateFrom(stable, amount, legs)` (manual: deploy a named just-deposited stable,
+> guarded so only that stable is drawn down). `withdrawTo` and the indirect-withdraw invariant are
+> unchanged. Sections below describing QUOTE/weights/3 fixed pools are historical.
+>
 > **Status:** Architecture draft. Not implemented.
 > **Sibling spec:** `spec_JITLPWallet.md` — single-pool, owner-directed *tactical* LP wallet where the caller passes explicit amounts and one `PoolKey` per `openPosition`. This spec describes a different product: a factory-spawned manager that **auto-splits a single stable deposit across three V4 pools** and supports **indirect withdraw** — delivering any managed stable to an arbitrary third-party EOA without the funds ever touching the manager's or owner's balance.
 > **Base it forks:** `src/UniSmartWallet.sol` (auth, `unlock`/`unlockCallback` dispatcher + `Op` enum, salt registry, hook policy, `PositionMath`).

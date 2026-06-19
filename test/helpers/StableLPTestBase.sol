@@ -101,47 +101,45 @@ abstract contract StableLPTestBase is Test {
     }
 
     function _initParams(address owner_) internal view returns (StableLPManager.InitParams memory p) {
-        StableLPManager.PoolConfig[3] memory cfgs;
+        StableLPManager.PoolConfig[] memory cfgs = new StableLPManager.PoolConfig[](3);
         for (uint8 i = 0; i < 3; ++i) {
-            cfgs[i] = StableLPManager.PoolConfig({
-                key: poolKeys[i],
-                quoteSide: USDT,
-                tickLower: TL,
-                tickUpper: TU,
-                weightBps: i == 0 ? 3334 : 3333,
-                baseSalt: baseSalts[i]
-            });
+            cfgs[i] =
+                StableLPManager.PoolConfig({key: poolKeys[i], tickLower: TL, tickUpper: TU, baseSalt: baseSalts[i]});
         }
-        p = StableLPManager.InitParams({poolManager: address(poolManager), owner: owner_, pools: cfgs, quote: USDT});
+        p = StableLPManager.InitParams({poolManager: address(poolManager), owner: owner_, pools: cfgs});
     }
 
     function _saltFor(uint8 i) internal view returns (bytes32) {
         return keccak256(abi.encode(baseSalts[i], i));
     }
 
-    /// @dev Build a 3-leg allocate that splits `total` USDT across the pools, swapping ~half
-    /// of each leg's quote into the pair token for a balanced add.
-    function _allocateParams(uint256 total) internal view returns (StableLPManager.AllocateParams memory p) {
+    /// @dev Build a 3-leg allocate that deploys `total` USDT across the pools: each leg swaps ~half
+    /// of its USDT share into the pair token, then LPs both sides. Desired add amounts are set just
+    /// below the swap output so the pair side never falls short at net settlement.
+    function _allocateParams(uint256 total) internal view returns (StableLPManager.AllocLeg[] memory legs) {
         uint256 a = (total * 3334) / 10_000;
         uint256 b = (total * 3333) / 10_000;
         uint256 c = total - a - b;
         uint256[3] memory q = [a, b, c];
-        StableLPManager.AllocLeg[] memory legs = new StableLPManager.AllocLeg[](3);
+        legs = new StableLPManager.AllocLeg[](3);
         for (uint8 i = 0; i < 3; ++i) {
-            // quote→pair: zeroForOne iff USDT is currency0; pick the matching extreme price bound.
+            // pre-swap USDT→pair: zeroForOne iff USDT is currency0; pick the matching extreme bound.
             bool quoteIsZero = Currency.unwrap(poolKeys[i].currency0) == Currency.unwrap(USDT);
             uint160 limit = quoteIsZero ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1;
+            uint256 half = q[i] / 2;
+            uint256 lpEach = (half * 95) / 100; // below swap output to avoid a pair shortfall at settle
             legs[i] = StableLPManager.AllocLeg({
                 poolIndex: i,
-                quoteIn: q[i],
-                swapQuoteToPair: q[i] / 2,
+                zeroForOne: quoteIsZero, // input side is the USDT we hold
+                swapAmountIn: half,
                 swapPriceLimit: limit,
+                amount0Desired: lpEach,
+                amount1Desired: lpEach,
                 minLiquidity: 0,
                 amount0Max: type(uint128).max,
                 amount1Max: type(uint128).max
             });
         }
-        p = StableLPManager.AllocateParams({totalQuote: total, legs: legs});
     }
 
     /// @dev exactOut swap params to produce `amountOut` of `tokenOut` in pool `i`.
