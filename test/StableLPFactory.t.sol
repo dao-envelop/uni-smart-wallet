@@ -38,11 +38,20 @@ contract StableLPFactoryTest is StableLPTestBase {
         uint256 n = uint256(mgr.MAX_POOLS()) + 1;
         StableLPManager.PoolConfig[] memory many = new StableLPManager.PoolConfig[](n);
         for (uint256 i = 0; i < n; ++i) {
-            many[i] =
-                StableLPManager.PoolConfig({key: poolKeys[0], tickLower: TL, tickUpper: TU, baseSalt: baseSalts[0]});
+            many[i] = StableLPManager.PoolConfig({key: poolKeys[0], tickLower: TL, tickUpper: TU});
         }
         p.pools = many;
         vm.expectRevert(abi.encodeWithSelector(StableLPManager.TooManyPools.selector, n));
+        factory.createManager(p);
+    }
+
+    function test_initialize_duplicatePool_reverts() public {
+        StableLPManager.InitParams memory p = _initParams(owner);
+        StableLPManager.PoolConfig[] memory dup = new StableLPManager.PoolConfig[](2);
+        dup[0] = StableLPManager.PoolConfig({key: poolKeys[0], tickLower: TL, tickUpper: TU});
+        dup[1] = StableLPManager.PoolConfig({key: poolKeys[0], tickLower: TL, tickUpper: TU}); // same poolId
+        p.pools = dup;
+        vm.expectRevert(abi.encodeWithSelector(StableLPManager.DuplicatePool.selector, poolKeys[0].toId()));
         factory.createManager(p);
     }
 

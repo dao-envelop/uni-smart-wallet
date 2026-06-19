@@ -36,7 +36,7 @@ contract StableLPManagerV2Test is StableLPTestBase {
         uint256 half = amount / 2;
         uint256 lpEach = (half * 95) / 100;
         return StableLPManager.AllocLeg({
-            poolIndex: i,
+            poolId: poolKeys[i].toId(),
             zeroForOne: sourceIsZero,
             swapAmountIn: half,
             swapPriceLimit: limit,
@@ -75,7 +75,7 @@ contract StableLPManagerV2Test is StableLPTestBase {
         // A leg that LPs pool0 (USDC/USDT) with NO pre-swap, sourcing USDT directly from the
         // manager's pre-existing balance — which manual mode forbids (only USDC may be drawn down).
         StableLPManager.AllocLeg memory leg = StableLPManager.AllocLeg({
-            poolIndex: 0,
+            poolId: poolKeys[0].toId(),
             zeroForOne: false,
             swapAmountIn: 0,
             swapPriceLimit: 0,
@@ -131,8 +131,7 @@ contract StableLPManyPoolsTest is Test {
             cfgs[i] = StableLPManager.PoolConfig({
                 key: PoolKey({currency0: c0, currency1: c1, fee: FEE, tickSpacing: SPACING, hooks: IHooks(address(0))}),
                 tickLower: -60,
-                tickUpper: 60,
-                baseSalt: keccak256(abi.encode("pool", i))
+                tickUpper: 60
             });
         }
 

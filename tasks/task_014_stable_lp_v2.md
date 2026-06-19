@@ -62,3 +62,21 @@ forge build --sizes        # StableLPManager under EIP-170
 forge test --match-path "test/StableLP*.t.sol" -vvv
 forge test                 # full regression (110 pass / 1 skipped)
 ```
+
+## Review follow-up — poolId-keyed config
+
+Review feedback removed two redundant identifiers (one pool = one position):
+
+- **Dropped `PoolConfig.baseSalt`.** Position salt is now the **poolId** itself
+  (`salt = PoolId.unwrap(key.toId())`) — predictable off-chain, no operator-chosen seed.
+- **`AllocLeg.poolIndex` / `WithdrawStep.poolIndex` / `WithdrawSwap.poolIndex` → `PoolId poolId`.**
+  Legs/steps reference the pool self-descriptively; resolved via a new
+  `mapping(PoolId => uint256) _poolIndexPlusOne` (`_indexOf` reverts `UnknownPool(id)`).
+- **`initialize` rejects duplicate pools** (`DuplicatePool(id)`) — required since poolId is now the
+  salt/registry key.
+- `reinvest(uint8, AllocLeg)` → `reinvest(AllocLeg)` (pool taken from `leg.poolId`). `_addLiquidity`
+  takes `(PoolId, PoolConfig, …)`. Errors `UnknownPool`/`SwapSlippage` now carry `PoolId`. New
+  `test_initialize_duplicatePool_reverts`; suites updated to pass poolIds.
+
+Net effect on size: **smaller** — `StableLPManager` ~23,397 bytes (margin ~1,179), the salt
+simplification outweighed the lookup mapping. 111 tests pass, 1 fork test skipped without `BASE_RPC`.

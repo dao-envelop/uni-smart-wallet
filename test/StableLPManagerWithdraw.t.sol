@@ -24,7 +24,9 @@ contract StableLPManagerWithdrawTest is StableLPTestBase {
         uint256 ownerUSDCBefore = _bal(USDC, owner);
 
         StableLPManager.WithdrawStep[] memory pulls = new StableLPManager.WithdrawStep[](1);
-        pulls[0] = StableLPManager.WithdrawStep({poolIndex: 1, liquidityToPull: mgr.positionOf(_saltFor(1)).liquidity});
+        pulls[0] = StableLPManager.WithdrawStep({
+            poolId: poolKeys[1].toId(), liquidityToPull: mgr.positionOf(_saltFor(1)).liquidity
+        });
 
         StableLPManager.WithdrawSwap[] memory swaps = new StableLPManager.WithdrawSwap[](1);
         swaps[0] = _exactOut(0, USDC, amount); // produce exactly `amount` USDC in the USDC/USDT pool
@@ -80,7 +82,9 @@ contract StableLPManagerWithdrawTest is StableLPTestBase {
         uint256 amount = 1e18;
         StableLPManager.WithdrawStep[] memory pulls = new StableLPManager.WithdrawStep[](1);
         // Pull DAI/USDT but request USDC with no swaps ⇒ zero USDC credit ⇒ revert.
-        pulls[0] = StableLPManager.WithdrawStep({poolIndex: 1, liquidityToPull: mgr.positionOf(_saltFor(1)).liquidity});
+        pulls[0] = StableLPManager.WithdrawStep({
+            poolId: poolKeys[1].toId(), liquidityToPull: mgr.positionOf(_saltFor(1)).liquidity
+        });
         StableLPManager.WithdrawSwap[] memory swaps = new StableLPManager.WithdrawSwap[](0);
 
         vm.prank(owner);

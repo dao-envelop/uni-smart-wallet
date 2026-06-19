@@ -6,6 +6,7 @@ import {StableLPManager} from "../src/StableLPManager.sol";
 import {SingletonNFTOwned} from "../src/abstract/SingletonNFTOwned.sol";
 import {V4PositionManager} from "../src/abstract/V4PositionManager.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
+import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 
 contract StableLPManagerAllocateTest is StableLPTestBase {
     function test_allocate_splitsAcrossThreePools_deltasNetToZero() public {
@@ -49,9 +50,10 @@ contract StableLPManagerAllocateTest is StableLPTestBase {
 
     function test_allocate_unknownPool_reverts() public {
         StableLPManager.AllocLeg[] memory legs = _allocateParams(FUND);
-        legs[0].poolIndex = 9; // out of range (only 3 pools)
+        PoolId bogus = PoolId.wrap(bytes32(uint256(0xBAD))); // not a configured pool
+        legs[0].poolId = bogus;
         vm.prank(owner);
-        vm.expectRevert(abi.encodeWithSelector(StableLPManager.UnknownPool.selector, uint8(9)));
+        vm.expectRevert(abi.encodeWithSelector(StableLPManager.UnknownPool.selector, bogus));
         mgr.allocate(legs);
     }
 

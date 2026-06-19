@@ -10,6 +10,7 @@ import {MockERC20} from "./Mocks.sol";
 import {PoolManager} from "@uniswap/v4-core/src/PoolManager.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
@@ -34,7 +35,6 @@ abstract contract StableLPTestBase is Test {
     Currency[3] internal pairOf; // pairOf[i] = non-quote side of pool i
 
     PoolKey[3] internal poolKeys;
-    bytes32[3] internal baseSalts;
 
     address internal owner = address(0xA11CE);
     address internal bot = address(0xB07);
@@ -57,7 +57,6 @@ abstract contract StableLPTestBase is Test {
         pairOf = [USDC, DAI, USDe];
 
         for (uint8 i = 0; i < 3; ++i) {
-            baseSalts[i] = keccak256(abi.encode("envelop.stablelp.pool", i));
             poolKeys[i] = _sortedKey(USDT, pairOf[i]);
             poolManager.initialize(poolKeys[i], TickMath.getSqrtPriceAtTick(0));
             _seedPool(poolKeys[i]);
@@ -103,14 +102,14 @@ abstract contract StableLPTestBase is Test {
     function _initParams(address owner_) internal view returns (StableLPManager.InitParams memory p) {
         StableLPManager.PoolConfig[] memory cfgs = new StableLPManager.PoolConfig[](3);
         for (uint8 i = 0; i < 3; ++i) {
-            cfgs[i] =
-                StableLPManager.PoolConfig({key: poolKeys[i], tickLower: TL, tickUpper: TU, baseSalt: baseSalts[i]});
+            cfgs[i] = StableLPManager.PoolConfig({key: poolKeys[i], tickLower: TL, tickUpper: TU});
         }
         p = StableLPManager.InitParams({poolManager: address(poolManager), owner: owner_, pools: cfgs});
     }
 
+    /// @dev Position salt == poolId (one position per pool).
     function _saltFor(uint8 i) internal view returns (bytes32) {
-        return keccak256(abi.encode(baseSalts[i], i));
+        return PoolId.unwrap(poolKeys[i].toId());
     }
 
     /// @dev Build a 3-leg allocate that deploys `total` USDT across the pools: each leg swaps ~half
@@ -129,7 +128,7 @@ abstract contract StableLPTestBase is Test {
             uint256 half = q[i] / 2;
             uint256 lpEach = (half * 95) / 100; // below swap output to avoid a pair shortfall at settle
             legs[i] = StableLPManager.AllocLeg({
-                poolIndex: i,
+                poolId: poolKeys[i].toId(),
                 zeroForOne: quoteIsZero, // input side is the USDT we hold
                 swapAmountIn: half,
                 swapPriceLimit: limit,
@@ -153,7 +152,10 @@ abstract contract StableLPTestBase is Test {
         bool zeroForOne = !outIsZero; // output token0 ⇒ oneForZero; output token1 ⇒ zeroForOne
         uint160 limit = zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1;
         return StableLPManager.WithdrawSwap({
-            poolIndex: i, zeroForOne: zeroForOne, amountSpecified: int256(amountOut), sqrtPriceLimitX96: limit
+            poolId: poolKeys[i].toId(),
+            zeroForOne: zeroForOne,
+            amountSpecified: int256(amountOut),
+            sqrtPriceLimitX96: limit
         });
     }
 

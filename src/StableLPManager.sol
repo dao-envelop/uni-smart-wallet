@@ -9,6 +9,7 @@ import "@openzeppelin/contracts/interfaces/IERC4906.sol";
 import {Address} from "@openzeppelin/contracts/utils/Address.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
@@ -48,10 +49,9 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
     // ────────── Config structs ──────────
 
     struct PoolConfig {
-        PoolKey key; // a stable pool (arbitrary pair)
+        PoolKey key; // a stable pool (arbitrary pair); its poolId is the position salt
         int24 tickLower;
         int24 tickUpper;
-        bytes32 baseSalt; // deterministic salt seed for this pool's position
     }
 
     struct InitParams {
@@ -66,7 +66,7 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
     /// liquidity with operator-sized desired amounts and slippage caps. Quote-agnostic — direction
     /// and amounts are fully specified by the operator off-chain.
     struct AllocLeg {
-        uint8 poolIndex;
+        PoolId poolId; // which configured pool this leg targets
         bool zeroForOne; // pre-swap direction (input side)
         uint256 swapAmountIn; // exactIn into the pool; 0 = no pre-swap
         uint160 swapPriceLimit; // sqrtPriceLimitX96 — slippage guard on the swap
@@ -80,12 +80,12 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
     // ────────── withdrawTo structs ──────────
 
     struct WithdrawStep {
-        uint8 poolIndex;
+        PoolId poolId;
         uint128 liquidityToPull; // modifyLiquidity(-L)
     }
 
     struct WithdrawSwap {
-        uint8 poolIndex;
+        PoolId poolId;
         bool zeroForOne;
         int256 amountSpecified; // convert a freed leg into requestedStable (exactOut preferred)
         uint160 sqrtPriceLimitX96; // per-swap slippage guard
@@ -106,6 +106,8 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
 
     IPoolManager private _pm;
     PoolConfig[] public pools;
+    /// @notice 1-based index of a pool in `pools` keyed by its poolId (0 ⇒ not configured).
+    mapping(PoolId => uint256) internal _poolIndexPlusOne;
     mapping(Currency => bool) public isManagedStable;
     /// @notice Enumerable union of all currencies across `pools` (for net settlement).
     Currency[] public managedStables;
@@ -130,11 +132,12 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
     error AlreadyInitialized();
     error NoPools();
     error TooManyPools(uint256 n);
+    error DuplicatePool(PoolId id);
     error NoLegs();
-    error UnknownPool(uint8 index);
+    error UnknownPool(PoolId id);
     error UnmanagedStable(Currency c);
     error AmountNotDelivered(uint256 got, uint256 want);
-    error SwapSlippage(uint8 poolIndex);
+    error SwapSlippage(PoolId poolId);
     error MinLiquidityNotMet(uint128 got, uint128 min);
     error RecipientZero();
     error NotDeposited(Currency stable, uint256 have, uint256 want);
@@ -164,7 +167,10 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
             // Hookless-only: a pool with a non-zero hook can break LP economics, so reject config outright.
             if (address(c.key.hooks) != address(0)) revert HookNotAllowed(address(c.key.hooks));
             PositionMath.requireValidTickRange(c.tickLower, c.tickUpper, c.key.tickSpacing);
+            PoolId id = c.key.toId();
+            if (_poolIndexPlusOne[id] != 0) revert DuplicatePool(id); // poolId == position salt ⇒ must be unique
             pools.push(c);
+            _poolIndexPlusOne[id] = pools.length; // 1-based
             _registerManaged(c.key.currency0);
             _registerManaged(c.key.currency1);
         }
@@ -277,9 +283,8 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
 
     function _validateLegs(AllocLeg[] calldata legs) internal view {
         if (legs.length == 0) revert NoLegs();
-        uint256 np = pools.length;
         for (uint256 i = 0; i < legs.length; ++i) {
-            if (legs[i].poolIndex >= np) revert UnknownPool(legs[i].poolIndex);
+            _indexOf(legs[i].poolId); // reverts UnknownPool if not configured
         }
     }
 
@@ -295,31 +300,32 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
     /// @dev Per-leg: optional exactIn pre-swap to balance the sides, then add liquidity sized from
     /// the operator's desired amounts. Settlement is deferred to the final `_settleManaged()` pass.
     function _allocateLeg(AllocLeg memory leg) internal returns (uint128 L) {
-        PoolConfig memory P = pools[leg.poolIndex];
+        PoolConfig memory P = pools[_indexOf(leg.poolId)];
         if (leg.swapAmountIn > 0) {
             BalanceDelta sd = _swap(P.key, leg.zeroForOne, -int256(leg.swapAmountIn), leg.swapPriceLimit);
             int128 inDelta = leg.zeroForOne ? sd.amount0() : sd.amount1();
             // exactIn: a partial fill (price limit hit) leaves |inDelta| < requested input.
-            if (uint256(uint128(-inDelta)) < leg.swapAmountIn) revert SwapSlippage(leg.poolIndex);
+            if (uint256(uint128(-inDelta)) < leg.swapAmountIn) revert SwapSlippage(leg.poolId);
         }
         L = _addLiquidity(
-            leg.poolIndex, leg.amount0Desired, leg.amount1Desired, leg.minLiquidity, leg.amount0Max, leg.amount1Max
+            leg.poolId, P, leg.amount0Desired, leg.amount1Desired, leg.minLiquidity, leg.amount0Max, leg.amount1Max
         );
     }
 
     /// @dev Shared by allocate and reinvest: size liquidity at the current price, add it,
-    /// enforce slippage caps, and record/merge the position. Settlement is the caller's job.
+    /// enforce slippage caps, and record/merge the position (`salt == poolId`). Settlement is the
+    /// caller's job. `P` is passed in (already resolved by the caller) to avoid a re-lookup.
     function _addLiquidity(
-        uint8 poolIndex,
+        PoolId id,
+        PoolConfig memory P,
         uint256 amount0,
         uint256 amount1,
         uint128 minLiq,
         uint128 max0,
         uint128 max1
     ) internal returns (uint128 L) {
-        PoolConfig memory P = pools[poolIndex];
-        bytes32 salt = _saltFor(poolIndex);
-        (uint160 sqrtP,,,) = _pm.getSlot0(P.key.toId());
+        bytes32 salt = PoolId.unwrap(id);
+        (uint160 sqrtP,,,) = _pm.getSlot0(id);
 
         L = PositionMath.liquidityFromAmounts(sqrtP, P.tickLower, P.tickUpper, amount0, amount1);
         if (L < minLiq) revert MinLiquidityNotMet(L, minLiq);
@@ -357,8 +363,8 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
         if (p.amount == 0) revert ZeroAmount();
         for (uint256 i = 0; i < p.pulls.length; ++i) {
             WithdrawStep calldata s = p.pulls[i];
-            if (s.poolIndex >= pools.length) revert UnknownPool(s.poolIndex);
-            uint128 have = positions[_saltFor(s.poolIndex)].liquidity;
+            _indexOf(s.poolId); // reverts UnknownPool if not configured
+            uint128 have = positions[PoolId.unwrap(s.poolId)].liquidity;
             if (s.liquidityToPull > have) revert DeltaExceedsLiquidity(s.liquidityToPull, have);
         }
         _pm.unlock(abi.encode(OP_WITHDRAW_TO, abi.encode(p)));
@@ -376,7 +382,7 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
         // 2. Convert freed legs into the requested stable (exactOut preferred).
         for (uint256 i = 0; i < p.swaps.length; ++i) {
             WithdrawSwap memory w = p.swaps[i];
-            _swap(pools[w.poolIndex].key, w.zeroForOne, w.amountSpecified, w.sqrtPriceLimitX96);
+            _swap(pools[_indexOf(w.poolId)].key, w.zeroForOne, w.amountSpecified, w.sqrtPriceLimitX96);
         }
 
         // 3. Guard: we must hold at least `amount` of the requested stable as a credit.
@@ -395,8 +401,8 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
 
     function _pullLiquidity(WithdrawStep memory s) internal {
         if (s.liquidityToPull == 0) return;
-        bytes32 salt = _saltFor(s.poolIndex);
-        PoolConfig memory P = pools[s.poolIndex];
+        bytes32 salt = PoolId.unwrap(s.poolId);
+        PoolConfig memory P = pools[_indexOf(s.poolId)];
         _pm.modifyLiquidity(
             P.key,
             ModifyLiquidityParams({
@@ -422,17 +428,17 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
         emit IERC4906.MetadataUpdate(TOKEN_ID);
     }
 
-    /// @notice Compound realized fees of one pool back into its position.
-    function reinvest(uint8 poolIndex, AllocLeg calldata leg) external onlyAuthorized nonReentrant {
-        if (poolIndex >= pools.length) revert UnknownPool(poolIndex);
-        _pm.unlock(abi.encode(OP_REINVEST, abi.encode(poolIndex, leg)));
+    /// @notice Compound realized fees of one pool back into its position. The pool is `leg.poolId`.
+    function reinvest(AllocLeg calldata leg) external onlyAuthorized nonReentrant {
+        _indexOf(leg.poolId); // reverts UnknownPool if not configured
+        _pm.unlock(abi.encode(OP_REINVEST, abi.encode(leg)));
         emit IERC4906.MetadataUpdate(TOKEN_ID);
     }
 
     function _handleReinvest(bytes memory payload) internal returns (bytes memory) {
-        (uint8 poolIndex, AllocLeg memory leg) = abi.decode(payload, (uint8, AllocLeg));
-        PoolConfig memory P = pools[poolIndex];
-        bytes32 salt = _saltFor(poolIndex);
+        AllocLeg memory leg = abi.decode(payload, (AllocLeg));
+        PoolConfig memory P = pools[_indexOf(leg.poolId)];
+        bytes32 salt = PoolId.unwrap(leg.poolId);
 
         // Realize fees as a positive caller delta. We deliberately ignore the second return
         // (feesAccrued): a single-LP pool lets an actor donate-to-self to inflate it.
@@ -450,7 +456,8 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
         int256 d0 = _pm.currencyDelta(address(this), P.key.currency0);
         int256 d1 = _pm.currencyDelta(address(this), P.key.currency1);
         uint128 L = _addLiquidity(
-            poolIndex,
+            leg.poolId,
+            P,
             d0 > 0 ? uint256(d0) : 0,
             d1 > 0 ? uint256(d1) : 0,
             leg.minLiquidity,
@@ -499,8 +506,11 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
         return managedStables.length;
     }
 
-    function _saltFor(uint8 i) internal view returns (bytes32) {
-        return keccak256(abi.encode(pools[i].baseSalt, i));
+    /// @dev Resolve a configured pool's array index from its poolId; reverts if not configured.
+    function _indexOf(PoolId id) internal view returns (uint256) {
+        uint256 idx = _poolIndexPlusOne[id];
+        if (idx == 0) revert UnknownPool(id);
+        return idx - 1;
     }
 
     function _enforceCaps(BalanceDelta ad, uint128 max0, uint128 max1) internal pure {
