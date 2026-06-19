@@ -121,7 +121,7 @@ contract StableLPManyPoolsTest is Test {
 
     function test_init_sevenPools_countsAndUnion() public {
         PoolManager pm = new PoolManager(address(this));
-        StableLPManager impl = new StableLPManager(IPoolManager(address(pm)));
+        StableLPManager impl = new StableLPManager(IPoolManager(address(pm)), address(0xFEE5));
         StableLPFactory factory = new StableLPFactory(address(impl));
 
         Currency hub = _tok();

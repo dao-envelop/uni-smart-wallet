@@ -39,6 +39,7 @@ abstract contract StableLPTestBase is Test {
     address internal owner = address(0xA11CE);
     address internal bot = address(0xB07);
     address internal lp = address(0xABCD);
+    address internal treasury = address(0xFEE5);
 
     int24 internal constant SPACING = 60;
     uint24 internal constant FEE = 3000;
@@ -62,7 +63,7 @@ abstract contract StableLPTestBase is Test {
             _seedPool(poolKeys[i]);
         }
 
-        impl = new StableLPManager(IPoolManager(address(poolManager)));
+        impl = new StableLPManager(IPoolManager(address(poolManager)), treasury);
         factory = new StableLPFactory(address(impl));
         mgr = StableLPManager(payable(factory.createManager(_initParams(owner))));
 
