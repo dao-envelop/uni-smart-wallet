@@ -38,6 +38,11 @@ contract StableLPManagerProtocolFeeTest is StableLPTestBase {
         }
     }
 
+    /// @dev Protocol fee accrues to the treasury as ERC-6909 claims held in the PoolManager.
+    function _claimBal(Currency c, address who) internal view returns (uint256) {
+        return poolManager.balanceOf(who, c.toId());
+    }
+
     function _swap(uint8 i, bool zeroForOne, int256 amountIn) internal {
         vm.prank(trader);
         swapRouter.swap(
@@ -55,24 +60,27 @@ contract StableLPManagerProtocolFeeTest is StableLPTestBase {
     // ────────── claimFees ──────────
 
     function test_claimFees_skims10PercentToTreasury() public {
-        uint256 tBefore = _bal(USDC, treasury);
+        uint256 tBefore = _claimBal(USDC, treasury);
         uint256 mBefore = _bal(USDC, address(mgr));
 
         vm.prank(owner);
         mgr.claimFees(_saltFor(0));
 
-        uint256 tGain = _bal(USDC, treasury) - tBefore;
+        uint256 tGain = _claimBal(USDC, treasury) - tBefore;
         uint256 mGain = _bal(USDC, address(mgr)) - mBefore;
         assertGt(tGain, 0, "treasury received a fee");
         // manager ~90%, treasury ~10% ⇒ manager == 9 * treasury (within rounding).
         assertApproxEqRel(mGain, tGain * 9, 0.01e18, "90/10 split");
+        // The fee is taken as ERC-6909 claims — NO ERC-20 transfer ever reaches the treasury, so a
+        // token blocklist/pause on it cannot revert the unlock and lock LP principal.
+        assertEq(_bal(USDC, treasury), 0, "no ERC-20 transfer to treasury");
     }
 
     // ────────── reinvest ──────────
 
     function test_reinvest_skimsToTreasury() public {
-        uint256 tUSDCBefore = _bal(USDC, treasury);
-        uint256 tUSDTBefore = _bal(USDT, treasury);
+        uint256 tUSDCBefore = _claimBal(USDC, treasury);
+        uint256 tUSDTBefore = _claimBal(USDT, treasury);
 
         StableLPManager.AllocLeg memory leg = StableLPManager.AllocLeg({
             poolId: poolKeys[0].toId(),
@@ -91,15 +99,17 @@ contract StableLPManagerProtocolFeeTest is StableLPTestBase {
 
         // The realized fees were skimmed before compounding ⇒ treasury balance grew.
         assertGt(
-            (_bal(USDC, treasury) - tUSDCBefore) + (_bal(USDT, treasury) - tUSDTBefore), 0, "treasury got reinvest fee"
+            (_claimBal(USDC, treasury) - tUSDCBefore) + (_claimBal(USDT, treasury) - tUSDTBefore),
+            0,
+            "treasury got reinvest fee"
         );
     }
 
     // ────────── withdrawTo ──────────
 
     function test_withdrawTo_skimsFeeComponentToTreasury() public {
-        uint256 tUSDCBefore = _bal(USDC, treasury);
-        uint256 tUSDTBefore = _bal(USDT, treasury);
+        uint256 tUSDCBefore = _claimBal(USDC, treasury);
+        uint256 tUSDTBefore = _claimBal(USDT, treasury);
 
         // Pull pool 0 (USDC/USDT) fully and deliver a little USDC to a recipient.
         StableLPManager.WithdrawStep[] memory pulls = new StableLPManager.WithdrawStep[](1);
@@ -121,7 +131,9 @@ contract StableLPManagerProtocolFeeTest is StableLPTestBase {
         );
 
         assertGt(
-            (_bal(USDC, treasury) - tUSDCBefore) + (_bal(USDT, treasury) - tUSDTBefore), 0, "treasury got withdraw fee"
+            (_claimBal(USDC, treasury) - tUSDCBefore) + (_claimBal(USDT, treasury) - tUSDTBefore),
+            0,
+            "treasury got withdraw fee"
         );
     }
 

@@ -574,10 +574,12 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
         _skimFee(key.currency1, feesAccrued.amount1());
     }
 
+    /// @dev Skim via ERC-6909 claims (not an ERC-20 transfer): a token blocklist/pause on the
+    /// treasury then can't revert the unlock and lock LP principal. Treasury redeems the claims later.
     function _skimFee(Currency c, int128 fee) internal {
         uint256 cut = (_pos(fee) * PROTOCOL_FEE_BPS) / 10_000;
         if (cut == 0) return;
-        _take(c, PROTOCOL_TREASURY, cut);
+        _takeClaim(c, PROTOCOL_TREASURY, cut);
         emit ProtocolFeeTaken(c, cut);
     }
 }

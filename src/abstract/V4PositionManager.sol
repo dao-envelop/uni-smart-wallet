@@ -396,6 +396,13 @@ abstract contract V4PositionManager is IUnlockCallback, ReentrancyGuard {
         currency.take(POOL_MANAGER, recipient, amount, false);
     }
 
+    /// @dev Like {_take} but credits `recipient` with ERC-6909 claims (a PoolManager-internal
+    /// balance) instead of an ERC-20 transfer. Used for fee skims so a token blocklist/pause on
+    /// `recipient` cannot revert the unlock; `recipient` redeems the claims to ERC-20 later.
+    function _takeClaim(Currency currency, address recipient, uint256 amount) internal {
+        currency.take(POOL_MANAGER, recipient, amount, true);
+    }
+
     // ────────── Views ──────────
 
     function positionOf(bytes32 salt) external view returns (Position memory) {
