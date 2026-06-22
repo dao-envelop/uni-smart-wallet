@@ -11,7 +11,11 @@
 > immutable treasury on every realized fee accrual (claim/reinvest/withdraw/top-up). The fee is taken
 > as **ERC-6909 claims** (not an ERC-20 transfer) so a token blocklist/pause on the treasury can't
 > revert the unlock and lock LP principal — the treasury redeems the claims via `unlock→burn→take`.
-> Sections below describing QUOTE/weights/3 fixed pools are historical.
+> **Token assumption:** managed currencies must be standard ERC-20 — no fee-on-transfer, no rebasing
+> (settle/snapshot/delivery accounting assumes `received == sent`). **Operator scope:** auto-`allocate`
+> may deploy the manager's full idle balance; `withdrawTo` swaps rely on a tight operator-set
+> `sqrtPriceLimitX96` for slippage. See `AUDIT-REPORT.md` / `task_016`. Sections below describing
+> QUOTE/weights/3 fixed pools are historical.
 >
 > **Status:** Architecture draft. Not implemented.
 > **Sibling spec:** `spec_JITLPWallet.md` — single-pool, owner-directed *tactical* LP wallet where the caller passes explicit amounts and one `PoolKey` per `openPosition`. This spec describes a different product: a factory-spawned manager that **auto-splits a single stable deposit across three V4 pools** and supports **indirect withdraw** — delivering any managed stable to an arbitrary third-party EOA without the funds ever touching the manager's or owner's balance.

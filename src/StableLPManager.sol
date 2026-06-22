@@ -329,6 +329,7 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
     ) internal returns (uint128 L) {
         bytes32 salt = PoolId.unwrap(id);
         (uint160 sqrtP,,,) = POOL_MANAGER.getSlot0(id);
+        if (sqrtP == 0) revert PoolUninitialized();
 
         L = PositionMath.liquidityFromAmounts(sqrtP, P.tickLower, P.tickUpper, amount0, amount1);
         if (L < minLiq) revert MinLiquidityNotMet(L, minLiq);
@@ -577,7 +578,9 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
     /// @dev Skim via ERC-6909 claims (not an ERC-20 transfer): a token blocklist/pause on the
     /// treasury then can't revert the unlock and lock LP principal. Treasury redeems the claims later.
     function _skimFee(Currency c, int128 fee) internal {
-        uint256 cut = (_pos(fee) * PROTOCOL_FEE_BPS) / 10_000;
+        // Round the protocol cut UP (favor the protocol; no sub-threshold zero-skim leak). Inline
+        // ceil is safe: _pos(fee) ≤ uint128 max, so *BPS + 9_999 cannot overflow uint256.
+        uint256 cut = (_pos(fee) * PROTOCOL_FEE_BPS + 9_999) / 10_000;
         if (cut == 0) return;
         _takeClaim(c, PROTOCOL_TREASURY, cut);
         emit ProtocolFeeTaken(c, cut);
