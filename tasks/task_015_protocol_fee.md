@@ -42,10 +42,29 @@ The percentage is a `constant`.
   treasury), `reinvest` and `withdrawTo` credit the treasury, and a zero-treasury constructor reverts.
 - Existing suites unaffected (they used `assertGt`/`assertGe`, not exact fee amounts).
 
+## Security fix — skim as ERC-6909 claims (audit finding, HIGH)
+
+The skim originally did an ERC-20 `take(..., false)` to the immutable treasury. Because the skim runs
+on the **only** liquidity-exit path (`withdrawTo` → `_pullLiquidity`) as well as
+claimFees/reinvest/allocate-topup, a stablecoin **blocklist/pause** on the (unchangeable) treasury
+would revert the unlock and **permanently lock LP principal** for any position that accrued fees.
+
+Fix: skim via **ERC-6909 claims** (`_takeClaim` → `take(..., true)`) — a PoolManager-internal mint
+that no token blocklist/pause can revert. Accounting is identical (mint decrements our currency delta
+like `take`). Test asserts the treasury's ERC-6909 claim balance grows while its ERC-20 balance stays 0.
+
+### Operational note — redeeming the protocol fee
+The protocol fee accrues to the treasury as **ERC-6909 claim tokens held inside the PoolManager**, not
+as ERC-20. To cash out, the treasury (or a redeemer it transfers the claims to) must run a v4
+`unlock → burn(claims) → take` flow — a plain EOA can hold the claims but cannot trivially redeem them
+to ERC-20 on its own. The protocol must provide a redeemer contract / tooling. This is the deliberate
+cost of making the skim unbrickable; the alternative (ERC-20 skim + a protocol-admin treasury setter)
+was rejected to avoid a governance surface and temporary lock-on-blocklist.
+
 ## Result
 
-`StableLPManager` runtime ~23,991 bytes (margin ~585, under EIP-170 — feature added ~236 B net). All
-tests pass: 115, 1 fork skipped without `BASE_RPC`.
+`StableLPManager` runtime ~24,046 bytes (margin ~530, under EIP-170 — feature + claims fix added
+~291 B net). All tests pass: 115, 1 fork skipped without `BASE_RPC`.
 
 ## Verification
 
