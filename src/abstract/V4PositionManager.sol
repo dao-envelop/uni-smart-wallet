@@ -19,13 +19,22 @@ import {PositionMath} from "../lib/PositionMath.sol";
 /// @title V4PositionManager
 /// @notice Reusable Uniswap V4 interaction layer: concentrated-liquidity position
 /// management (open/close/decrease/poke) + swaps, all driven through `PoolManager.unlock`.
-/// @dev Auth-agnostic on purpose. Subclasses (`UniSmartWallet`, the upcoming `StableLPManager`,
-/// or a test harness) add their own access control and public surface, then call the
-/// `internal` action functions here. The PoolManager is resolved through `_poolManager()`
-/// so a directly-deployed contract can keep it `immutable` while a clone reads it from storage.
+/// @dev Auth-agnostic on purpose. Subclasses (`UniSmartWallet`, `StableLPManager`, or a test
+/// harness) add their own access control and public surface, then call the `internal` action
+/// functions here. The PoolManager is an `immutable` set via this base's constructor: clones don't
+/// run constructors, but immutables live in the implementation's code and are read through
+/// delegatecall, so a single shared `POOL_MANAGER` works for both direct deploys and clones.
 abstract contract V4PositionManager is IUnlockCallback, ReentrancyGuard {
     using StateLibrary for IPoolManager;
     using CurrencySettler for Currency;
+
+    /// @notice The V4 PoolManager (per-chain singleton). Set once in the constructor; shared by all
+    /// clones of a clone-deployed subclass.
+    IPoolManager public immutable POOL_MANAGER;
+
+    constructor(IPoolManager poolManager_) {
+        POOL_MANAGER = poolManager_;
+    }
 
     // ────────── Op codes ──────────
 
@@ -91,25 +100,13 @@ abstract contract V4PositionManager is IUnlockCallback, ReentrancyGuard {
     error ZeroDelta();
     error DeltaExceedsLiquidity(uint128 delta, uint128 current);
 
-    // ────────── PoolManager seam ──────────
-
-    /// @dev Resolves the V4 PoolManager. Directly-deployed subclasses override with an
-    /// `immutable`; clone-deployed subclasses return a storage var set in `initialize`.
-    function _poolManager() internal view virtual returns (IPoolManager);
-
-    /// @notice Public view over the resolved PoolManager, so off-chain readers and the
-    /// metadata descriptor can value positions via `StateLibrary` without an unlock.
-    function poolManager() external view returns (IPoolManager) {
-        return _poolManager();
-    }
-
     // ────────── Unlock callback (extensible dispatcher) ──────────
 
     /// @notice Called by PoolManager after `unlock(...)`. Handles the canonical ops (0–3)
     /// and forwards anything else to `_dispatchExtraOp` so subclasses can add new ops
     /// (e.g. ALLOCATE / WITHDRAW_TO / REINVEST) without reimplementing the dispatcher.
     function unlockCallback(bytes calldata data) external virtual override returns (bytes memory) {
-        if (msg.sender != address(_poolManager())) revert NotPoolManager();
+        if (msg.sender != address(POOL_MANAGER)) revert NotPoolManager();
         (uint8 op, bytes memory payload) = abi.decode(data, (uint8, bytes));
         if (op == uint8(Op.OPEN)) return _handleOpen(payload);
         if (op == uint8(Op.CLOSE)) return _handleClose(payload);
@@ -157,14 +154,14 @@ abstract contract V4PositionManager is IUnlockCallback, ReentrancyGuard {
         // (e.g. afterRemoveLiquidityReturnDelta skimming the exit), so reject outright.
         if (address(key.hooks) != address(0)) revert HookNotAllowed(address(key.hooks));
 
-        // NB: keep `_poolManager()` calls inline (no local) — this function is already at the
+        // NB: keep `POOL_MANAGER` calls inline (no local) — this function is already at the
         // stack-depth limit without via-ir; a cached IPoolManager local tips it over.
         PoolId id = key.toId();
-        (uint160 sqrtPriceX96,,,) = _poolManager().getSlot0(id);
+        (uint160 sqrtPriceX96,,,) = POOL_MANAGER.getSlot0(id);
         if (sqrtPriceX96 == 0) revert PoolUninitialized();
 
         if (minPoolLiquidity != 0) {
-            uint128 poolLiq = _poolManager().getLiquidity(id);
+            uint128 poolLiq = POOL_MANAGER.getLiquidity(id);
             if (poolLiq < minPoolLiquidity) revert PoolLiquidityBelowMin(poolLiq, minPoolLiquidity);
         }
 
@@ -186,14 +183,14 @@ abstract contract V4PositionManager is IUnlockCallback, ReentrancyGuard {
     /// @dev Isolated unlock dispatch for OPEN — kept in its own frame so `_openPosition`
     /// stays under the stack-depth limit (no via-ir).
     function _unlockOpen(OpenParams memory p) private {
-        IPoolManager pm = _poolManager();
+        IPoolManager pm = POOL_MANAGER;
         pm.unlock(abi.encode(Op.OPEN, abi.encode(p)));
     }
 
     function _handleOpen(bytes memory payload) internal virtual returns (bytes memory) {
         OpenParams memory p = abi.decode(payload, (OpenParams));
 
-        IPoolManager pm = _poolManager();
+        IPoolManager pm = POOL_MANAGER;
         (BalanceDelta delta,) = pm.modifyLiquidity(
             p.key,
             ModifyLiquidityParams({
@@ -266,7 +263,7 @@ abstract contract V4PositionManager is IUnlockCallback, ReentrancyGuard {
     /// @dev Shared unlock dispatch for close/decrease/poke — they differ only in op code
     /// and the liquidity delta to remove (0 for poke ⇒ fees only).
     function _unlockRemove(Op op, Position memory p, uint128 deltaLiquidity, bytes32 salt) private {
-        IPoolManager pm = _poolManager();
+        IPoolManager pm = POOL_MANAGER;
         pm.unlock(
             abi.encode(
                 op,
@@ -322,7 +319,7 @@ abstract contract V4PositionManager is IUnlockCallback, ReentrancyGuard {
         internal
         returns (uint256 owed0, uint256 owed1, uint256 fees0, uint256 fees1)
     {
-        IPoolManager pm = _poolManager();
+        IPoolManager pm = POOL_MANAGER;
         (BalanceDelta delta, BalanceDelta feesAccrued) = pm.modifyLiquidity(
             r.key,
             ModifyLiquidityParams({
@@ -384,19 +381,26 @@ abstract contract V4PositionManager is IUnlockCallback, ReentrancyGuard {
         SwapParams memory params = SwapParams({
             zeroForOne: zeroForOne, amountSpecified: amountSpecified, sqrtPriceLimitX96: sqrtPriceLimitX96
         });
-        delta = _poolManager().swap(key, params, "");
+        delta = POOL_MANAGER.swap(key, params, "");
     }
 
     /// @dev Pay an owed currency to the PoolManager from this contract's balance.
     function _settle(Currency currency, uint256 amount) internal {
-        currency.settle(_poolManager(), address(this), amount, false);
+        currency.settle(POOL_MANAGER, address(this), amount, false);
     }
 
     /// @dev Withdraw a credited currency from the PoolManager to `recipient`. The
     /// arbitrary-recipient form is the v4-native primitive for delivering funds to an
     /// address without routing them through this contract's ERC-20 balance.
     function _take(Currency currency, address recipient, uint256 amount) internal {
-        currency.take(_poolManager(), recipient, amount, false);
+        currency.take(POOL_MANAGER, recipient, amount, false);
+    }
+
+    /// @dev Like {_take} but credits `recipient` with ERC-6909 claims (a PoolManager-internal
+    /// balance) instead of an ERC-20 transfer. Used for fee skims so a token blocklist/pause on
+    /// `recipient` cannot revert the unlock; `recipient` redeems the claims to ERC-20 later.
+    function _takeClaim(Currency currency, address recipient, uint256 amount) internal {
+        currency.take(POOL_MANAGER, recipient, amount, true);
     }
 
     // ────────── Views ──────────

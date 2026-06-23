@@ -21,7 +21,11 @@ abstract contract SingletonNFTOwned is ERC721 {
     bool private _singletonMinted;
 
     mapping(address => bool) public operators;
+    /// @dev Active operators only. Kept compact via swap-and-pop on disable so the per-transfer
+    /// `_clearOperators` loop stays bounded (can't be grown into a transfer-bricking gas bomb).
     address[] internal _operatorList;
+    /// @dev 1-based index into `_operatorList` (0 ⇒ not present). Enables O(1) splice.
+    mapping(address => uint256) internal _operatorIndexPlusOne;
 
     event OperatorSet(address indexed operator, bool allowed);
 
@@ -60,13 +64,30 @@ abstract contract SingletonNFTOwned is ERC721 {
             if (!operators[op]) {
                 operators[op] = true;
                 _operatorList.push(op);
+                _operatorIndexPlusOne[op] = _operatorList.length;
             }
         } else {
             if (operators[op]) {
                 operators[op] = false;
+                _spliceOperator(op);
             }
         }
         emit OperatorSet(op, allowed);
+    }
+
+    /// @dev O(1) swap-and-pop removal of `op` from `_operatorList` (mirrors `_removeSalt`).
+    function _spliceOperator(address op) private {
+        uint256 idxPlusOne = _operatorIndexPlusOne[op];
+        if (idxPlusOne == 0) return;
+        uint256 idx = idxPlusOne - 1;
+        uint256 lastIdx = _operatorList.length - 1;
+        if (idx != lastIdx) {
+            address last = _operatorList[lastIdx];
+            _operatorList[idx] = last;
+            _operatorIndexPlusOne[last] = idx + 1;
+        }
+        _operatorList.pop();
+        delete _operatorIndexPlusOne[op];
     }
 
     /// @dev Enforces the singleton invariant and auto-clears operators on ownership transfer.
@@ -83,14 +104,15 @@ abstract contract SingletonNFTOwned is ERC721 {
         return previousOwner;
     }
 
+    /// @dev `_operatorList` holds only ACTIVE operators (disable splices out), so this loop is
+    /// bounded by the live operator count, not by historical churn.
     function _clearOperators() internal {
         uint256 n = _operatorList.length;
         for (uint256 i = 0; i < n; ++i) {
             address op = _operatorList[i];
-            if (operators[op]) {
-                operators[op] = false;
-                emit OperatorSet(op, false);
-            }
+            operators[op] = false;
+            delete _operatorIndexPlusOne[op];
+            emit OperatorSet(op, false);
         }
         delete _operatorList;
     }

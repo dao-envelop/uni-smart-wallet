@@ -22,9 +22,6 @@ import {IWalletDescriptor} from "./interfaces/IWalletDescriptor.sol";
 contract UniSmartWallet is SingletonNFTOwned, SmartWallet, V4PositionManager {
     uint256 public constant ORACLE_TYPE = 2002;
 
-    /// @dev Directly deployed (not a clone), so the PoolManager can stay immutable.
-    IPoolManager public immutable POOL_MANAGER;
-
     /// @notice External on-chain metadata renderer for `tokenURI`. Zero ⇒ `tokenURI` returns "".
     address public positionDescriptor;
 
@@ -32,18 +29,12 @@ contract UniSmartWallet is SingletonNFTOwned, SmartWallet, V4PositionManager {
     event EnvelopV2OracleType(uint256 indexed oracleType, string contractName);
     event EnvelopWrappedV2(address indexed creator, uint256 indexed wnftTokenId, bytes32 indexed rules, bytes data);
 
-    constructor(IPoolManager poolManager_) ERC721("ERC721 Name", "ERC721 symbol") {
-        POOL_MANAGER = poolManager_;
+    constructor(IPoolManager poolManager_) ERC721("ERC721 Name", "ERC721 symbol") V4PositionManager(poolManager_) {
         _mintSingleton(msg.sender);
         emit IERC4906.MetadataUpdate(TOKEN_ID);
         // We use these events to be compatable with existing envelop oracle
         emit EnvelopV2OracleType(ORACLE_TYPE, type(UniSmartWallet).name);
         emit EnvelopWrappedV2(msg.sender, TOKEN_ID, 0x0000, "");
-    }
-
-    /// @dev Resolve the V4 PoolManager for the base layer.
-    function _poolManager() internal view override returns (IPoolManager) {
-        return POOL_MANAGER;
     }
 
     /// @notice Execute an arbitrary call from the wallet. Withdrawals are a special case

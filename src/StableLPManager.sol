@@ -40,6 +40,8 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
     uint256 public constant ORACLE_TYPE = 2002;
     /// @notice Upper bound on configured pools — caps allocate/settle loop costs.
     uint8 public constant MAX_POOLS = 8;
+    /// @notice Protocol fee skimmed from every realized fee accrual, in basis points (10%).
+    uint16 public constant PROTOCOL_FEE_BPS = 1000;
 
     // Op codes extending the base 0–3 set (see V4PositionManager).
     uint8 internal constant OP_ALLOCATE = 4;
@@ -103,10 +105,6 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
 
     // ────────── State ──────────
 
-    /// @notice The V4 PoolManager. A per-chain singleton, so it's an `immutable` on the
-    /// implementation — shared by every clone (immutables live in code, read via delegatecall),
-    /// which avoids a per-clone storage slot + SLOAD and drops it from `InitParams`.
-    IPoolManager public immutable POOL_MANAGER;
     PoolConfig[] public pools;
     /// @notice 1-based index of a pool in `pools` keyed by its poolId (0 ⇒ not configured).
     mapping(PoolId => uint256) internal _poolIndexPlusOne;
@@ -118,6 +116,10 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
     /// @notice External on-chain metadata renderer for `tokenURI`. Zero ⇒ `tokenURI` returns "".
     address public positionDescriptor;
 
+    /// @notice Protocol fee recipient. Immutable — set by the protocol at implementation deploy and
+    /// shared by every clone; NOT owner-settable, so the fee can't be redirected away from the protocol.
+    address public immutable PROTOCOL_TREASURY;
+
     // ────────── Events ──────────
 
     // Envelop oracle compatibility (same as UniSmartWallet).
@@ -128,10 +130,12 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
     event Allocated(uint256 legs);
     event WithdrawnTo(address indexed recipient, Currency indexed stable, uint256 amount);
     event Reinvested(bytes32 indexed salt, uint128 addedLiquidity);
+    event ProtocolFeeTaken(Currency indexed currency, uint256 amount);
 
     // ────────── Errors ──────────
 
     error AlreadyInitialized();
+    error ZeroTreasury();
     error NoPools();
     error TooManyPools(uint256 n);
     error DuplicatePool(PoolId id);
@@ -147,11 +151,12 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
     error ZeroAmount();
     error ArrayLengthMismatch();
 
-    /// @dev Sets the shared `POOL_MANAGER` immutable and locks the implementation instance. Clones
-    /// get fresh storage (`_initialized == false`), never run this constructor, but DO read the
-    /// implementation's `POOL_MANAGER` immutable through delegatecall.
-    constructor(IPoolManager poolManager_) ERC721("", "") {
-        POOL_MANAGER = poolManager_;
+    /// @dev Sets the shared `POOL_MANAGER` immutable (in the base) and locks the implementation
+    /// instance. Clones get fresh storage (`_initialized == false`), never run this constructor, but
+    /// DO read the implementation's `POOL_MANAGER` immutable through delegatecall.
+    constructor(IPoolManager poolManager_, address treasury_) ERC721("", "") V4PositionManager(poolManager_) {
+        if (treasury_ == address(0)) revert ZeroTreasury();
+        PROTOCOL_TREASURY = treasury_;
         _initialized = true;
     }
 
@@ -193,10 +198,6 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
         }
     }
 
-    function _poolManager() internal view override returns (IPoolManager) {
-        return POOL_MANAGER;
-    }
-
     // Clones don't run the ERC721 constructor, so expose name/symbol as constants.
     function name() public pure override returns (string memory) {
         return "Envelop StableLP";
@@ -230,9 +231,9 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
     /// Omitting OPEN/CLOSE makes the base's open/close handlers unreachable, so the compiler
     /// strips them — a deliberate bytecode-size reduction (keeps the clone under EIP-170).
     function unlockCallback(bytes calldata data) external override returns (bytes memory) {
-        if (msg.sender != address(_poolManager())) revert NotPoolManager();
+        if (msg.sender != address(POOL_MANAGER)) revert NotPoolManager();
         (uint8 op, bytes memory payload) = abi.decode(data, (uint8, bytes));
-        if (op == uint8(Op.POKE)) return _handlePoke(payload); // claimFees
+        if (op == uint8(Op.POKE)) return _handleClaim(payload); // claimFees (with protocol fee)
         if (op == OP_ALLOCATE) return _handleAllocate(payload);
         if (op == OP_WITHDRAW_TO) return _handleWithdrawTo(payload);
         if (op == OP_REINVEST) return _handleReinvest(payload);
@@ -328,17 +329,19 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
     ) internal returns (uint128 L) {
         bytes32 salt = PoolId.unwrap(id);
         (uint160 sqrtP,,,) = POOL_MANAGER.getSlot0(id);
+        if (sqrtP == 0) revert PoolUninitialized();
 
         L = PositionMath.liquidityFromAmounts(sqrtP, P.tickLower, P.tickUpper, amount0, amount1);
         if (L < minLiq) revert MinLiquidityNotMet(L, minLiq);
 
-        (BalanceDelta ad,) = POOL_MANAGER.modifyLiquidity(
+        (BalanceDelta ad, BalanceDelta fees) = POOL_MANAGER.modifyLiquidity(
             P.key,
             ModifyLiquidityParams({
                 tickLower: P.tickLower, tickUpper: P.tickUpper, liquidityDelta: int256(uint256(L)), salt: salt
             }),
             ""
         );
+        _skimFees(P.key, fees); // protocol fee on any accrued fees realized by a top-up
         _enforceCaps(ad, max0, max1);
 
         if (positions[salt].liquidity == 0) {
@@ -405,7 +408,7 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
         if (s.liquidityToPull == 0) return;
         bytes32 salt = PoolId.unwrap(s.poolId);
         PoolConfig memory P = pools[_indexOf(s.poolId)];
-        POOL_MANAGER.modifyLiquidity(
+        (, BalanceDelta fees) = POOL_MANAGER.modifyLiquidity(
             P.key,
             ModifyLiquidityParams({
                 tickLower: P.tickLower,
@@ -415,6 +418,7 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
             }),
             ""
         );
+        _skimFees(P.key, fees); // protocol fee on the accrued-fee component (principal untouched)
         positions[salt].liquidity -= s.liquidityToPull;
         if (positions[salt].liquidity == 0) {
             _removeSalt(salt);
@@ -424,10 +428,27 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
 
     // ────────── reinvest / claimFees ──────────
 
-    /// @notice Collect accrued fees on `salt` to the manager (no principal change).
+    /// @notice Collect accrued fees on `salt` to the manager (no principal change). The protocol
+    /// fee is skimmed first; the remainder lands on the manager.
     function claimFees(bytes32 salt) external onlyAuthorized nonReentrant {
         _pokePosition(salt);
         emit IERC4906.MetadataUpdate(TOKEN_ID);
+    }
+
+    /// @dev POKE handler (replaces the base one): realize fees, skim the protocol cut, net the
+    /// remainder to the manager.
+    function _handleClaim(bytes memory payload) internal returns (bytes memory) {
+        RemoveParams memory r = abi.decode(payload, (RemoveParams));
+        (, BalanceDelta fees) = POOL_MANAGER.modifyLiquidity(
+            r.key,
+            ModifyLiquidityParams({tickLower: r.tickLower, tickUpper: r.tickUpper, liquidityDelta: 0, salt: r.salt}),
+            ""
+        );
+        _skimFees(r.key, fees);
+        _settleCurrency(r.key.currency0);
+        _settleCurrency(r.key.currency1);
+        emit FeesCollected(r.salt, _pos(fees.amount0()), _pos(fees.amount1()));
+        return "";
     }
 
     /// @notice Compound realized fees of one pool back into its position. The pool is `leg.poolId`.
@@ -442,13 +463,13 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
         PoolConfig memory P = pools[_indexOf(leg.poolId)];
         bytes32 salt = PoolId.unwrap(leg.poolId);
 
-        // Realize fees as a positive caller delta. We deliberately ignore the second return
-        // (feesAccrued): a single-LP pool lets an actor donate-to-self to inflate it.
-        POOL_MANAGER.modifyLiquidity(
+        // Realize fees as a positive caller delta, then skim the protocol cut before compounding.
+        (, BalanceDelta fees) = POOL_MANAGER.modifyLiquidity(
             P.key,
             ModifyLiquidityParams({tickLower: P.tickLower, tickUpper: P.tickUpper, liquidityDelta: 0, salt: salt}),
             ""
         );
+        _skimFees(P.key, fees);
 
         if (leg.swapAmountIn > 0) {
             _swap(P.key, leg.zeroForOne, -int256(leg.swapAmountIn), leg.swapPriceLimit);
@@ -540,5 +561,28 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
         } else if (d > 0) {
             _take(c, address(this), uint256(d));
         }
+    }
+
+    /// @dev Positive part of a signed delta.
+    function _pos(int128 x) internal pure returns (uint256) {
+        return x > 0 ? uint256(uint128(x)) : 0;
+    }
+
+    /// @dev Skim the protocol fee (`PROTOCOL_FEE_BPS` of the just-realized accrued fees) of both
+    /// pool currencies straight to the treasury via the v4-native `take`, inside the active unlock.
+    function _skimFees(PoolKey memory key, BalanceDelta feesAccrued) internal {
+        _skimFee(key.currency0, feesAccrued.amount0());
+        _skimFee(key.currency1, feesAccrued.amount1());
+    }
+
+    /// @dev Skim via ERC-6909 claims (not an ERC-20 transfer): a token blocklist/pause on the
+    /// treasury then can't revert the unlock and lock LP principal. Treasury redeems the claims later.
+    function _skimFee(Currency c, int128 fee) internal {
+        // Round the protocol cut UP (favor the protocol; no sub-threshold zero-skim leak). Inline
+        // ceil is safe: _pos(fee) ≤ uint128 max, so *BPS + 9_999 cannot overflow uint256.
+        uint256 cut = (_pos(fee) * PROTOCOL_FEE_BPS + 9_999) / 10_000;
+        if (cut == 0) return;
+        _takeClaim(c, PROTOCOL_TREASURY, cut);
+        emit ProtocolFeeTaken(c, cut);
     }
 }
