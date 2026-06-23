@@ -49,12 +49,12 @@ contract UniSmartWalletPoolWiringTest is Test {
     }
 
     function test_ownerNFTHolder_tracksTransfer() public {
-        assertEq(wallet.ownerNFTHolder(), owner);
+        assertEq(wallet.ownerOf(wallet.TOKEN_ID()), owner);
 
         uint256 id = wallet.TOKEN_ID();
         vm.prank(owner);
         wallet.transferFrom(owner, alice, id);
 
-        assertEq(wallet.ownerNFTHolder(), alice);
+        assertEq(wallet.ownerOf(wallet.TOKEN_ID()), alice);
     }
 }

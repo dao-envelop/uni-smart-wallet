@@ -41,7 +41,7 @@ contract StableLPManagerAuditFixesTest is StableLPTestBase {
         mgr.transferFrom(owner, newOwner, id);
         assertFalse(mgr.operators(opA));
         assertFalse(mgr.operators(opC));
-        assertEq(mgr.ownerNFTHolder(), newOwner);
+        assertEq(mgr.ownerOf(mgr.TOKEN_ID()), newOwner);
     }
 
     function test_operatorList_reEnableChurn_doesNotBrickTransfer() public {

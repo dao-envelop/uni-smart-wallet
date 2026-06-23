@@ -22,14 +22,14 @@ contract DeployWalletTest is Test {
 
     function test_deployAndAssign_sameOwner_skipsTransfer() public {
         UniSmartWallet w = script.deployAndAssign(IPoolManager(address(poolManager)), address(script));
-        assertEq(w.ownerNFTHolder(), address(script));
+        assertEq(w.ownerOf(w.TOKEN_ID()), address(script));
         assertEq(address(w.POOL_MANAGER()), address(poolManager));
     }
 
     function test_deployAndAssign_differentOwner_transfersNFT() public {
         address initialOwner = address(0xBEEF);
         UniSmartWallet w = script.deployAndAssign(IPoolManager(address(poolManager)), initialOwner);
-        assertEq(w.ownerNFTHolder(), initialOwner);
+        assertEq(w.ownerOf(w.TOKEN_ID()), initialOwner);
     }
 
     // ────────── parseConfig (inline JSON — pure parser branch coverage) ──────────

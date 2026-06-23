@@ -116,8 +116,4 @@ abstract contract SingletonNFTOwned is ERC721 {
         }
         delete _operatorList;
     }
-
-    function ownerNFTHolder() external view returns (address) {
-        return ownerOf(TOKEN_ID);
-    }
 }

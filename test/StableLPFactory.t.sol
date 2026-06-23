@@ -8,7 +8,6 @@ import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 contract StableLPFactoryTest is StableLPTestBase {
     function test_factory_createManager_mintsSingletonToOwner() public view {
         assertEq(mgr.ownerOf(mgr.TOKEN_ID()), owner, "singleton minted to owner");
-        assertEq(mgr.ownerNFTHolder(), owner);
         // managed stables = union of all pool currencies (USDT hub + the 3 pair sides here).
         assertTrue(mgr.isManagedStable(USDT), "USDT managed");
         assertTrue(mgr.isManagedStable(USDC) && mgr.isManagedStable(DAI) && mgr.isManagedStable(USDe));

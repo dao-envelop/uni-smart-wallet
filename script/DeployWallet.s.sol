@@ -35,7 +35,7 @@ contract DeployWallet is Script {
         console2.log("Chain ID:      ", block.chainid);
         console2.log("UniSmartWallet:", address(wallet));
         console2.log("PoolManager:   ", address(poolManager));
-        console2.log("NFT holder:    ", wallet.ownerNFTHolder());
+        console2.log("NFT holder:    ", wallet.ownerOf(wallet.TOKEN_ID()));
     }
 
     /// @notice Read `(poolManager, initialOwner)` for the given chain from a JSON file.
@@ -88,7 +88,7 @@ contract DeployWallet is Script {
     /// ERC-721 ownership check passes).
     function deployAndAssign(IPoolManager poolManager, address initialOwner) public returns (UniSmartWallet wallet) {
         wallet = new UniSmartWallet(poolManager);
-        address currentHolder = wallet.ownerNFTHolder();
+        address currentHolder = wallet.ownerOf(wallet.TOKEN_ID());
         if (currentHolder != initialOwner) {
             wallet.transferFrom(currentHolder, initialOwner, wallet.TOKEN_ID());
         }
