@@ -20,9 +20,11 @@ Locked in discussion:
 - **Depeg posture = lightweight** — oracle circuit-breaker + per-stable debt ceilings + an insurance
   buffer from the 10% fee + a governance whitelist (with a delist/wind-down path); **no liquidation**
   (owner-only preserved). A severe depeg is accepted tail risk; noUSD is soft-pegged, not hard-pegged.
-- **Single-vault, manager-wide debt — partial withdraw** — minting is against the sum of all positions
-  (one `debt` counter, no per-position lock). Withdrawal is **partial**: burn X noUSD → withdraw X worth
-  of collateral; the invariant `collateral par value ≥ debt` must hold after each pull. Not all-or-nothing.
+- **noUSD backs DEPLOYED principal, no `debt` variable** — outstanding noUSD (its supply) *is* the debt.
+  **Mint** on deploy (`allocate`/`reinvest`), **burn** on undeploy (`withdrawTo`, on the undeployed
+  principal), **claimFees is free** (fees → idle, the minter's incentive). Idle (deposits, fees,
+  residuals) is unbacked → freely withdrawable. Manager seam = `lockAuthority` + mint/burn hooks on the
+  `_addLiquidity` / `_pullLiquidity` primitives.
 - **Bake-in feasibility (measured):** the seam needs a **v2 manager** (clones are immutable); it fits by
   lowering `optimizer_runs` — `runs=200` leaves ~917 B (`400` → ~635 B) even with the heavier per-position
   variant. v1 clones onboard noUSD via escrow (backlog).
@@ -56,40 +58,41 @@ A *shared* noUSD over many minters needs a protocol layer; only the third compon
    (governance), enforces the **1:1 mint** + per-stable debt ceilings + the depeg breaker, and routes
    `mint` (on lock) / `burn` (on unlock). Approval criteria: hookless stable pools only (already enforced
    by the manager), pool depth, which stables count as $1. This is where the trust/governance sits.
-3. **Single-vault debt hook** (the only change in this repo). The manager stays **NFT-owned by the
-   minter** and is one vault: a single `debt`, collateral = all its positions valued at par. No
-   per-position lock.
-   - **State:** `address lockAuthority` (the Controller; owner binds once) + `uint256 debt` (noUSD minted
-     against this manager; moved only by the Controller — raised on mint, lowered on burn).
-   - **Engage (mint):** the Controller values the whole manager's collateral (1:1 par) and sets `debt`.
-   - **Guard — partial withdraw:** `withdrawTo` (the liquidity-reducing path `_pullLiquidity` in
-     `src/StableLPManager.sol`) may reduce collateral **as long as remaining collateral par ≥ `debt`**.
-     Burning noUSD lowers `debt`, which frees a proportional withdrawal — burn half → withdraw half. Not
-     all-or-nothing.
-   - **Valuing the remaining collateral** (the cost): (a) on-chain par sum over the manager's positions
-     (reuse `src/lib/PositionState.sol`, bounded by `MAX_POOLS`) — heavier manager; or (b)
-     **Controller-authorized** — the manager defers the check to the Controller, which valued the
-     collateral and confirmed the burn before authorizing the pull, keeping the manager small. **Lean (b).**
-   - `withdrawTo` stays `onlyOwnerNFT`; `allocate`/`reinvest`/`claimFees` stay usable while engaged (add +
-     harvest).
+3. **Mint/burn hooks on deploy/undeploy** (the only change in this repo). The manager stays **NFT-owned by
+   the minter**. noUSD is backed only by **deployed position principal**; there is **no `debt` variable** —
+   the noUSD supply is the debt. The Controller mints/burns the par-value delta at each principal move:
+   - **State:** `address lockAuthority` (the Controller; owner binds once via `setLockAuthority`). Nothing
+     else.
+   - **Deploy → mint:** `_addLiquidity` (the shared primitive of `allocate` and `reinvest`) → when
+     `lockAuthority != 0`, call `controller.onDeploy(parValue)` which mints `parValue` noUSD.
+   - **Undeploy → burn:** `_pullLiquidity` (used by `withdrawTo`) → call `controller.onUndeploy(parValue)`
+     which burns `parValue` noUSD from the owner (on the **undeployed** principal pulled, not the delivered
+     `amount`; residuals fall to idle, already paid for).
+   - **claimFees → free:** harvests fees to the manager's idle balance with no mint/burn — the minter's
+     incentive. Idle (deposits, fees, residuals) is unbacked → freely withdrawable (e.g.
+     `executeEncodedTxBatch`), no burn. Deployed principal can only leave via `_pullLiquidity` (hooked), so
+     no unhooked drain.
+   - **Hook the internal primitives, not the external entries** — an internal-primitive hook can't be
+     bypassed via `executeEncodedTxBatch`→`unlock`.
    - **EIP-170:** clones are immutable, so this must be in a **v2 implementation** (current v1 clones use
      the escrow fallback — backlog). Measured: the in-manager seam is feasible by lowering
      `optimizer_runs` — even the heavier per-position variant fits at `runs=200` (~917 B free) or
      `runs=400` (~635 B), vs the current `runs=800` (~59 B). `runs=200` is the Solidity default; cost is
-     moderately higher runtime gas. The manager-wide flag is smaller still. Verifying on Etherscan just
-     needs the same `runs` value used at deploy (routine for a fresh deployment).
+     moderately higher runtime gas. The two-hook seam (no `debt`, no mapping) is smaller still. Verifying
+     on Etherscan just needs the same `runs` value used at deploy (routine for a fresh deployment).
 
-## 4. Mint valuation & token denomination
-A shared, fungible noUSD with **uniform backing** requires valuing collateral at mint and reducing it
-uniformly at burn:
-- **Mint is 1:1 at par.** noUSD minted = the par value of the locked collateral — the position principal
-  (`src/lib/PositionState.sol`) with each managed stable counted as $1. Full collateralization, no
-  haircut and no LTV discount. The oracle is used only to gate eligibility (the depeg breaker, §5a — a
-  stable that is off-peg can't be minted against), not to size the mint. Valuing at par rather than the
-  pool's internal price avoids pool-price manipulation at mint.
-- **Single vault, partial withdraw:** minting is against the sum of all the manager's positions = one
-  `debt`. Withdrawal is partial — burn X noUSD to withdraw X worth of collateral; the invariant
-  `collateral par value ≥ debt` holds after each pull. No per-position lock, not all-or-nothing.
+## 4. Mint valuation & accounting
+- **noUSD backs deployed principal, 1:1 at par.** On deploy (`allocate`/`reinvest`) the Controller mints
+  noUSD = the par value of the principal added (position principal via `src/lib/PositionState.sol`, each
+  managed stable counted as $1). Full collateralization, no haircut/LTV. The oracle gates eligibility only
+  (the depeg breaker, §5a), not the mint size; valuing at par (not the pool's internal price) avoids
+  pool-price manipulation.
+- **Burn on undeploy.** `withdrawTo` pulls principal → the Controller burns the par value of the
+  **undeployed** principal from the owner. Partial by construction (withdraw less → burn less). Residuals
+  to idle are already paid for.
+- **No `debt` counter; supply = deployed principal.** Per-op mint/burn of the delta keeps outstanding
+  noUSD equal to deployed principal — nothing is stored. `claimFees` harvests fees to idle for free (the
+  incentive); idle is unbacked and freely withdrawable.
 
 ## 5. Peg & redemption — decided: v1 = Model A (soft-peg receipt)
 **Decision:** v1 noUSD is a **soft-peg, collateral-backed receipt** — owner/minter-only `withdrawTo`,
@@ -167,33 +170,29 @@ issuing shares, with par-NAV via `PositionState` and a holder-forced, possibly a
 is required.
 
 ## 8. v1 → v2 (noUSD) transition — override-based
-Goal: `StableLPManagerV2 is StableLPManager` — v2 adds noUSD support as **new functions + a couple of
-overrides**, v1 logic is untouched. Only the **single liquidity-reducing path** needs a seam:
-`_handleWithdrawTo` (allocate/allocateFrom/reinvest/claimFees only add or harvest — collateral never drops
-below debt, so they need no override).
+Goal: `StableLPManagerV2 is StableLPManager` — v2 adds noUSD support as **new functions + two primitive
+overrides**, v1 logic is untouched. The two seams are the principal **deploy** and **undeploy**
+primitives (hook the internals, not the external entries, so no op-path bypasses them):
 
 **v1 prep (behavior-preserving, just `virtual` — negligible size, minimal re-audit):**
-- `_handleWithdrawTo(bytes) internal` → `internal virtual` (the post-pull debt check hooks here).
-- `withdrawTo(WithdrawToParams) external` → `public virtual` (optional — lets v2 hook before `unlock`, e.g.
-  controller pre-auth; `super.withdrawTo` keeps the `onlyOwnerNFT`/`nonReentrant` guards, so v2's override
-  must not re-apply `nonReentrant`).
+- `_addLiquidity(...) internal` → `internal virtual` (deploy seam — shared by `allocate` and `reinvest`).
+- `_pullLiquidity(WithdrawStep) internal` → `internal virtual` (undeploy seam — used by `withdrawTo`).
 - `name()`/`symbol()` → add `virtual` (optional — lets v2 rebrand).
 
-**v2 adds (subclass, no v1 logic changed):**
-- State: `address lockAuthority` (the Controller; owner binds once via `setLockAuthority`, one-time) and
-  `uint256 debt`.
-- Controller hooks (only `lockAuthority`): `raiseDebt(amount)` on mint, `lowerDebt(amount)` on burn.
-- Override the seam to enforce the invariant: in `_handleWithdrawTo`, after `super`, require
-  `collateralParValue() >= debt` (on-chain par sum over positions); **or** override `withdrawTo` to require
-  Controller pre-authorization (lean this — keeps v2 from valuing on-chain). Pick one per §3.
+**v2 adds (subclass, no v1 logic changed, no `debt` state):**
+- State: `address lockAuthority` (the Controller; owner binds once via `setLockAuthority`).
+- Override `_addLiquidity`: after `super`, if `lockAuthority != 0` call `controller.onDeploy(parValue)`
+  (mint noUSD on the deployed par value).
+- Override `_pullLiquidity`: after `super`, if `lockAuthority != 0` call `controller.onUndeploy(parValue)`
+  (burn noUSD on the undeployed par value from the owner; reverts if absent).
 - Optional `name()/symbol()` rebrand. Constructor forwards `(IPoolManager, treasury)` to v1.
 - Build at `optimizer_runs ≤ 400` (§3) to fit EIP-170.
 
-**No change:** `allocate`/`allocateFrom`/`reinvest`/`claimFees`; `StableLPFactory` is impl-agnostic — deploy
-a new `StableLPFactory(v2Impl)` (no factory code change). The noUSD token + Controller live in the
-separate layer; the Controller is the `lockAuthority`.
+**No change:** external `allocate`/`allocateFrom`/`withdrawTo`/`reinvest`/`claimFees` signatures,
+`executeEncodedTxBatch`, and `StableLPFactory` (impl-agnostic — deploy a new `StableLPFactory(v2Impl)`).
+The noUSD token + Controller live in the separate layer; the Controller is the `lockAuthority`.
 
 ## Recommendation
-Treat noUSD as a **separate protocol layer** built on top of `StableLPManager`, with only the small
-`encumbered` hook landing in the manager. Keep prototyping deferred until the peg/redemption model (§5) is
-chosen; prototype + audit the stablecoin layer independently of the core manager.
+Treat noUSD as a **separate protocol layer** built on top of `StableLPManager`, with only the two
+mint/burn hooks (`_addLiquidity`/`_pullLiquidity`) landing in the manager. Keep prototyping deferred until
+the parameters (§6) are chosen; prototype + audit the stablecoin layer independently of the core manager.
