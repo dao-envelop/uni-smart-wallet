@@ -57,7 +57,8 @@ Thereafter:
 - **`PoolConfig { PoolKey key; int24 tickLower; int24 tickUpper; }`** — one config per pool.
 - **Validation in `initialize`** (per pool): hookless-only (`key.hooks == address(0)` else
   `HookNotAllowed`); valid tick range; **duplicate-pool reject** (`DuplicatePool` — required because
-  `salt == poolId`). Pool count bounded `1..MAX_POOLS` (`NoPools` / `TooManyPools`).
+  `salt == poolId`). Pool count bounded `1..MAX_POOLS` (`NoPools` / `TooManyPools`). `name()`/`symbol()`
+  are clone constants (`"Envelop StableLP"` / `"eStableLP"`).
 - **`managedStables`** — the deduped union of every pool's `currency0`/`currency1`; this is the set of
   stables the manager recognizes (deposit + `withdrawTo` target + net-settlement set).
 
