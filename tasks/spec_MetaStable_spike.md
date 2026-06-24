@@ -14,11 +14,14 @@ Locked in discussion:
 - **Shared protocol-level noUSD** — one token over the aggregate of many minters' collateral, gated by a
   **governance registry of approved collateral managers**.
 - **Minter keeps the LP fees** on locked collateral (the mint incentive).
-- **Depeg posture = lightweight** — oracle circuit-breaker + per-stable caps/haircuts + an insurance
+- **Mint is 1:1 at par** — noUSD minted = par value of the locked collateral (each stable = $1), full
+  collateralization, **no haircut / no LTV discount**. The oracle is used only for the depeg breaker
+  (eligibility), not to discount the mint amount.
+- **Depeg posture = lightweight** — oracle circuit-breaker + per-stable debt ceilings + an insurance
   buffer from the 10% fee + a governance whitelist (with a delist/wind-down path); **no liquidation**
   (owner-only preserved). A severe depeg is accepted tail risk; noUSD is soft-pegged, not hard-pegged.
-- Still open (parameters): global LTV/haircut, oracle source + deviation threshold, per-stable debt
-  ceilings, buffer share/size, whitelist criteria, manager-hook bytecode budget.
+- Still open (parameters): oracle source + deviation threshold, per-stable debt ceilings, buffer
+  share/size, whitelist criteria, manager-hook bytecode budget.
 
 ## 1. Frame
 A meta-stablecoin (call it **noUSD**) **collateralized by stable LP positions** held in
@@ -64,13 +67,11 @@ A *shared* noUSD over many minters needs a protocol layer; only the third compon
 ## 4. Mint valuation & token denomination
 A shared, fungible noUSD with **uniform backing** requires valuing collateral at mint and reducing it
 uniformly at burn:
-- **Mint-time oracle valuation (correction to an earlier note):** to issue a fair amount of noUSD, value
-  the locked liquidity's *underlying tokens* at **oracle prices** (e.g. Chainlink) — not a hardcoded $1,
-  and not the pool's internal price (which lags and is manipulable during a depeg) — via
-  `src/lib/PositionState.sol` for the principal split, then apply the per-stable haircut + global LTV.
-  This also feeds the depeg breaker (§5a). (The earlier "no par-NAV needed" held only for a per-manager /
-  owner-only token; the *shared* token needs fair valuation.) Inflation-attack surface is lower than a
-  share-vault (noUSD is fixed-denomination, not pro-rata redeemable), but fair mint pricing is required.
+- **Mint is 1:1 at par.** noUSD minted = the par value of the locked collateral — the position principal
+  (`src/lib/PositionState.sol`) with each managed stable counted as $1. Full collateralization, no
+  haircut and no LTV discount. The oracle is used only to gate eligibility (the depeg breaker, §5a — a
+  stable that is off-peg can't be minted against), not to size the mint. Valuing at par rather than the
+  pool's internal price avoids pool-price manipulation at mint.
 - **Uniform un-encumber:** freeing collateral burns noUSD ∝ the value released, so backing-per-token
   stays uniform across all minters (locked collateral can never leave without a matching burn).
 
@@ -108,8 +109,8 @@ asset — an adverse-selection run. This is the main systemic risk of the design
 - **Oracle per stable** — used for the breaker and for mint valuation (§4).
 - **Circuit-breaker** — deviation beyond a threshold pauses new mints against any collateral that holds
   that stable.
-- **Per-stable debt ceiling + risk haircut** — no single stable backs more than Y% of supply; riskier
-  stables are valued at a discount. Caps the blast radius.
+- **Per-stable debt ceiling** — no single stable backs more than Y% of supply. Caps the blast radius.
+  (Mint is 1:1 at par, so there is no per-unit haircut buffer — the buffer is the only cushion.)
 - **Insurance buffer** funded by the existing 10% protocol fee (routed via `FeeRedeemer`/treasury) —
   absorbs bad debt up to its size, so small depegs keep the peg.
 - **Governance whitelist** — only vetted stables are accepted as collateral.
@@ -132,10 +133,8 @@ noUSD soft-depegs until the bad collateral is cured or written off. No liquidati
 this is the explicit tail risk of a soft-pegged v1.
 
 ## 6. Open questions (remaining parameters — peg model & token structure already decided in §0)
-- **Global LTV / collateral haircut:** how much noUSD per $1 of par-valued locked collateral. Lean: a
-  modest haircut (e.g. mint ≤ 90–95% of par) so each noUSD has a >$1 backing floor that strengthens the
-  soft peg, at a small efficiency cost. Full 1:1 maximizes minter capital efficiency but removes the
-  buffer.
+- **Mint ratio:** decided — **1:1 at par**, full collateralization (no haircut / LTV). Consequence: the
+  only cushion against a depeg is the insurance buffer (§5a), not over-collateralization.
 - **Governance:** the body that approves collateral managers (admin/multisig/DAO) and the criteria
   (depth, accepted stables, per-manager mint caps).
 - **Valuation precision:** par-valuation must not double-count the already-skimmed 10% protocol fee
