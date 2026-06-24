@@ -71,11 +71,9 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
         bool zeroForOne; // pre-swap direction (input side)
         uint256 swapAmountIn; // exactIn into the pool; 0 = no pre-swap
         uint160 swapPriceLimit; // sqrtPriceLimitX96 — slippage guard on the swap
-        uint256 amount0Desired; // operator-sized add amounts
+        uint256 amount0Desired; // operator-sized add amounts (these bound the spend per side)
         uint256 amount1Desired;
         uint128 minLiquidity; // floor on minted L (slippage on the add)
-        uint128 amount0Max; // settle caps
-        uint128 amount1Max;
     }
 
     // ────────── withdrawTo structs ──────────
@@ -310,23 +308,17 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
             // exactIn: a partial fill (price limit hit) leaves |inDelta| < requested input.
             if (uint256(uint128(-inDelta)) < leg.swapAmountIn) revert SwapSlippage(leg.poolId);
         }
-        L = _addLiquidity(
-            leg.poolId, P, leg.amount0Desired, leg.amount1Desired, leg.minLiquidity, leg.amount0Max, leg.amount1Max
-        );
+        L = _addLiquidity(leg.poolId, P, leg.amount0Desired, leg.amount1Desired, leg.minLiquidity);
     }
 
-    /// @dev Shared by allocate and reinvest: size liquidity at the current price, add it,
-    /// enforce slippage caps, and record/merge the position (`salt == poolId`). Settlement is the
-    /// caller's job. `P` is passed in (already resolved by the caller) to avoid a re-lookup.
-    function _addLiquidity(
-        PoolId id,
-        PoolConfig memory P,
-        uint256 amount0,
-        uint256 amount1,
-        uint128 minLiq,
-        uint128 max0,
-        uint128 max1
-    ) internal returns (uint128 L) {
+    /// @dev Shared by allocate and reinvest: size liquidity at the current price, add it, and
+    /// record/merge the position (`salt == poolId`). Settlement is the caller's job. `P` is passed in
+    /// (already resolved by the caller) to avoid a re-lookup. No per-side spend cap is needed: `L` is
+    /// sized from `amount{0,1}` at the on-chain price, so the realized owed is `<= amount{0,1}`.
+    function _addLiquidity(PoolId id, PoolConfig memory P, uint256 amount0, uint256 amount1, uint128 minLiq)
+        internal
+        returns (uint128 L)
+    {
         bytes32 salt = PoolId.unwrap(id);
         (uint160 sqrtP,,,) = POOL_MANAGER.getSlot0(id);
         if (sqrtP == 0) revert PoolUninitialized();
@@ -334,7 +326,7 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
         L = PositionMath.liquidityFromAmounts(sqrtP, P.tickLower, P.tickUpper, amount0, amount1);
         if (L < minLiq) revert MinLiquidityNotMet(L, minLiq);
 
-        (BalanceDelta ad, BalanceDelta fees) = POOL_MANAGER.modifyLiquidity(
+        (, BalanceDelta fees) = POOL_MANAGER.modifyLiquidity(
             P.key,
             ModifyLiquidityParams({
                 tickLower: P.tickLower, tickUpper: P.tickUpper, liquidityDelta: int256(uint256(L)), salt: salt
@@ -342,7 +334,6 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
             ""
         );
         _skimFees(P.key, fees); // protocol fee on any accrued fees realized by a top-up
-        _enforceCaps(ad, max0, max1);
 
         if (positions[salt].liquidity == 0) {
             positions[salt] = Position({
@@ -478,15 +469,7 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
         // Size the add from the realized (positive) deltas of the two pool currencies.
         int256 d0 = POOL_MANAGER.currencyDelta(address(this), P.key.currency0);
         int256 d1 = POOL_MANAGER.currencyDelta(address(this), P.key.currency1);
-        uint128 L = _addLiquidity(
-            leg.poolId,
-            P,
-            d0 > 0 ? uint256(d0) : 0,
-            d1 > 0 ? uint256(d1) : 0,
-            leg.minLiquidity,
-            leg.amount0Max,
-            leg.amount1Max
-        );
+        uint128 L = _addLiquidity(leg.poolId, P, d0 > 0 ? uint256(d0) : 0, d1 > 0 ? uint256(d1) : 0, leg.minLiquidity);
 
         _settleCurrency(P.key.currency0);
         _settleCurrency(P.key.currency1);
@@ -534,15 +517,6 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
         uint256 idx = _poolIndexPlusOne[id];
         if (idx == 0) revert UnknownPool(id);
         return idx - 1;
-    }
-
-    function _enforceCaps(BalanceDelta ad, uint128 max0, uint128 max1) internal pure {
-        int128 a0 = ad.amount0();
-        int128 a1 = ad.amount1();
-        uint256 owed0 = a0 < 0 ? uint256(uint128(-a0)) : 0;
-        uint256 owed1 = a1 < 0 ? uint256(uint128(-a1)) : 0;
-        if (owed0 > max0) revert ExceedsAmount0Max(owed0, max0);
-        if (owed1 > max1) revert ExceedsAmount1Max(owed1, max1);
     }
 
     /// @dev Net every managed currency: settle negatives from the manager balance, take positives

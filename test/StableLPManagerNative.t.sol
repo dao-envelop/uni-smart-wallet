@@ -61,9 +61,7 @@ contract StableLPManagerNativeTest is Test {
             swapPriceLimit: 0,
             amount0Desired: amt, // native side
             amount1Desired: amt, // token side
-            minLiquidity: 0,
-            amount0Max: type(uint128).max,
-            amount1Max: type(uint128).max
+            minLiquidity: 0
         });
     }
 

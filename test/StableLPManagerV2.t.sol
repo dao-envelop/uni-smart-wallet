@@ -42,9 +42,7 @@ contract StableLPManagerV2Test is StableLPTestBase {
             swapPriceLimit: limit,
             amount0Desired: lpEach,
             amount1Desired: lpEach,
-            minLiquidity: 0,
-            amount0Max: type(uint128).max,
-            amount1Max: type(uint128).max
+            minLiquidity: 0
         });
     }
 
@@ -81,9 +79,7 @@ contract StableLPManagerV2Test is StableLPTestBase {
             swapPriceLimit: 0,
             amount0Desired: 10e18,
             amount1Desired: 10e18,
-            minLiquidity: 0,
-            amount0Max: type(uint128).max,
-            amount1Max: type(uint128).max
+            minLiquidity: 0
         });
 
         vm.prank(owner);

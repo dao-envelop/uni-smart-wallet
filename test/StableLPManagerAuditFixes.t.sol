@@ -106,9 +106,7 @@ contract StableLPUninitializedPoolTest is Test {
             swapPriceLimit: 0,
             amount0Desired: 1e18,
             amount1Desired: 1e18,
-            minLiquidity: 0,
-            amount0Max: type(uint128).max,
-            amount1Max: type(uint128).max
+            minLiquidity: 0
         });
 
         vm.prank(owner);

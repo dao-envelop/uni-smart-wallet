@@ -135,9 +135,7 @@ abstract contract StableLPTestBase is Test {
                 swapPriceLimit: limit,
                 amount0Desired: lpEach,
                 amount1Desired: lpEach,
-                minLiquidity: 0,
-                amount0Max: type(uint128).max,
-                amount1Max: type(uint128).max
+                minLiquidity: 0
             });
         }
     }

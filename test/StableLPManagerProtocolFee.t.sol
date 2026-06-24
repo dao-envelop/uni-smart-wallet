@@ -89,9 +89,7 @@ contract StableLPManagerProtocolFeeTest is StableLPTestBase {
             swapPriceLimit: 0,
             amount0Desired: 0,
             amount1Desired: 0,
-            minLiquidity: 0,
-            amount0Max: type(uint128).max,
-            amount1Max: type(uint128).max
+            minLiquidity: 0
         });
 
         vm.prank(owner);
