@@ -14,8 +14,11 @@ Locked in discussion:
 - **Shared protocol-level noUSD** — one token over the aggregate of many minters' collateral, gated by a
   **governance registry of approved collateral managers**.
 - **Minter keeps the LP fees** on locked collateral (the mint incentive).
-- Still open (parameters): global LTV/haircut, governance body + collateral criteria, valuation
-  precision, manager-hook bytecode budget.
+- **Depeg posture = lightweight** — oracle circuit-breaker + per-stable caps/haircuts + an insurance
+  buffer from the 10% fee + a governance whitelist (with a delist/wind-down path); **no liquidation**
+  (owner-only preserved). A severe depeg is accepted tail risk; noUSD is soft-pegged, not hard-pegged.
+- Still open (parameters): global LTV/haircut, oracle source + deviation threshold, per-stable debt
+  ceilings, buffer share/size, whitelist criteria, manager-hook bytecode budget.
 
 ## 1. Frame
 A meta-stablecoin (call it **noUSD**) **collateralized by stable LP positions** held in
@@ -61,11 +64,13 @@ A *shared* noUSD over many minters needs a protocol layer; only the third compon
 ## 4. Mint valuation & token denomination
 A shared, fungible noUSD with **uniform backing** requires valuing collateral at mint and reducing it
 uniformly at burn:
-- **Mint-time par-valuation (correction to an earlier note):** to issue a fair amount of noUSD, value the
-  locked liquidity via `src/lib/PositionState.sol` principal, treating each managed stable as $1, then
-  apply the global LTV. (The earlier "no par-NAV needed" held only for a per-manager / owner-only token;
-  the *shared* token needs fair valuation.) Inflation-attack surface is lower than a share-vault (noUSD is
-  fixed-denomination, not pro-rata redeemable), but fair mint pricing is still required.
+- **Mint-time oracle valuation (correction to an earlier note):** to issue a fair amount of noUSD, value
+  the locked liquidity's *underlying tokens* at **oracle prices** (e.g. Chainlink) — not a hardcoded $1,
+  and not the pool's internal price (which lags and is manipulable during a depeg) — via
+  `src/lib/PositionState.sol` for the principal split, then apply the per-stable haircut + global LTV.
+  This also feeds the depeg breaker (§5a). (The earlier "no par-NAV needed" held only for a per-manager /
+  owner-only token; the *shared* token needs fair valuation.) Inflation-attack surface is lower than a
+  share-vault (noUSD is fixed-denomination, not pro-rata redeemable), but fair mint pricing is required.
 - **Uniform un-encumber:** freeing collateral burns noUSD ∝ the value released, so backing-per-token
   stays uniform across all minters (locked collateral can never leave without a matching burn).
 
@@ -90,6 +95,42 @@ uniformly at burn:
 Add a holder-callable **in-kind redemption** (burn noUSD → pull collateral pro-rata, autonomous) and/or a
 **PSM + over-collateralization** to turn the soft floor into a code-enforced one. Deferred.
 
+## 5a. Depeg of a collateral stable (v1 — lightweight handling)
+
+**Failure mode.** If a collateral stable (say DAI) drops to $0.80, arbitrage swaps the cheap token into
+the minter's pool and takes the good one out; on a narrow range the position exits the range and becomes
+~100% the bad token. The collateral, counted at par, is now worth less than the noUSD minted against it.
+Because noUSD is shared and there is no liquidation (Model A), the cheapest-to-unlock (good-collateral)
+minters buy discounted noUSD and pull their good collateral first, leaving noUSD backed by the broken
+asset — an adverse-selection run. This is the main systemic risk of the design.
+
+**Lightweight mitigations (chosen):**
+- **Oracle per stable** — used for the breaker and for mint valuation (§4).
+- **Circuit-breaker** — deviation beyond a threshold pauses new mints against any collateral that holds
+  that stable.
+- **Per-stable debt ceiling + risk haircut** — no single stable backs more than Y% of supply; riskier
+  stables are valued at a discount. Caps the blast radius.
+- **Insurance buffer** funded by the existing 10% protocol fee (routed via `FeeRedeemer`/treasury) —
+  absorbs bad debt up to its size, so small depegs keep the peg.
+- **Governance whitelist** — only vetted stables are accepted as collateral.
+
+**Whitelist resolution scenario.** The whitelist is the governance lever that turns a run into an
+orderly wind-down:
+1. Oracle flags the depeg; governance **delists** the stable. New mints against any collateral holding
+   it stop, and its value in the backing/LTV accounting is **marked down to the oracle price** (so the
+   protocol stops pretending it is $1).
+2. Affected minters get a **cure window**: rebalance the position out of the bad token (swap it for a
+   still-whitelisted stable via the manager's allocate/withdraw, while it retains value) and/or burn
+   noUSD to lower their encumbrance back to a healthy ratio. Acting early salvages the most.
+3. After the window, any shortfall is covered by the **insurance buffer**; residual beyond the buffer is
+   written down / socialized to noUSD holders.
+4. If the stable re-pegs, governance can **re-list** it.
+
+**Residual risk (accepted).** These limit and slow the damage but do not eliminate a run on a *severe*
+depeg: loss beyond buffer + haircut is socialized, and the breaker cannot unwind already-minted noUSD, so
+noUSD soft-depegs until the bad collateral is cured or written off. No liquidation backstop, by design —
+this is the explicit tail risk of a soft-pegged v1.
+
 ## 6. Open questions (remaining parameters — peg model & token structure already decided in §0)
 - **Global LTV / collateral haircut:** how much noUSD per $1 of par-valued locked collateral. Lean: a
   modest haircut (e.g. mint ≤ 90–95% of par) so each noUSD has a >$1 backing floor that strengthens the
@@ -99,8 +140,9 @@ Add a holder-callable **in-kind redemption** (burn noUSD → pull collateral pro
   (depth, accepted stables, per-manager mint caps).
 - **Valuation precision:** par-valuation must not double-count the already-skimmed 10% protocol fee
   (taken as ERC-6909 to the treasury via `FeeRedeemer`, not part of the minter's collateral).
-- **Liquidation:** likely none under ~par collateral (no forced redemption in v1); a depeg
-  circuit-breaker on an underlying stable instead.
+- **Depeg parameters (§5a):** oracle source + deviation threshold; per-stable debt ceiling; buffer's
+  share of the 10% fee + its target size; cure-window length.
+- **Liquidation:** out of scope for v1 (decided) — lightweight posture instead (§5a).
 - **Bytecode budget:** does the manager hook fit EIP-170, or does it become a v2 manager / satellite?
 
 ## 7. Alternative (footnote, later)
