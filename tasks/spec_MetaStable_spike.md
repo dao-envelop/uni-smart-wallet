@@ -20,9 +20,9 @@ Locked in discussion:
 - **Depeg posture = lightweight** — oracle circuit-breaker + per-stable debt ceilings + an insurance
   buffer from the 10% fee + a governance whitelist (with a delist/wind-down path); **no liquidation**
   (owner-only preserved). A severe depeg is accepted tail risk; noUSD is soft-pegged, not hard-pegged.
-- **Lock is manager-wide, not per-position** — minting is against the sum of all the manager's positions;
-  while engaged `withdrawTo` is blocked entirely; repay all the noUSD to unlock. (Drops the per-position
-  `lockedLiquidity` mapping — a single flag.)
+- **Single-vault, manager-wide debt — partial withdraw** — minting is against the sum of all positions
+  (one `debt` counter, no per-position lock). Withdrawal is **partial**: burn X noUSD → withdraw X worth
+  of collateral; the invariant `collateral par value ≥ debt` must hold after each pull. Not all-or-nothing.
 - **Bake-in feasibility (measured):** the seam needs a **v2 manager** (clones are immutable); it fits by
   lowering `optimizer_runs` — `runs=200` leaves ~917 B (`400` → ~635 B) even with the heavier per-position
   variant. v1 clones onboard noUSD via escrow (backlog).
@@ -56,20 +56,22 @@ A *shared* noUSD over many minters needs a protocol layer; only the third compon
    (governance), enforces the **1:1 mint** + per-stable debt ceilings + the depeg breaker, and routes
    `mint` (on lock) / `burn` (on unlock). Approval criteria: hookless stable pools only (already enforced
    by the manager), pool depth, which stables count as $1. This is where the trust/governance sits.
-3. **Manager-wide lock hook** (the only change in this repo). The manager stays **NFT-owned by the
-   minter**. Minting is against the **sum of all positions**, so the lock is a single manager-wide flag —
-   no per-position bookkeeping:
-   - **State:** `address lockAuthority` (the Controller; owner binds once) + a `bool` lock the authority
-     toggles.
-   - **Engage (mint):** the Controller values the whole manager's collateral (1:1 par), mints noUSD, and
-     sets the lock.
-   - **Guard:** while locked, `withdrawTo` reverts (the liquidity-reducing path `_pullLiquidity` in
-     `src/StableLPManager.sol`). All-or-nothing: the owner cannot drain until the Controller releases.
-   - **Release (repay):** the owner burns the outstanding noUSD via the Controller, which then clears the
-     lock. `withdrawTo` stays `onlyOwnerNFT`; `allocate`/`reinvest`/`claimFees` stay usable while locked
-     (add + harvest, no drain).
-   - **Tradeoff:** while engaged, no partial withdraw / rebalance-by-removing — the whole manager is
-     committed as collateral until full repayment.
+3. **Single-vault debt hook** (the only change in this repo). The manager stays **NFT-owned by the
+   minter** and is one vault: a single `debt`, collateral = all its positions valued at par. No
+   per-position lock.
+   - **State:** `address lockAuthority` (the Controller; owner binds once) + `uint256 debt` (noUSD minted
+     against this manager; moved only by the Controller — raised on mint, lowered on burn).
+   - **Engage (mint):** the Controller values the whole manager's collateral (1:1 par) and sets `debt`.
+   - **Guard — partial withdraw:** `withdrawTo` (the liquidity-reducing path `_pullLiquidity` in
+     `src/StableLPManager.sol`) may reduce collateral **as long as remaining collateral par ≥ `debt`**.
+     Burning noUSD lowers `debt`, which frees a proportional withdrawal — burn half → withdraw half. Not
+     all-or-nothing.
+   - **Valuing the remaining collateral** (the cost): (a) on-chain par sum over the manager's positions
+     (reuse `src/lib/PositionState.sol`, bounded by `MAX_POOLS`) — heavier manager; or (b)
+     **Controller-authorized** — the manager defers the check to the Controller, which valued the
+     collateral and confirmed the burn before authorizing the pull, keeping the manager small. **Lean (b).**
+   - `withdrawTo` stays `onlyOwnerNFT`; `allocate`/`reinvest`/`claimFees` stay usable while engaged (add +
+     harvest).
    - **EIP-170:** clones are immutable, so this must be in a **v2 implementation** (current v1 clones use
      the escrow fallback — backlog). Measured: the in-manager seam is feasible by lowering
      `optimizer_runs` — even the heavier per-position variant fits at `runs=200` (~917 B free) or
@@ -85,9 +87,9 @@ uniformly at burn:
   haircut and no LTV discount. The oracle is used only to gate eligibility (the depeg breaker, §5a — a
   stable that is off-peg can't be minted against), not to size the mint. Valuing at par rather than the
   pool's internal price avoids pool-price manipulation at mint.
-- **Whole-manager lock (all-or-nothing):** minting is against the sum of all the manager's positions and
-  locks the whole manager; the owner cannot withdraw until the full noUSD debt against it is repaid
-  (burned), at which point the Controller releases the lock. No per-position partial encumbrance.
+- **Single vault, partial withdraw:** minting is against the sum of all the manager's positions = one
+  `debt`. Withdrawal is partial — burn X noUSD to withdraw X worth of collateral; the invariant
+  `collateral par value ≥ debt` holds after each pull. No per-position lock, not all-or-nothing.
 
 ## 5. Peg & redemption — decided: v1 = Model A (soft-peg receipt)
 **Decision:** v1 noUSD is a **soft-peg, collateral-backed receipt** — owner/minter-only `withdrawTo`,
