@@ -47,14 +47,14 @@ and keep the trading-fee yield on the collateral.
 A *shared* noUSD over many minters needs a protocol layer; only the third component lands in this repo.
 1. **`noUSD` ERC-20** — the shared stablecoin; `mint`/`burn` gated to the Controller (2).
 2. **Controller / collateral registry** — the protocol layer: **approves** collateral managers
-   (governance), enforces a **global LTV**, and routes `mint` (on lock) / `burn` (on unlock). Approval
-   criteria: hookless stable pools only (already enforced by the manager), pool depth, which stables
-   count as $1. This is where the trust/governance sits.
+   (governance), enforces the **1:1 mint** + per-stable debt ceilings + the depeg breaker, and routes
+   `mint` (on lock) / `burn` (on unlock). Approval criteria: hookless stable pools only (already enforced
+   by the manager), pool depth, which stables count as $1. This is where the trust/governance sits.
 3. **Per-manager encumbrance hook** (the only change in this repo). The manager stays **NFT-owned by the
    minter**; tokenizing adds an encumbrance it enforces:
    - **State:** `mapping(bytes32 salt => uint128) encumbered` — locked liquidity per position.
    - **Lock (`tokenize(salt, L)`, owner-only):** raise `encumbered[salt] += L` and call the Controller to
-     mint noUSD (Controller checks approval + LTV).
+     mint noUSD 1:1 against the par value of `L` (Controller checks approval + per-stable ceiling + breaker).
    - **Burn folded into `withdrawTo` (no separate redeem):** the liquidity-reducing path
      `_pullLiquidity` (`src/StableLPManager.sol`, built on `_withdrawLiquidity` in
      `src/abstract/V4PositionManager.sol`) gains a guard — a pull may not drop a position's liquidity
@@ -118,7 +118,7 @@ asset — an adverse-selection run. This is the main systemic risk of the design
 **Whitelist resolution scenario.** The whitelist is the governance lever that turns a run into an
 orderly wind-down:
 1. Oracle flags the depeg; governance **delists** the stable. New mints against any collateral holding
-   it stop, and its value in the backing/LTV accounting is **marked down to the oracle price** (so the
+   it stop, and its value in the backing accounting is **marked down to the oracle price** (so the
    protocol stops pretending it is $1).
 2. Affected minters get a **cure window**: rebalance the position out of the bad token (swap it for a
    still-whitelisted stable via the manager's allocate/withdraw, while it retains value) and/or burn
@@ -128,7 +128,7 @@ orderly wind-down:
 4. If the stable re-pegs, governance can **re-list** it.
 
 **Residual risk (accepted).** These limit and slow the damage but do not eliminate a run on a *severe*
-depeg: loss beyond buffer + haircut is socialized, and the breaker cannot unwind already-minted noUSD, so
+depeg: loss beyond the buffer is socialized, and the breaker cannot unwind already-minted noUSD, so
 noUSD soft-depegs until the bad collateral is cured or written off. No liquidation backstop, by design —
 this is the explicit tail risk of a soft-pegged v1.
 
