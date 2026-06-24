@@ -166,6 +166,33 @@ issuing shares, with par-NAV via `PositionState` and a holder-forced, possibly a
 (NAV, inflation-attack mitigation, redemption mechanics); revisit if/when holder-side trustless redemption
 is required.
 
+## 8. v1 → v2 (noUSD) transition — override-based
+Goal: `StableLPManagerV2 is StableLPManager` — v2 adds noUSD support as **new functions + a couple of
+overrides**, v1 logic is untouched. Only the **single liquidity-reducing path** needs a seam:
+`_handleWithdrawTo` (allocate/allocateFrom/reinvest/claimFees only add or harvest — collateral never drops
+below debt, so they need no override).
+
+**v1 prep (behavior-preserving, just `virtual` — negligible size, minimal re-audit):**
+- `_handleWithdrawTo(bytes) internal` → `internal virtual` (the post-pull debt check hooks here).
+- `withdrawTo(WithdrawToParams) external` → `public virtual` (optional — lets v2 hook before `unlock`, e.g.
+  controller pre-auth; `super.withdrawTo` keeps the `onlyOwnerNFT`/`nonReentrant` guards, so v2's override
+  must not re-apply `nonReentrant`).
+- `name()`/`symbol()` → add `virtual` (optional — lets v2 rebrand).
+
+**v2 adds (subclass, no v1 logic changed):**
+- State: `address lockAuthority` (the Controller; owner binds once via `setLockAuthority`, one-time) and
+  `uint256 debt`.
+- Controller hooks (only `lockAuthority`): `raiseDebt(amount)` on mint, `lowerDebt(amount)` on burn.
+- Override the seam to enforce the invariant: in `_handleWithdrawTo`, after `super`, require
+  `collateralParValue() >= debt` (on-chain par sum over positions); **or** override `withdrawTo` to require
+  Controller pre-authorization (lean this — keeps v2 from valuing on-chain). Pick one per §3.
+- Optional `name()/symbol()` rebrand. Constructor forwards `(IPoolManager, treasury)` to v1.
+- Build at `optimizer_runs ≤ 400` (§3) to fit EIP-170.
+
+**No change:** `allocate`/`allocateFrom`/`reinvest`/`claimFees`; `StableLPFactory` is impl-agnostic — deploy
+a new `StableLPFactory(v2Impl)` (no factory code change). The noUSD token + Controller live in the
+separate layer; the Controller is the `lockAuthority`.
+
 ## Recommendation
 Treat noUSD as a **separate protocol layer** built on top of `StableLPManager`, with only the small
 `encumbered` hook landing in the manager. Keep prototyping deferred until the peg/redemption model (§5) is

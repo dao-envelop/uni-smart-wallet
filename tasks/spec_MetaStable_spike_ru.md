@@ -57,6 +57,16 @@ noUSD на битом активе (run). Это главный системны
 Ликвидаций нет (by design). Сильный депег сверх буфера всё равно частично роняет noUSD — это принятый
 хвостовой риск.
 
+## v1 → v2 (через override)
+Цель: `StableLPManagerV2 is StableLPManager` — v2 это новые функции + пара override, логику v1 не трогаем.
+Ликвидность уменьшает только один путь — `_handleWithdrawTo`, поэтому seam один.
+- В v1 пометить `virtual` (поведение не меняется): `_handleWithdrawTo` (сюда вешается проверка долга),
+  опц. `withdrawTo` (public virtual) и `name`/`symbol` (ребренд).
+- v2 добавляет: `lockAuthority` + `debt`, `setLockAuthority`, хуки контроллера `raiseDebt`/`lowerDebt`,
+  override проверки «залог ≥ debt» (on-chain) либо авторизацию контроллером, сборку при `runs≤400`.
+- Не меняем: `allocate`/`allocateFrom`/`reinvest`/`claimFees`; фабрика impl-агностична (новая
+  `StableLPFactory(v2)`).
+
 ## Решено
 - Model A: soft-peg, owner-only разлок, без force-redeem холдера.
 - Общий протокольный noUSD + governance-реестр залога.
