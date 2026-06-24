@@ -6,6 +6,17 @@
 > is a **meta-stablecoin** minted against productive stable-LP collateral. Related:
 > `spec_StableLPManager.md`, `StableLPManager_flows_ru.md`.
 
+## 0. Decision summary (v1)
+Locked in discussion:
+- **Model A — soft-peg, collateral-backed receipt.** Owner/minter-only `withdrawTo`, **no holder
+  force-redeem**; peg is economic (minter buyback + mint pressure), not code-enforced. Hard peg (Model B
+  / PSM) deferred.
+- **Shared protocol-level noUSD** — one token over the aggregate of many minters' collateral, gated by a
+  **governance registry of approved collateral managers**.
+- **Minter keeps the LP fees** on locked collateral (the mint incentive).
+- Still open (parameters): global LTV/haircut, governance body + collateral criteria, valuation
+  precision, manager-hook bytecode budget.
+
 ## 1. Frame
 A meta-stablecoin (call it **noUSD**) **collateralized by stable LP positions** held in
 `StableLPManager`(s). Two properties make this attractive:
@@ -26,55 +37,71 @@ and keep the trading-fee yield on the collateral.
 - **Holder / user** — anyone using the circulating noUSD. In v1 has no on-chain redemption right
   (see §5); exits via the market.
 
-## 3. On-chain hook in `StableLPManager` (minimal, the only required change here)
-The manager stays **NFT-owned by the minter**; tokenizing only adds an encumbrance the manager enforces:
-- **State:** `mapping(bytes32 salt => uint128) encumbered` — collateralized (locked) liquidity per position.
-- **Mint / lock (`tokenize(salt, L)`, owner-only):** raise `encumbered[salt] += L`, then mint noUSD via
-  the external token contract.
-- **Burn folded into `withdrawTo` (no separate redeem):** the liquidity-reducing path used by `withdrawTo`
-  — `_pullLiquidity` (`src/StableLPManager.sol`), built on `_withdrawLiquidity`
-  (`src/abstract/V4PositionManager.sol`) — gains a guard:
+## 3. Architecture — a three-component protocol layer
+A *shared* noUSD over many minters needs a protocol layer; only the third component lands in this repo.
+1. **`noUSD` ERC-20** — the shared stablecoin; `mint`/`burn` gated to the Controller (2).
+2. **Controller / collateral registry** — the protocol layer: **approves** collateral managers
+   (governance), enforces a **global LTV**, and routes `mint` (on lock) / `burn` (on unlock). Approval
+   criteria: hookless stable pools only (already enforced by the manager), pool depth, which stables
+   count as $1. This is where the trust/governance sits.
+3. **Per-manager encumbrance hook** (the only change in this repo). The manager stays **NFT-owned by the
+   minter**; tokenizing adds an encumbrance it enforces:
+   - **State:** `mapping(bytes32 salt => uint128) encumbered` — locked liquidity per position.
+   - **Lock (`tokenize(salt, L)`, owner-only):** raise `encumbered[salt] += L` and call the Controller to
+     mint noUSD (Controller checks approval + LTV).
+   - **Burn folded into `withdrawTo` (no separate redeem):** the liquidity-reducing path
+     `_pullLiquidity` (`src/StableLPManager.sol`, built on `_withdrawLiquidity` in
+     `src/abstract/V4PositionManager.sol`) gains a guard — a pull may not drop a position's liquidity
+     below `encumbered[salt]` **unless** the same call burns the matching noUSD (via the Controller),
+     lowering `encumbered[salt]`. `withdrawTo` stays `onlyOwnerNFT`.
+   - **EIP-170:** ~604 B headroom. Keep the manager addition minimal (the mapping + the guard +
+     `tokenize`); the noUSD token and Controller are external. Even so it may need a lever
+     (`optimizer_runs`, a satellite) — measure before committing.
 
-  > a pull may not drop a position's liquidity below `encumbered[salt]` **unless** the same call burns the
-  > matching noUSD, lowering `encumbered[salt]` accordingly.
+## 4. Mint valuation & token denomination
+A shared, fungible noUSD with **uniform backing** requires valuing collateral at mint and reducing it
+uniformly at burn:
+- **Mint-time par-valuation (correction to an earlier note):** to issue a fair amount of noUSD, value the
+  locked liquidity via `src/lib/PositionState.sol` principal, treating each managed stable as $1, then
+  apply the global LTV. (The earlier "no par-NAV needed" held only for a per-manager / owner-only token;
+  the *shared* token needs fair valuation.) Inflation-attack surface is lower than a share-vault (noUSD is
+  fixed-denomination, not pro-rata redeemable), but fair mint pricing is still required.
+- **Uniform un-encumber:** freeing collateral burns noUSD ∝ the value released, so backing-per-token
+  stays uniform across all minters (locked collateral can never leave without a matching burn).
 
-  So the only way to free locked collateral is to **retire (burn) noUSD**. `withdrawTo` stays
-  `onlyOwnerNFT`.
-- **EIP-170:** the manager has ~604 B of headroom. Keep its additions minimal (one mapping + the guard +
-  `tokenize`); the **noUSD ERC-20 is an external contract** the manager mints/burns through. Even so the
-  guard + `tokenize` may need a lever (lower `optimizer_runs`, a satellite accounting contract) — measure
-  before committing.
+## 5. Peg & redemption — decided: v1 = Model A (soft-peg receipt)
+**Decision:** v1 noUSD is a **soft-peg, collateral-backed receipt** — owner/minter-only `withdrawTo`,
+**no holder force-redeem**. A code-enforced hard peg (Model B / PSM) is a later upgrade.
 
-## 4. Token denomination
-One fungible noUSD over multiple heterogeneous positions needs **uniform backing per token**, else
-burning tokens meant for position A could free position B and dilute A's backing. Options:
-- **Pro-rata basket (recommended):** noUSD supply maps to the *whole* encumbered basket; freeing
-  collateral via `withdrawTo` reduces **every** encumbered position ∝ the burned fraction. Keeps backing
-  uniform and the token fungible.
-- **Per-position token:** simplest backing, poor UX (a token per salt).
-- **Shared protocol-level noUSD** across many minters/managers (a real stablecoin) vs a **per-manager**
-  token — the protocol vision wants one shared noUSD backed by the aggregate of all minters' collateral.
-
-## 5. Peg & redemption — the central open problem
-What holds noUSD at $1?
-- **Backing:** ~par stable collateral ⇒ intrinsic value ≈ $1, and a minter is economically forced to buy
-  noUSD back (at ≤ backing) to unlock their collateral → a natural price floor + arbitrage.
-- **v1 gap:** with owner-only `withdrawTo` there is **no holder-side force-redeem** — a holder trusts the
-  market + minter buyback, not the code, for getting value out. A real stablecoin likely needs a
-  **holder redemption path** (burn noUSD → pull collateral pro-rata, in-kind, autonomous) and/or
-  **over-collateralization** + a stability module. This is the headline unsolved design question.
+- **Backing is structurally present.** Locked collateral cannot leave the manager without burning the
+  matching noUSD, so the outstanding supply is always backed by the encumbered ~par LP. But holders
+  **cannot redeem on-chain** — they realize value via the secondary market.
+- **Soft-peg mechanism (economic, not code-guaranteed):** *floor* — a rational minter buys noUSD back
+  (at ≤ backing) because burning it is the only way to unlock their collateral; with a shared token the
+  cheapest-to-unlock minter arbs. *Ceiling* — noUSD above backing makes minting profitable, so minters
+  mint more and supply rises. Both pressures are economic, so the peg **can drift under stress with no
+  on-chain backstop** — the accepted v1 tradeoff. This is a step toward a hard-pegged stablecoin, not the
+  final form.
 - **Inherited risks:** depeg of an underlying stable; the manager's existing assumptions carry over
   (no TWAP on sizing/swaps, standard-ERC-20 only — no FoT/rebasing); governance of *which* collateral
-  (managers/pools) backs the shared noUSD.
+  (managers/pools) backs the token.
 
-## 6. Open questions (resolve before any implementation)
-- Peg/redemption mechanism: holder force-redeem (in-kind) vs minter-buyback-only; over-collateralization;
-  a stability module / PSM?
-- Shared protocol-level noUSD vs per-manager token; who governs accepted collateral.
-- Fee-accounting precision: noUSD backing must not double-count the **already-skimmed 10% protocol fee**
+### Future (hard peg) — Model B
+Add a holder-callable **in-kind redemption** (burn noUSD → pull collateral pro-rata, autonomous) and/or a
+**PSM + over-collateralization** to turn the soft floor into a code-enforced one. Deferred.
+
+## 6. Open questions (remaining parameters — peg model & token structure already decided in §0)
+- **Global LTV / collateral haircut:** how much noUSD per $1 of par-valued locked collateral. Lean: a
+  modest haircut (e.g. mint ≤ 90–95% of par) so each noUSD has a >$1 backing floor that strengthens the
+  soft peg, at a small efficiency cost. Full 1:1 maximizes minter capital efficiency but removes the
+  buffer.
+- **Governance:** the body that approves collateral managers (admin/multisig/DAO) and the criteria
+  (depth, accepted stables, per-manager mint caps).
+- **Valuation precision:** par-valuation must not double-count the already-skimmed 10% protocol fee
   (taken as ERC-6909 to the treasury via `FeeRedeemer`, not part of the minter's collateral).
-- Liquidation: needed at all under ~par collateral? Trigger only on depeg of an underlying stable.
-- Bytecode budget: does the manager hook fit EIP-170, or does it become a v2 manager / satellite?
+- **Liquidation:** likely none under ~par collateral (no forced redemption in v1); a depeg
+  circuit-breaker on an underlying stable instead.
+- **Bytecode budget:** does the manager hook fit EIP-170, or does it become a v2 manager / satellite?
 
 ## 7. Alternative (footnote, later)
 A trustless multi-depositor version is the **ERC-7575 wrapper vault** (a vault holding the manager's NFT,
