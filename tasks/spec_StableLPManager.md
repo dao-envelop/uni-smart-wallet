@@ -194,7 +194,7 @@ or **DOCUMENTED/ACCEPTED**.
 | LOW | `_addLiquidity` missing uninitialized-pool guard. | **FIXED** — `PoolUninitialized`. |
 | LOW | auto-`allocate` has no aggregate cap — an operator can deploy the manager's **entire idle balance** (recoverable; not theft). | DOCUMENTED — operator-trusted by design. |
 | LOW/INFO | **Fee-on-transfer / rebasing** tokens break `_settle` / the `allocateFrom` snapshot / `withdrawTo` delivery (all assume `received == sent`). | DOCUMENTED — managed currencies must be standard ERC-20 (or native). |
-| INFO | Protocol fee accrues as **ERC-6909**; the treasury must redeem via `unlock→burn→take`. | Operational — provide a redeemer. |
+| INFO | Protocol fee accrues as **ERC-6909**; the treasury must redeem via `unlock→burn→take`. | Resolved — use `src/FeeRedeemer.sol` as the treasury (task_018). |
 | INFO | No deadlines on entry points; no two-step NFT ownership handoff; `reinvestRemainder` is a no-op. | ACCEPTED. |
 | — | Pools are **hookless-only** (categorical reject); positions are operator-driven so all slippage discipline lives off-chain. | By design. |
 
