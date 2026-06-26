@@ -24,7 +24,6 @@ lint_on_build = false
 
 [etherscan]
 arbitrum = { key = "${ETHERSCAN_TOKEN}" }
-avalanche = { key = "${SNOWTRACE_TOKEN}" }
 bnb_smart_chain = { key = "${BSCSCAN_TOKEN}" }
 mainnet = { key = "${ETHERSCAN_TOKEN}" }
 optimism = { key = "${API_KEY_OPTIMISTIC_ETHERSCAN}" }
