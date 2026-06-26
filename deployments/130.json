@@ -1,0 +1,11 @@
+{
+  "chainId": 130,
+  "descriptor": "0xa950991F86eF1b79Db65c4F3893dA9408A1ce157",
+  "factory": "0xf58208676a7b5a604df41ca25b5310f3cc997bF3",
+  "feeRedeemer": "0x28466e3e92CB6FB292618D0faEbB49624f4d6f0C",
+  "fromBlock": 51717982,
+  "impl": "0x7A3c8F45b809078da58d17fb6Cd059334622838F",
+  "lens": "0x54B328Ef3A93b4a22896187588166fF361Ea0f1E",
+  "name": "unichain",
+  "poolManager": "0x1F98400000000000000000000000000000000004"
+}

@@ -1,0 +1,11 @@
+{
+  "chainId": 1301,
+  "descriptor": "0x32f1075607fdC893Bbf1367Ca2ca38C02B66d5dF",
+  "factory": "0x28FCfBfe685eFde342FA9eb99a6BDfBA5F93CC39",
+  "feeRedeemer": "0x564C2c8B7510840EBeE929028f9800eA59DBd668",
+  "fromBlock": 55613383,
+  "impl": "0x1d6A2421a5c10607cBBCb7FA1BBA73FF9a510523",
+  "lens": "0x551a0CbD40E16535eeAFbbbC7581c0A820d7E2f3",
+  "name": "unichain-sepolia",
+  "poolManager": "0x00B036B58a818B1BC34d502D3fE730Db729e62AC"
+}
