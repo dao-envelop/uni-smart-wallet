@@ -1,7 +1,26 @@
 # UniSmartWallet — Smart Wallet for Tactical V4 LP
 
-> **Status:** Architecture draft. Not implemented.
-> **Sibling spec:** `PositionManagerService.md` — works with externally-minted user NFTs via approve+subscribe. This spec describes a different product: a smart wallet that mints/manages its own LP positions directly through V4 PoolManager.
+> **Status:** **Implemented** (master). This was the original architecture draft; the concept,
+> auth model, direct-PoolManager rationale, pool validation and salt identity below still hold, but a
+> few concrete details drifted during implementation — see **"Deviations from this draft"** right
+> below, and `CLAUDE.md` for the authoritative architecture. Sibling product: `spec_StableLPManager.md`
+> (factory-cloned, multi-pool stable manager) + its `StableLPManager_flows_ru.md` diagrams.
+>
+> **Deviations from this draft (the code is the source of truth):**
+> - **Inheritance:** the contract is `UniSmartWallet is SingletonNFTOwned, SmartWallet, V4PositionManager`
+>   — auth lives in `SingletonNFTOwned`, the V4 mechanics + `POOL_MANAGER` immutable in
+>   `V4PositionManager`, custody in Envelop's `SmartWallet`. Not a flat single contract.
+> - **Singleton id:** `TOKEN_ID = 1` (in `SingletonNFTOwned`), not `TOKEN_ID = 0`.
+>   `ownerNFTHolder()` was removed — use `ownerOf(TOKEN_ID)`.
+> - **Capital in/out:** no `depositERC20`/`withdrawERC20`/`withdrawNative`. ERC-20 deposits need no
+>   wallet function (plain `IERC20.transfer` to the wallet); native via the inherited `receive()`.
+>   Withdrawals + arbitrary calls go through `executeEncodedTx` / `executeEncodedTxBatch` (owner-only).
+> - **Hook policy:** hard hookless-only gate (`key.hooks == address(0)` else `HookNotAllowed`), no
+>   whitelist/registry (task_012).
+> - **On-chain metadata:** `tokenURI(1)` renders the open-position portfolio via an external
+>   `IWalletDescriptor` (`setPositionDescriptor`, owner-only); ERC-4906 `MetadataUpdate` on every
+>   position mutation; `supportsInterface` advertises `0x49064906` (task_013).
+> - **Native pairs:** positions in `ETH/token` pools work (native = `Currency(address(0))`).
 
 ## Concept
 
@@ -26,18 +45,16 @@ Despite the "JIT" name, **NOT** atomic JIT (open-swap-close in single TX). The w
 The wallet itself **inherits ERC-721** with exactly **one** mintable token. The NFT is minted at deploy and represents the **sole ownership claim** on the wallet. Whoever holds that NFT controls the wallet's funds and operations.
 
 ```solidity
-contract UniSmartWallet is ERC721, IUnlockCallback {
-    uint256 public constant OWNERSHIP_TOKEN_ID = 0;
-
-    constructor(address initialOwner) ERC721("UniSmartWallet Ownership", "JLPW") {
-        _mint(initialOwner, OWNERSHIP_TOKEN_ID);
-    }
+// As implemented, this lives in the SingletonNFTOwned base (TOKEN_ID = 1):
+abstract contract SingletonNFTOwned is SingletonERC721 {
+    uint256 public constant TOKEN_ID = 1;
 
     modifier onlyOwnerNFT() {
-        require(ownerOf(OWNERSHIP_TOKEN_ID) == msg.sender, "Not NFT owner");
+        if (ownerOf(TOKEN_ID) != msg.sender) revert NotOwnerNFT();
         _;
     }
 }
+// UniSmartWallet mints the singleton to msg.sender in its constructor (via _mintSingleton).
 ```
 
 **Properties:**
@@ -60,7 +77,7 @@ function setOperator(address op, bool allowed) external onlyOwnerNFT {
 
 modifier onlyAuthorized() {
     require(
-        ownerOf(OWNERSHIP_TOKEN_ID) == msg.sender || operators[msg.sender],
+        ownerOf(TOKEN_ID) == msg.sender || operators[msg.sender],
         "Not authorized"
     );
     _;
@@ -122,12 +139,12 @@ Before submitting `openPosition`, the operator should also cross-check `PoolKey.
 ```
 Setup (one-time at deploy):
   - UniSmartWallet deployed with initialOwner
-  - Singleton NFT (tokenId=0) minted to initialOwner
+  - Singleton NFT (TOKEN_ID=1) minted to the deployer (msg.sender)
   - Wallet starts with zero balance
 
 Capital management:
-  - Owner / anyone deposits ETH and ERC-20 tokens to wallet
-  - Owner (only) withdraws via withdrawERC20 / withdrawNative
+  - Owner / anyone deposits native (receive) and ERC-20 (plain transfer) to the wallet
+  - Owner (only) withdraws / makes arbitrary calls via executeEncodedTx / executeEncodedTxBatch
 
 Open position (called by NFT owner or operator):
   - openPosition(poolKey, tickLower, tickUpper, liquidity, salt,
@@ -163,10 +180,9 @@ Poke (collect fees without closing):
 ## API Surface
 
 ```solidity
-contract UniSmartWallet is ERC721, IUnlockCallback, ReentrancyGuard {
-    // ─── Constructor / immutables ───
-    IPoolManager public immutable POOL_MANAGER;
-    uint256 public constant OWNERSHIP_TOKEN_ID = 0;
+contract UniSmartWallet is SingletonNFTOwned, SmartWallet, V4PositionManager {
+    // POOL_MANAGER (immutable) + the position registry live in V4PositionManager;
+    // TOKEN_ID = 1, operators + auth live in SingletonNFTOwned.
 
     // ─── State ───
     struct Position {
@@ -184,13 +200,13 @@ contract UniSmartWallet is ERC721, IUnlockCallback, ReentrancyGuard {
 
     // Hook policy is a hard hookless-only gate (no state) — see "Pool Selection & Validation".
 
-    // ─── Capital management ───
-    receive() external payable;  // anyone can deposit native
-    function depositERC20(address token, uint256 amount) external;  // anyone can deposit
-    function withdrawERC20(address token, uint256 amount, address to)
-        external onlyOwnerNFT nonReentrant;
-    function withdrawNative(uint256 amount, address payable to)
-        external onlyOwnerNFT nonReentrant;
+    // ─── Capital in/out ───
+    // Deposits: ERC-20 needs no function (plain IERC20.transfer to the wallet); native via the
+    // inherited SmartWallet.receive(). Withdrawals + arbitrary owner calls go through:
+    function executeEncodedTx(address target, uint256 value, bytes memory data)
+        external onlyOwnerNFT returns (bytes memory);
+    function executeEncodedTxBatch(address[] calldata targets, uint256[] calldata values, bytes[] memory datas)
+        external onlyOwnerNFT returns (bytes[] memory);
 
     // ─── Position operations ───
     function openPosition(
@@ -219,23 +235,27 @@ contract UniSmartWallet is ERC721, IUnlockCallback, ReentrancyGuard {
     // ─── V4 unlock callback ───
     function unlockCallback(bytes calldata data) external returns (bytes memory);
 
+    // ─── Metadata (task_013) ───
+    function setPositionDescriptor(address descriptor) external onlyOwnerNFT;
+    function tokenURI(uint256 id) external view returns (string memory); // → IWalletDescriptor; "" if unset
+    // ERC-4906 MetadataUpdate(TOKEN_ID) on every position mutation; supportsInterface advertises 0x49064906.
+
     // ─── Views ───
     function positionOf(bytes32 salt) external view returns (Position memory);
     function openPositionCount() external view returns (uint256);
-    function ownerNFTHolder() external view returns (address) {
-        return ownerOf(OWNERSHIP_TOKEN_ID);
-    }
+    // Holder lookup is just ownerOf(TOKEN_ID) — there is no ownerNFTHolder() alias.
 }
 ```
 
-Constructor:
+Constructor (owner is the deployer; `POOL_MANAGER` set in the base):
 
 ```solidity
-constructor(address initialOwner, IPoolManager poolManager_)
-    ERC721("UniSmartWallet Ownership", "JLPW")
+constructor(IPoolManager poolManager_)
+    SingletonERC721("ERC721 Name", "ERC721 symbol")
+    V4PositionManager(poolManager_)   // sets the POOL_MANAGER immutable in the base
 {
-    POOL_MANAGER = poolManager_;
-    _mint(initialOwner, OWNERSHIP_TOKEN_ID);
+    _mintSingleton(msg.sender);       // singleton NFT → deployer
+    // + Envelop oracle-compat events (EnvelopV2OracleType / EnvelopWrappedV2) and ERC-4906 init.
 }
 ```
 
@@ -247,10 +267,10 @@ Collision: if caller reuses a salt while a position is still open, `openPosition
 
 ## Capital flow
 
-- Deposit: ETH via `receive()` payable; ERC-20 via `depositERC20` (pull pattern). Anyone can deposit (donation-friendly).
-- Open position: settled from wallet's token balance, no external pull needed.
-- Close position: tokens returned to wallet balance.
-- Withdraw: only NFT owner.
+- Deposit: native via the inherited `receive()`; ERC-20 needs **no wallet function** — a plain `IERC20.transfer` to the wallet address updates the balance (the token's own `Transfer` event suffices for indexers). Anyone can deposit (donation-friendly).
+- Open position: settled from the wallet's token/native balance, no external pull needed.
+- Close position: tokens (and native, for ETH pairs) returned to the wallet balance.
+- Withdraw / arbitrary calls: `executeEncodedTx` / `executeEncodedTxBatch`, NFT-owner only.
 
 ## NFT transfer semantics
 
@@ -294,7 +314,7 @@ Transferring the ownership NFT (`safeTransferFrom`) atomically transfers all wal
 | Pool discovery | Off-chain (operator/bot via Trading API `/quote`); on-chain validates hookless + pool existence |
 | Hook policy | Hard hookless-only gate: `key.hooks == address(0)` else revert `HookNotAllowed`. No whitelist/registry (see `task_012`) |
 | Slippage protection | `openPosition` takes `amount0Max` / `amount1Max`; callback reverts on exceed |
-| Reentrancy | `nonReentrant` on `withdraw*` and on position operations (`open` / `close` / `decrease` / `poke`) |
+| Reentrancy | `nonReentrant` on the position operations (`open` / `close` / `decrease` / `poke`); capital exits are owner-only `executeEncodedTx*` |
 
 ## Verification Plan
 
@@ -309,9 +329,9 @@ Test cases:
 - `test_singletonNFT_cannotBurn`
 - `test_nftTransfer_handsOverControl`
 - `test_nftTransfer_clearsOperators`
-- `test_depositERC20_anyoneCanDeposit`
-- `test_withdrawERC20_byNFTOwner_succeeds`
-- `test_withdrawERC20_byNonOwner_reverts`
+- `test_erc20Deposit_plainTransfer_updatesBalance`
+- `test_executeEncodedTx_byNFTOwner_succeeds`
+- `test_executeEncodedTx_byNonOwner_reverts`
 - `test_openPosition_byNFTOwner_succeeds`
 - `test_openPosition_byOperator_succeeds`
 - `test_openPosition_byNonAuthorized_reverts`
