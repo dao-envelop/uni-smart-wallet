@@ -1,6 +1,6 @@
 {
   "chainId": 1301,
-  "descriptor": "0x32f1075607fdC893Bbf1367Ca2ca38C02B66d5dF",
+  "descriptor": "0xd1C5c34aFe6f97D5F1323594bcfD3d0a9E99d4e7",
   "factory": "0x28FCfBfe685eFde342FA9eb99a6BDfBA5F93CC39",
   "feeRedeemer": "0x564C2c8B7510840EBeE929028f9800eA59DBd668",
   "fromBlock": 55613383,
