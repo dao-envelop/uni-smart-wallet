@@ -54,8 +54,33 @@ contract StableLPFactoryTest is StableLPTestBase {
         factory.createManager(p);
     }
 
-    function test_name_symbol_constantsOnClone() public view {
+    function test_name_defaultAndSymbolOnClone() public view {
+        // setUp's _initParams names the clone "Envelop StableLP"; symbol is a shared constant.
         assertEq(mgr.name(), "Envelop StableLP");
         assertEq(mgr.symbol(), "eStableLP");
+    }
+
+    function test_name_customPerClone() public {
+        StableLPManager.InitParams memory p = _initParams(owner);
+        p.name = bytes32("Acme USD Vault");
+        StableLPManager m = StableLPManager(payable(factory.createManager(p)));
+        assertEq(m.name(), "Acme USD Vault", "custom name round-trips");
+        assertEq(m.symbol(), "eStableLP", "symbol unchanged");
+    }
+
+    function test_name_maxLength31() public {
+        string memory max31 = "Envelop StableLP Vault v2 Alpha"; // 31 chars
+        assertEq(bytes(max31).length, 31, "fixture is 31 bytes");
+        StableLPManager.InitParams memory p = _initParams(owner);
+        p.name = bytes32(bytes(max31));
+        StableLPManager m = StableLPManager(payable(factory.createManager(p)));
+        assertEq(m.name(), max31, "31-char name round-trips");
+    }
+
+    function test_name_emptyIsEmptyString() public {
+        StableLPManager.InitParams memory p = _initParams(owner);
+        p.name = bytes32(0);
+        StableLPManager m = StableLPManager(payable(factory.createManager(p)));
+        assertEq(m.name(), "", "empty packed name decodes to empty string");
     }
 }

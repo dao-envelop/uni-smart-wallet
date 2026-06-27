@@ -1,6 +1,7 @@
 {
   "_comment": "Parallel-array pool config for CreateManager.s.sol. Every array must be the same length (one entry per pool). currency0 < currency1 (sorted). hooks must be 0x0 (hookless gate). Tick range must be valid for the tickSpacing. Replace the placeholder token addresses with real sorted stable pairs on the target chain.",
   "owner": "0x0000000000000000000000000000000000000000",
+  "name": "Envelop StableLP",
   "currency0": ["0x0000000000000000000000000000000000000000"],
   "currency1": ["0x0000000000000000000000000000000000000001"],
   "fee": [500],

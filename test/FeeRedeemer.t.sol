@@ -136,7 +136,11 @@ contract FeeRedeemerNativeTest is Test {
         StableLPFactory factory = new StableLPFactory(address(impl));
         StableLPManager.PoolConfig[] memory cfgs = new StableLPManager.PoolConfig[](1);
         cfgs[0] = StableLPManager.PoolConfig({key: key, tickLower: -SPACING, tickUpper: SPACING});
-        mgr = StableLPManager(payable(factory.createManager(StableLPManager.InitParams({owner: owner, pools: cfgs}))));
+        mgr = StableLPManager(
+            payable(factory.createManager(
+                    StableLPManager.InitParams({owner: owner, name: bytes32("Envelop StableLP"), pools: cfgs})
+                ))
+        );
 
         vm.deal(address(mgr), 100 ether);
         MockERC20(Currency.unwrap(token)).mint(address(mgr), 1_000e18);

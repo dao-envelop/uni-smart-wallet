@@ -105,7 +105,7 @@ abstract contract StableLPTestBase is Test {
         for (uint8 i = 0; i < 3; ++i) {
             cfgs[i] = StableLPManager.PoolConfig({key: poolKeys[i], tickLower: TL, tickUpper: TU});
         }
-        p = StableLPManager.InitParams({owner: owner_, pools: cfgs});
+        p = StableLPManager.InitParams({owner: owner_, name: bytes32("Envelop StableLP"), pools: cfgs});
     }
 
     /// @dev Position salt == poolId (one position per pool).

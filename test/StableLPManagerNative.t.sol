@@ -44,7 +44,11 @@ contract StableLPManagerNativeTest is Test {
         StableLPFactory factory = new StableLPFactory(address(impl));
         StableLPManager.PoolConfig[] memory cfgs = new StableLPManager.PoolConfig[](1);
         cfgs[0] = StableLPManager.PoolConfig({key: key, tickLower: TL, tickUpper: TU});
-        mgr = StableLPManager(payable(factory.createManager(StableLPManager.InitParams({owner: owner, pools: cfgs}))));
+        mgr = StableLPManager(
+            payable(factory.createManager(
+                    StableLPManager.InitParams({owner: owner, name: bytes32("Envelop StableLP"), pools: cfgs})
+                ))
+        );
 
         // Fund the manager with native ETH + the pair token.
         vm.deal(address(mgr), 100 ether);

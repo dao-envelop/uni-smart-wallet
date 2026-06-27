@@ -10,7 +10,7 @@ import {StableLPManager} from "../src/StableLPManager.sol";
 
 /// Exposes CreateManager's internal config parser for assertions.
 contract CreateManagerHarness is CreateManager {
-    function parse(string memory json) external pure returns (StableLPManager.InitParams memory) {
+    function parse(string memory json) external view returns (StableLPManager.InitParams memory) {
         return _parseConfig(json);
     }
 }
@@ -66,6 +66,7 @@ contract DeployStableLPTest is Test {
 
         StableLPManager.InitParams memory p = h.parse(json);
         assertEq(p.owner, address(0xAA), "owner");
+        assertEq(p.name, bytes32("Envelop StableLP"), "name defaults when key absent");
         assertEq(p.pools.length, 2, "pool count");
 
         assertEq(Currency.unwrap(p.pools[0].key.currency0), address(0x10), "c0[0]");
@@ -95,6 +96,39 @@ contract DeployStableLPTest is Test {
             )
         );
         vm.expectRevert(CreateManager.LengthMismatch.selector);
+        h.parse(json);
+    }
+
+    function test_parseConfig_customNamePacked() public {
+        CreateManagerHarness h = new CreateManagerHarness();
+        string memory json = string(
+            abi.encodePacked(
+                '{"owner":"0x00000000000000000000000000000000000000aa",',
+                '"name":"Acme USD Vault",',
+                '"currency0":["0x0000000000000000000000000000000000000010"],',
+                '"currency1":["0x0000000000000000000000000000000000000020"],',
+                '"fee":[500],"tickSpacing":[10],',
+                '"hooks":["0x0000000000000000000000000000000000000000"],',
+                '"tickLower":[-100],"tickUpper":[100]}'
+            )
+        );
+        assertEq(h.parse(json).name, bytes32("Acme USD Vault"), "custom name packed");
+    }
+
+    function test_parseConfig_nameTooLong_reverts() public {
+        CreateManagerHarness h = new CreateManagerHarness();
+        string memory json = string(
+            abi.encodePacked(
+                '{"owner":"0x00000000000000000000000000000000000000aa",',
+                '"name":"This name is definitely longer than 31",', // 38 chars
+                '"currency0":["0x0000000000000000000000000000000000000010"],',
+                '"currency1":["0x0000000000000000000000000000000000000020"],',
+                '"fee":[500],"tickSpacing":[10],',
+                '"hooks":["0x0000000000000000000000000000000000000000"],',
+                '"tickLower":[-100],"tickUpper":[100]}'
+            )
+        );
+        vm.expectRevert(abi.encodeWithSelector(CreateManager.NameTooLong.selector, 38));
         h.parse(json);
     }
 }

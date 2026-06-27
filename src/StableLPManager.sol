@@ -58,6 +58,7 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
 
     struct InitParams {
         address owner; // receives the singleton NFT
+        bytes32 name; // NFT name, packed (≤31 chars, trailing zeros trimmed); "" ⇒ empty name()
         PoolConfig[] pools; // 1..MAX_POOLS arbitrary stable pools
     }
 
@@ -110,6 +111,7 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
     /// @notice Enumerable union of all currencies across `pools` (for net settlement).
     Currency[] public managedStables;
     bool private _initialized;
+    bytes32 private _name; // per-clone NFT name, packed; set once in initialize
 
     /// @notice External on-chain metadata renderer for `tokenURI`. Zero ⇒ `tokenURI` returns "".
     address public positionDescriptor;
@@ -162,6 +164,7 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
     function initialize(InitParams calldata p) external {
         if (_initialized) revert AlreadyInitialized();
         _initialized = true;
+        _name = p.name;
 
         uint256 n = p.pools.length;
         if (n == 0) revert NoPools();
@@ -196,9 +199,16 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
         }
     }
 
-    // Clones don't run the ERC721 constructor, so expose name/symbol as constants.
-    function name() public pure override returns (string memory) {
-        return "Envelop StableLP";
+    // Clones don't run the ERC721 constructor, so derive name from packed storage; symbol is shared.
+    function name() public view override returns (string memory) {
+        bytes32 n = _name;
+        uint256 len;
+        while (len < 32 && n[len] != 0) ++len;
+        bytes memory b = new bytes(len);
+        for (uint256 i; i < len; ++i) {
+            b[i] = n[i];
+        }
+        return string(b);
     }
 
     function symbol() public pure override returns (string memory) {
