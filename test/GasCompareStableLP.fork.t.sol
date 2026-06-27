@@ -243,7 +243,9 @@ contract GasCompareStableLPForkTest is Test {
         PoolKey[3] memory ks = [kUSDCUSDT, kDAIUSDT, kDAIUSDC];
         vm.startPrank(owner);
         g = gasleft();
-        for (uint256 i = 0; i < 3; ++i) mgr.reinvest(_reinvestLeg(ks[i]));
+        for (uint256 i = 0; i < 3; ++i) {
+            mgr.reinvest(_reinvestLeg(ks[i]));
+        }
         uint256 gReinvest = g - gasleft();
         vm.stopPrank();
 
@@ -351,7 +353,9 @@ contract GasCompareStableLPForkTest is Test {
         PoolKey[3] memory ks = [kUSDCUSDT, kDAIUSDT, kDAIUSDC];
         vm.startPrank(eoa);
         g = gasleft();
-        for (uint256 i = 0; i < 3; ++i) _collectAndCompound(posm, firstId + i, ks[i]);
+        for (uint256 i = 0; i < 3; ++i) {
+            _collectAndCompound(posm, firstId + i, ks[i]);
+        }
         uint256 gReinvest = g - gasleft();
         vm.stopPrank();
 
@@ -404,7 +408,10 @@ contract GasCompareStableLPForkTest is Test {
 
         // compound: increase by a small fixed liquidity (represents re-adding harvested fees)
         Plan memory ip = Planner.init();
-        ip = ip.add(Actions.INCREASE_LIQUIDITY, abi.encode(tokenId, uint256(1e6), type(uint128).max, type(uint128).max, bytes("")));
+        ip = ip.add(
+            Actions.INCREASE_LIQUIDITY,
+            abi.encode(tokenId, uint256(1e6), type(uint128).max, type(uint128).max, bytes(""))
+        );
         bytes memory data = ip.finalizeModifyLiquidityWithSettlePair(k);
         posm.modifyLiquidities(data, block.timestamp + 60);
     }
