@@ -10,9 +10,12 @@ import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {StableLPManager} from "../src/StableLPManager.sol";
 import {StableLPFactory} from "../src/StableLPFactory.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
+import {PoolSwapTest} from "@uniswap/v4-core/src/test/PoolSwapTest.sol";
+import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 
 interface IERC20Min {
     function balanceOf(address) external view returns (uint256);
+    function approve(address, uint256) external returns (bool);
 }
 
 interface IStateViewMin {
@@ -44,6 +47,7 @@ contract GasCompareStableLPForkTest is Test {
     PoolKey internal kDAIUSDT; // DAI/USDT
 
     bool internal forkActive;
+    PoolSwapTest internal swapRouter;
 
     function setUp() public {
         string memory rpc = vm.envOr("MAINNET_RPC", string(""));
@@ -59,6 +63,52 @@ contract GasCompareStableLPForkTest is Test {
         kUSDCUSDT = _key(USDC, USDT);
         kDAIUSDC = _key(DAI, USDC);
         kDAIUSDT = _key(DAI, USDT);
+
+        swapRouter = new PoolSwapTest(POOL_MANAGER);
+    }
+
+    // Generate fee volume with NON-USDT inputs only (PoolSwapTest pays the input token via the test
+    // CurrencySettler, which can't pay USDT). Enough to accrue fees to in-range positions.
+    function _genFees() internal {
+        address trader = makeAddr("trader");
+        deal(USDC, trader, 2_000e6);
+        deal(DAI, trader, 2_000e18);
+        vm.startPrank(trader);
+        IERC20Min(USDC).approve(address(swapRouter), type(uint256).max);
+        IERC20Min(DAI).approve(address(swapRouter), type(uint256).max);
+        for (uint256 i = 0; i < 3; ++i) {
+            _swapExactIn(kUSDCUSDT, USDC, 200e6); // USDC→USDT (pay USDC)
+            _swapExactIn(kDAIUSDC, DAI, 200e18); // DAI→USDC
+            _swapExactIn(kDAIUSDC, USDC, 200e6); // USDC→DAI (bidirectional on the no-USDT pool)
+            _swapExactIn(kDAIUSDT, DAI, 200e18); // DAI→USDT (pay DAI)
+        }
+        vm.stopPrank();
+    }
+
+    function _swapExactIn(PoolKey memory k, address tokenIn, uint256 amtIn) internal {
+        bool zeroForOne = Currency.unwrap(k.currency0) == tokenIn;
+        swapRouter.swap(
+            k,
+            SwapParams({
+                zeroForOne: zeroForOne,
+                amountSpecified: -int256(amtIn),
+                sqrtPriceLimitX96: zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
+            }),
+            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}),
+            ""
+        );
+    }
+
+    function _reinvestLeg(PoolKey memory k) internal pure returns (StableLPManager.AllocLeg memory) {
+        return StableLPManager.AllocLeg({
+            poolId: k.toId(),
+            zeroForOne: false,
+            swapAmountIn: 0,
+            swapPriceLimit: 0,
+            amount0Desired: 0, // reinvest sizes the add from realized fee deltas
+            amount1Desired: 0,
+            minLiquidity: 0
+        });
     }
 
     function _key(address a, address b) internal pure returns (PoolKey memory) {
@@ -138,10 +188,21 @@ contract GasCompareStableLPForkTest is Test {
         uint256 usdtLeft = IERC20Min(USDT).balanceOf(address(mgr));
         assertLt(usdtLeft, FUND / 10, "at least ~90% USDT deployed");
 
+        // ── reinvest: accrue fees, then compound each pool ──
+        _genFees();
+        PoolKey[3] memory ks = [kUSDCUSDT, kDAIUSDT, kDAIUSDC];
+        vm.startPrank(owner);
+        g = gasleft();
+        for (uint256 i = 0; i < 3; ++i) mgr.reinvest(_reinvestLeg(ks[i]));
+        uint256 gReinvest = g - gasleft();
+        vm.stopPrank();
+
         console2.log("== StableLP ==");
         console2.log("  createManager", gCreate);
         console2.log("  deposit", gDeposit);
         console2.log("  allocate(3, incl swaps)", gAllocate);
+        console2.log("  reinvest(3)", gReinvest);
+        console2.log("  TOTAL (excl create)", gDeposit + gAllocate + gReinvest);
         console2.log("  USDT left (dust)", usdtLeft);
     }
 
