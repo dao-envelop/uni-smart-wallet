@@ -29,7 +29,7 @@ contract UniSmartWallet is SingletonNFTOwned, SmartWallet, V4PositionManager {
     event EnvelopV2OracleType(uint256 indexed oracleType, string contractName);
     event EnvelopWrappedV2(address indexed creator, uint256 indexed wnftTokenId, bytes32 indexed rules, bytes data);
 
-    constructor(IPoolManager poolManager_) ERC721("ERC721 Name", "ERC721 symbol") V4PositionManager(poolManager_) {
+    constructor(IPoolManager poolManager_) ERC721("Envelop UniSmartWallet", "eUSW") V4PositionManager(poolManager_) {
         _mintSingleton(msg.sender);
         emit IERC4906.MetadataUpdate(TOKEN_ID);
         // We use these events to be compatable with existing envelop oracle
