@@ -131,8 +131,11 @@ contract StableLPManyPoolsTest is Test {
             });
         }
 
-        StableLPManager mgr =
-            StableLPManager(payable(factory.createManager(StableLPManager.InitParams({owner: owner, pools: cfgs}))));
+        StableLPManager mgr = StableLPManager(
+            payable(factory.createManager(
+                    StableLPManager.InitParams({owner: owner, name: bytes32("Envelop StableLP"), pools: cfgs})
+                ))
+        );
 
         assertEq(mgr.poolCount(), 7, "seven pools configured");
         assertEq(mgr.managedStablesCount(), 8, "hub + 7 spokes");

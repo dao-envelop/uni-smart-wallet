@@ -91,8 +91,11 @@ contract StableLPUninitializedPoolTest is Test {
 
         StableLPManager.PoolConfig[] memory cfgs = new StableLPManager.PoolConfig[](1);
         cfgs[0] = StableLPManager.PoolConfig({key: key, tickLower: -60, tickUpper: 60});
-        StableLPManager mgr =
-            StableLPManager(payable(factory.createManager(StableLPManager.InitParams({owner: owner, pools: cfgs}))));
+        StableLPManager mgr = StableLPManager(
+            payable(factory.createManager(
+                    StableLPManager.InitParams({owner: owner, name: bytes32("Envelop StableLP"), pools: cfgs})
+                ))
+        );
 
         // Fund the manager so settlement isn't the first thing to fail.
         MockERC20(Currency.unwrap(c0)).mint(address(mgr), 100e18);
