@@ -21,6 +21,7 @@ import {StableLPFactory} from "../src/StableLPFactory.sol";
 contract CreateManager is Script {
     error LengthMismatch();
     error NoPools();
+    error NameTooLong(uint256 length);
 
     function run() external returns (address manager) {
         address factory = _readFactory(block.chainid);
@@ -42,8 +43,12 @@ contract CreateManager is Script {
         return vm.parseJsonAddress(json, ".factory");
     }
 
-    function _parseConfig(string memory json) internal pure returns (StableLPManager.InitParams memory p) {
+    function _parseConfig(string memory json) internal view returns (StableLPManager.InitParams memory p) {
         p.owner = vm.parseJsonAddress(json, ".owner");
+        // Optional NFT name (≤31 chars), packed into bytes32; defaults to the shared brand name.
+        p.name = vm.keyExistsJson(json, ".name")
+            ? _packName(vm.parseJsonString(json, ".name"))
+            : bytes32("Envelop StableLP");
 
         address[] memory c0 = vm.parseJsonAddressArray(json, ".currency0");
         address[] memory c1 = vm.parseJsonAddressArray(json, ".currency1");
@@ -73,6 +78,15 @@ contract CreateManager is Script {
                 tickLower: int24(lower[i]),
                 tickUpper: int24(upper[i])
             });
+        }
+    }
+
+    /// @dev Left-align ≤31 ASCII chars into a bytes32 (matches the manager's `name()` decode).
+    function _packName(string memory s) internal pure returns (bytes32 r) {
+        bytes memory b = bytes(s);
+        if (b.length > 31) revert NameTooLong(b.length);
+        for (uint256 i = 0; i < b.length; ++i) {
+            r |= bytes32(uint256(uint8(b[i])) << (8 * (31 - i)));
         }
     }
 }
