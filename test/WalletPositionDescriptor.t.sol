@@ -14,6 +14,7 @@ import {UniSmartWallet} from "../src/UniSmartWallet.sol";
 import {SingletonNFTOwned} from "../src/abstract/SingletonNFTOwned.sol";
 import {WalletPositionDescriptor} from "../src/WalletPositionDescriptor.sol";
 import {MockERC20} from "./helpers/Mocks.sol";
+import {DescriptorLibWrapper} from "./helpers/DescriptorLibWrapper.sol";
 import {V4WalletTestBase} from "./helpers/V4WalletTestBase.sol";
 
 contract WalletPositionDescriptorTest is V4WalletTestBase {
@@ -120,6 +121,42 @@ contract WalletPositionDescriptorTest is V4WalletTestBase {
         assertEq(json.readInt(".positions[1].tickLower"), int256(int24(-2 * SPACING)), "pos1 tickLower");
     }
 
+    // ────────── image: total value, APR, icons ──────────
+
+    /// @notice After fees accrue and time passes, the new attributes carry a positive total value
+    /// and a positive approximate APR; the SVG image carries the name, `~APR`, and token symbols.
+    function test_tokenURI_totalValueAndApr_render() public {
+        _open(bytes32(uint256(1)), -SPACING, SPACING);
+        _open(bytes32(uint256(2)), -2 * SPACING, 2 * SPACING);
+        _swap(true, -1e15);
+        _swap(false, -1e15);
+        vm.warp(block.timestamp + 30 days); // elapsed > 0 so APR is defined
+
+        string memory json = _decodeJson(wallet.tokenURI(1));
+
+        // attributes: [0] Open Positions, [1] Total Value (USD), [2] Est. APR (bps)
+        assertEq(json.readString(".attributes[1].trait_type"), "Total Value (USD)", "value trait");
+        assertTrue(
+            keccak256(bytes(json.readString(".attributes[1].value"))) != keccak256(bytes("0.00")), "total value > 0"
+        );
+        assertEq(json.readString(".attributes[2].trait_type"), "Est. APR (bps)", "apr trait");
+        assertGt(vm.parseUint(json.readString(".attributes[2].value")), 0, "apr bps > 0");
+
+        // image carries the header, APR label, and the (MockERC20) ticker
+        string memory svg = _decodeImage(json);
+        assertTrue(_contains(svg, "Envelop UniSmartWallet"), "svg header");
+        assertTrue(_contains(svg, "~APR:"), "svg apr label");
+        assertTrue(_contains(svg, "MCK"), "svg token symbol");
+        assertTrue(_contains(svg, "<svg"), "svg root");
+    }
+
+    function test_tokenURI_emptyPortfolio_zeroValueAndApr() public {
+        string memory json = _decodeJson(wallet.tokenURI(1));
+        assertEq(json.readString(".attributes[0].value"), "0", "no positions");
+        assertEq(json.readString(".attributes[1].value"), "0.00", "zero total value");
+        assertEq(json.readString(".attributes[2].value"), "0", "zero apr");
+    }
+
     /// @dev Strip the `data:application/json;base64,` prefix and base64-decode via ffi → raw JSON.
     function _decodeJson(string memory dataUri) internal returns (string memory) {
         string memory b64 = _afterPrefix(dataUri, JSON_PREFIX);
@@ -128,6 +165,33 @@ contract WalletPositionDescriptorTest is V4WalletTestBase {
         cmd[1] = "-c";
         cmd[2] = string.concat("printf '%s' '", b64, "' | base64 -d");
         return string(vm.ffi(cmd));
+    }
+
+    /// @dev Decode the base64 SVG out of the `image` field of an already-decoded JSON string.
+    function _decodeImage(string memory json) internal returns (string memory) {
+        string memory b64 = _afterPrefix(json.readString(".image"), "data:image/svg+xml;base64,");
+        string[] memory cmd = new string[](3);
+        cmd[0] = "bash";
+        cmd[1] = "-c";
+        cmd[2] = string.concat("printf '%s' '", b64, "' | base64 -d");
+        return string(vm.ffi(cmd));
+    }
+
+    function _contains(string memory haystack, string memory needle) internal pure returns (bool) {
+        bytes memory h = bytes(haystack);
+        bytes memory ndl = bytes(needle);
+        if (ndl.length == 0 || h.length < ndl.length) return false;
+        for (uint256 i = 0; i <= h.length - ndl.length; ++i) {
+            bool ok = true;
+            for (uint256 j = 0; j < ndl.length; ++j) {
+                if (h[i + j] != ndl[j]) {
+                    ok = false;
+                    break;
+                }
+            }
+            if (ok) return true;
+        }
+        return false;
     }
 
     function _afterPrefix(string memory s, string memory p) internal pure returns (string memory) {
