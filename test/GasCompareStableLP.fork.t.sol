@@ -12,10 +12,60 @@ import {StableLPFactory} from "../src/StableLPFactory.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {PoolSwapTest} from "@uniswap/v4-core/src/test/PoolSwapTest.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
+import {BalanceDelta, BalanceDeltaLibrary} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {CurrencyLibrary} from "@uniswap/v4-core/src/types/Currency.sol";
+import {IUnlockCallback} from "@uniswap/v4-core/src/interfaces/callback/IUnlockCallback.sol";
+import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
+import {Actions} from "@uniswap/v4-periphery/src/libraries/Actions.sol";
+import {Planner, Plan} from "@uniswap/v4-periphery/test/shared/Planner.sol";
+import {LiquidityAmounts} from "@uniswap/v4-periphery/src/libraries/LiquidityAmounts.sol";
+import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol";
 
 interface IERC20Min {
     function balanceOf(address) external view returns (uint256);
     function approve(address, uint256) external returns (bool);
+}
+
+/// @notice Minimal USDT-safe v4 swap router for the fork test: settles the input from its OWN
+/// (test-dealt) balance via the production CurrencyLibrary.transfer, takes the output to `recipient`.
+/// (PoolSwapTest can't pay USDT.)
+contract ForkSwapRouter is IUnlockCallback {
+    using CurrencyLibrary for Currency;
+    using BalanceDeltaLibrary for BalanceDelta;
+
+    IPoolManager public immutable PM;
+
+    constructor(IPoolManager pm) {
+        PM = pm;
+    }
+
+    function swap(PoolKey memory key, bool zeroForOne, uint256 amtIn, address recipient) external {
+        PM.unlock(abi.encode(key, zeroForOne, amtIn, recipient));
+    }
+
+    function unlockCallback(bytes calldata data) external returns (bytes memory) {
+        require(msg.sender == address(PM), "only pm");
+        (PoolKey memory key, bool z, uint256 amtIn, address recipient) =
+            abi.decode(data, (PoolKey, bool, uint256, address));
+        BalanceDelta delta = PM.swap(
+            key,
+            SwapParams({
+                zeroForOne: z,
+                amountSpecified: -int256(amtIn),
+                sqrtPriceLimitX96: z ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
+            }),
+            ""
+        );
+        Currency inC = z ? key.currency0 : key.currency1;
+        Currency outC = z ? key.currency1 : key.currency0;
+        int128 inDelta = z ? delta.amount0() : delta.amount1(); // negative (owed)
+        int128 outDelta = z ? delta.amount1() : delta.amount0(); // positive (credit)
+        PM.sync(inC);
+        inC.transfer(address(PM), uint256(uint128(-inDelta))); // pay from own dealt balance — USDT-safe
+        PM.settle();
+        PM.take(outC, recipient, uint256(uint128(outDelta)));
+        return "";
+    }
 }
 
 interface IStateViewMin {
@@ -257,5 +307,105 @@ contract GasCompareStableLPForkTest is Test {
 
     function _saltOf(PoolKey memory k) internal pure returns (bytes32) {
         return PoolId.unwrap(k.toId());
+    }
+
+    // ───────────────────────── Baseline: Uniswap v4 PositionManager ─────────────────────────
+
+    function test_baseline_path() public {
+        if (!forkActive) return;
+        address eoa = makeAddr("baseline_eoa");
+        IPositionManager posm = IPositionManager(POSITION_MANAGER);
+        ForkSwapRouter router = new ForkSwapRouter(POOL_MANAGER);
+
+        // Generous balances (post-swap holdings); swaps are measured separately below.
+        deal(USDT, eoa, 200e6);
+        deal(USDC, eoa, 200e6);
+        deal(DAI, eoa, 200e18);
+        // Router pays the swap inputs from its own balance.
+        deal(USDT, address(router), 65e6);
+        deal(USDC, address(router), 16e6);
+
+        // ── swaps: 3 representative v4 swaps (USDT→USDC, USDT→DAI, USDC→DAI) ──
+        uint256 g = gasleft();
+        router.swap(kUSDCUSDT, Currency.unwrap(kUSDCUSDT.currency0) == USDT, 49e6, eoa);
+        router.swap(kDAIUSDT, Currency.unwrap(kDAIUSDT.currency0) == USDT, 16e6, eoa);
+        router.swap(kDAIUSDC, Currency.unwrap(kDAIUSDC.currency0) == USDC, 16e6, eoa);
+        uint256 gSwaps = g - gasleft();
+
+        vm.startPrank(eoa);
+        _permit2Approve(USDT);
+        _permit2Approve(USDC);
+        _permit2Approve(DAI);
+
+        // ── mint 3 positions ──
+        uint256 firstId = posm.nextTokenId();
+        g = gasleft();
+        _mint(posm, kUSDCUSDT, eoa, 16e6, 16e6);
+        _mint(posm, kDAIUSDT, eoa, 15e18, 15e6);
+        _mint(posm, kDAIUSDC, eoa, 15e18, 15e6);
+        uint256 gMint = g - gasleft();
+        vm.stopPrank();
+
+        // ── reinvest: accrue fees, then collect + compound each position ──
+        _genFees();
+        PoolKey[3] memory ks = [kUSDCUSDT, kDAIUSDT, kDAIUSDC];
+        vm.startPrank(eoa);
+        g = gasleft();
+        for (uint256 i = 0; i < 3; ++i) _collectAndCompound(posm, firstId + i, ks[i]);
+        uint256 gReinvest = g - gasleft();
+        vm.stopPrank();
+
+        console2.log("== Uniswap v4 PositionManager ==");
+        console2.log("  swaps(3)", gSwaps);
+        console2.log("  mint(3)", gMint);
+        console2.log("  reinvest collect+compound(3)", gReinvest);
+        console2.log("  TOTAL", gSwaps + gMint + gReinvest);
+    }
+
+    function _permit2Approve(address token) internal {
+        (bool ok,) = token.call(abi.encodeWithSignature("approve(address,uint256)", PERMIT2, type(uint256).max));
+        require(ok, "permit2 approve");
+        IAllowanceTransfer(PERMIT2).approve(token, POSITION_MANAGER, type(uint160).max, type(uint48).max);
+    }
+
+    function _liq(PoolKey memory k, uint256 amt0, uint256 amt1)
+        internal
+        view
+        returns (uint128 L, int24 lower, int24 upper)
+    {
+        (uint160 sqrtP, int24 tick,,) = STATE_VIEW.getSlot0(k.toId());
+        lower = tick - W;
+        upper = tick + W;
+        L = LiquidityAmounts.getLiquidityForAmounts(
+            sqrtP, TickMath.getSqrtPriceAtTick(lower), TickMath.getSqrtPriceAtTick(upper), amt0, amt1
+        );
+    }
+
+    function _mintParams(PoolKey memory k, int24 lo, int24 hi, uint128 L, uint256 a0, uint256 a1, address owner)
+        internal
+        pure
+        returns (bytes memory)
+    {
+        return abi.encode(k, lo, hi, uint256(L), uint128(a0 * 4), uint128(a1 * 4), owner, bytes(""));
+    }
+
+    function _mint(IPositionManager posm, PoolKey memory k, address owner, uint256 amt0, uint256 amt1) internal {
+        (uint128 L, int24 lo, int24 hi) = _liq(k, amt0, amt1);
+        Plan memory plan = Planner.init().add(Actions.MINT_POSITION, _mintParams(k, lo, hi, L, amt0, amt1, owner));
+        posm.modifyLiquidities(plan.finalizeModifyLiquidityWithSettlePair(k), block.timestamp + 60);
+    }
+
+    function _collectAndCompound(IPositionManager posm, uint256 tokenId, PoolKey memory k) internal {
+        // collect: DECREASE 0 then take both sides to the owner
+        Plan memory cp = Planner.init();
+        cp = cp.add(Actions.DECREASE_LIQUIDITY, abi.encode(tokenId, uint256(0), uint128(0), uint128(0), bytes("")));
+        cp = cp.add(Actions.TAKE_PAIR, abi.encode(k.currency0, k.currency1, msg.sender));
+        posm.modifyLiquidities(cp.encode(), block.timestamp + 60);
+
+        // compound: increase by a small fixed liquidity (represents re-adding harvested fees)
+        Plan memory ip = Planner.init();
+        ip = ip.add(Actions.INCREASE_LIQUIDITY, abi.encode(tokenId, uint256(1e6), type(uint128).max, type(uint128).max, bytes("")));
+        bytes memory data = ip.finalizeModifyLiquidityWithSettlePair(k);
+        posm.modifyLiquidities(data, block.timestamp + 60);
     }
 }
