@@ -8,7 +8,7 @@ import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IUnlockCallback} from "@uniswap/v4-core/src/interfaces/callback/IUnlockCallback.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
-import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {Currency, CurrencyLibrary} from "@uniswap/v4-core/src/types/Currency.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
@@ -27,6 +27,7 @@ import {PositionMath} from "../lib/PositionMath.sol";
 abstract contract V4PositionManager is IUnlockCallback, ReentrancyGuard {
     using StateLibrary for IPoolManager;
     using CurrencySettler for Currency;
+    using CurrencyLibrary for Currency;
 
     /// @notice The V4 PoolManager (per-chain singleton). Set once in the constructor; shared by all
     /// clones of a clone-deployed subclass.
@@ -384,9 +385,19 @@ abstract contract V4PositionManager is IUnlockCallback, ReentrancyGuard {
         delta = POOL_MANAGER.swap(key, params, "");
     }
 
-    /// @dev Pay an owed currency to the PoolManager from this contract's balance.
+    /// @dev Pay an owed currency to the PoolManager from this contract's balance. Uses the
+    /// production v4-core `CurrencyLibrary.transfer` (not the test `CurrencySettler`), so tokens
+    /// whose `transfer` returns no data — e.g. USDT — settle correctly. Mirrors v4-periphery's
+    /// `DeltaResolver._settle`.
     function _settle(Currency currency, uint256 amount) internal {
-        currency.settle(POOL_MANAGER, address(this), amount, false);
+        if (amount == 0) return;
+        POOL_MANAGER.sync(currency);
+        if (currency.isAddressZero()) {
+            POOL_MANAGER.settle{value: amount}();
+        } else {
+            currency.transfer(address(POOL_MANAGER), amount);
+            POOL_MANAGER.settle();
+        }
     }
 
     /// @dev Withdraw a credited currency from the PoolManager to `recipient`. The
