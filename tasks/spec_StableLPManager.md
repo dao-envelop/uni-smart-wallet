@@ -52,13 +52,15 @@ Thereafter:
 - **Immutables (shared across all clones, read through delegatecall):** `POOL_MANAGER` (per-chain V4
   singleton, in the base `V4PositionManager`), `PROTOCOL_TREASURY` (set by the protocol at impl deploy,
   **not** owner-settable). `PROTOCOL_FEE_BPS = 1000` is a `constant`.
-- **`InitParams { address owner; PoolConfig[] pools; }`** — `owner` receives the singleton NFT; the
-  pool set is fixed at init (no `poolManager`/`quote` fields).
+- **`InitParams { address owner; bytes32 name; PoolConfig[] pools; }`** — `owner` receives the
+  singleton NFT; `name` is the per-clone NFT name packed into `bytes32` (≤31 chars; empty ⇒ the default
+  `"Envelop LP Uniswap Manager"`); the pool set is fixed at init (no `poolManager`/`quote` fields).
 - **`PoolConfig { PoolKey key; int24 tickLower; int24 tickUpper; }`** — one config per pool.
 - **Validation in `initialize`** (per pool): hookless-only (`key.hooks == address(0)` else
   `HookNotAllowed`); valid tick range; **duplicate-pool reject** (`DuplicatePool` — required because
-  `salt == poolId`). Pool count bounded `1..MAX_POOLS` (`NoPools` / `TooManyPools`). `name()`/`symbol()`
-  are clone constants (`"Envelop StableLP"` / `"eStableLP"`).
+  `salt == poolId`). Pool count bounded `1..MAX_POOLS` (`NoPools` / `TooManyPools`). `name()` is the
+  per-clone `InitParams.name` (packed `bytes32`, trailing zeros trimmed), falling back to
+  `"Envelop LP Uniswap Manager"` when empty; `symbol()` is the constant `"eStableLP"`.
 - **`managedStables`** — the deduped union of every pool's `currency0`/`currency1`; this is the set of
   stables the manager recognizes (deposit + `withdrawTo` target + net-settlement set).
 
