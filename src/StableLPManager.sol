@@ -42,6 +42,8 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
     uint8 public constant MAX_POOLS = 8;
     /// @notice Protocol fee skimmed from every realized fee accrual, in basis points (10%).
     uint16 public constant PROTOCOL_FEE_BPS = 1000;
+    /// @notice Fallback NFT name used when `InitParams.name` is empty (`bytes32(0)`).
+    bytes32 internal constant DEFAULT_NAME = bytes32("Envelop LP Uniswap Manager");
 
     // Op codes extending the base 0–3 set (see V4PositionManager).
     uint8 internal constant OP_ALLOCATE = 4;
@@ -58,7 +60,7 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
 
     struct InitParams {
         address owner; // receives the singleton NFT
-        bytes32 name; // NFT name, packed (≤31 chars, trailing zeros trimmed); "" ⇒ empty name()
+        bytes32 name; // NFT name, packed (≤31 chars, trailing zeros trimmed); "" ⇒ default name "Envelop LP Uniswap Manager"
         PoolConfig[] pools; // 1..MAX_POOLS arbitrary stable pools
     }
 
@@ -202,6 +204,7 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
     // Clones don't run the ERC721 constructor, so derive name from packed storage; symbol is shared.
     function name() public view override returns (string memory) {
         bytes32 n = _name;
+        if (n == bytes32(0)) n = DEFAULT_NAME; // unnamed clone ⇒ default
         uint256 len;
         while (len < 32 && n[len] != 0) ++len;
         bytes memory b = new bytes(len);

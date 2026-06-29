@@ -77,10 +77,11 @@ contract StableLPFactoryTest is StableLPTestBase {
         assertEq(m.name(), max31, "31-char name round-trips");
     }
 
-    function test_name_emptyIsEmptyString() public {
+    function test_name_emptyFallsBackToDefault() public {
         StableLPManager.InitParams memory p = _initParams(owner);
         p.name = bytes32(0);
         StableLPManager m = StableLPManager(payable(factory.createManager(p)));
-        assertEq(m.name(), "", "empty packed name decodes to empty string");
+        assertEq(m.name(), "Envelop LP Uniswap Manager", "empty packed name falls back to the default");
+        assertEq(m.symbol(), "eStableLP", "symbol unchanged");
     }
 }
