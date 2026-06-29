@@ -1,0 +1,11 @@
+{
+  "chainId": 1,
+  "descriptor": "0x3218aa613C3545cf5Bf1698155e7BBb924A9b791",
+  "factory": "0x17b2B071821E1c3DF2C325E7c53B9D907a8436bE",
+  "feeRedeemer": "0x3352dbb1507182140225B9aFbeb40e604208F9Fe",
+  "fromBlock": 25421992,
+  "impl": "0xe4c62017a9044CE0Bf6519A02626224d9D3aB471",
+  "lens": "0xb309F1f386AaaBe8f1Dc81Fc2226DCe2B23de214",
+  "name": "mainnet",
+  "poolManager": "0x000000000004444c5dc75cB358380D2e3dE08A90"
+}

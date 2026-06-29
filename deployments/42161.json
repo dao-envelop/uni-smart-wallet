@@ -1,0 +1,11 @@
+{
+  "chainId": 42161,
+  "descriptor": "0x7D85544213E61595f8757EBE0D0bF903bafb789d",
+  "factory": "0xAE46573C559d2ef665102E86289685C2602D96e3",
+  "feeRedeemer": "0x430D09A7969A5c6eF2fb5DcE40972d6e66eF5E33",
+  "fromBlock": 25421963,
+  "impl": "0x6Cd8a96c9A6E441Bfeea521F1B8E4b757debbD04",
+  "lens": "0x498E0Bb7F7413272D1cFa3B1219e13598498d428",
+  "name": "arbitrum-one",
+  "poolManager": "0x360E68faCcca8cA495c1B759Fd9EEe466db9FB32"
+}
