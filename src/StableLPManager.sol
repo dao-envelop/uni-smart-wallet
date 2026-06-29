@@ -38,7 +38,7 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
     using TransientStateLibrary for IPoolManager;
 
     /// @notice Envelop V2 oracle type tag emitted at initialize for oracle indexing (constant `2002`).
-    uint256 public constant ORACLE_TYPE = 2002;
+    uint256 public constant ORACLE_TYPE = 3000;
     /// @notice Upper bound on configured pools — caps allocate/settle loop costs.
     uint8 public constant MAX_POOLS = 8;
     /// @notice Protocol fee skimmed from every realized fee accrual, in basis points (10%).
