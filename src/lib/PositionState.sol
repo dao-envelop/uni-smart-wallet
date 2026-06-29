@@ -20,10 +20,15 @@ library PositionState {
 
     uint256 internal constant Q128 = 1 << 128;
 
+    /// @notice Value a position view-only (no `unlock`): principal at the live price + uncollected fees.
     /// @param pm    The V4 PoolManager the position lives in.
     /// @param owner The position owner (the wallet/manager address).
     /// @param salt  The registry salt (mapping key); needed to derive the position id.
     /// @param p     The stored position record (`positions[salt]`).
+    /// @return amount0 currency0 principal at the current price.
+    /// @return amount1 currency1 principal at the current price.
+    /// @return fees0 Uncollected currency0 fees.
+    /// @return fees1 Uncollected currency1 fees.
     function value(IPoolManager pm, address owner, bytes32 salt, V4PositionManager.Position memory p)
         internal
         view

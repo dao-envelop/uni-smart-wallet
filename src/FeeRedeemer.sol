@@ -17,29 +17,46 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 contract FeeRedeemer is IUnlockCallback, Ownable {
     using CurrencyLibrary for Currency;
 
+    /// @notice The V4 PoolManager holding this contract's ERC-6909 fee claims.
     IPoolManager public immutable POOL_MANAGER;
 
     error NotPoolManager();
 
+    /// @notice Emitted for each currency redeemed from claims to ERC-20 / native.
+    /// @param currency The redeemed currency.
+    /// @param to Recipient of the redeemed tokens.
+    /// @param amount Amount redeemed.
     event Redeemed(Currency indexed currency, address indexed to, uint256 amount);
 
+    /// @notice Deploy the redeemer (meant to be the `StableLPManager` PROTOCOL_TREASURY).
+    /// @param poolManager_ The V4 PoolManager where the fee claims accrue.
+    /// @param owner_ The protocol owner allowed to call {redeem}.
     constructor(IPoolManager poolManager_, address owner_) Ownable(owner_) {
         POOL_MANAGER = poolManager_;
     }
 
     /// @notice The redeemable protocol fee: this contract's ERC-6909 claim balance for `currency`.
+    /// @param currency The currency to query.
+    /// @return The redeemable claim balance.
     function claimable(Currency currency) external view returns (uint256) {
         return POOL_MANAGER.balanceOf(address(this), currency.toId());
     }
 
     /// @notice Redeem the full accrued claim of each `currencies[i]` to `to` as ERC-20 / native.
+    /// Owner-only.
     /// @dev The caller supplies the list (the manager's `managedStables`) — the PoolManager cannot
     /// enumerate a holder's claims on-chain. Skips currencies with a zero balance.
+    /// @param currencies The currencies to redeem (typically the manager's `managedStables`).
+    /// @param to Recipient of the redeemed ERC-20 / native tokens.
     function redeem(Currency[] calldata currencies, address to) external onlyOwner {
         POOL_MANAGER.unlock(abi.encode(currencies, to));
     }
 
     /// @inheritdoc IUnlockCallback
+    /// @dev PoolManager unlock callback: burns this contract's claims and `take`s the tokens to `to`.
+    /// Reverts unless called by the PoolManager.
+    /// @param data ABI-encoded `(Currency[] currencies, address to)`.
+    /// @return Empty bytes.
     function unlockCallback(bytes calldata data) external returns (bytes memory) {
         if (msg.sender != address(POOL_MANAGER)) revert NotPoolManager();
         (Currency[] memory currencies, address to) = abi.decode(data, (Currency[], address));

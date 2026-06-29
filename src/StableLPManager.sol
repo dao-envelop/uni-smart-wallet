@@ -37,6 +37,7 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
     using StateLibrary for IPoolManager;
     using TransientStateLibrary for IPoolManager;
 
+    /// @notice Envelop V2 oracle type tag emitted at initialize for oracle indexing (constant `2002`).
     uint256 public constant ORACLE_TYPE = 2002;
     /// @notice Upper bound on configured pools — caps allocate/settle loop costs.
     uint8 public constant MAX_POOLS = 8;
@@ -106,9 +107,11 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
 
     // ────────── State ──────────
 
+    /// @notice The configured pools (fixed at `initialize`); each entry's poolId is its position salt.
     PoolConfig[] public pools;
     /// @notice 1-based index of a pool in `pools` keyed by its poolId (0 ⇒ not configured).
     mapping(PoolId => uint256) internal _poolIndexPlusOne;
+    /// @notice Whether a currency is a managed stable (a currency of some configured pool).
     mapping(Currency => bool) public isManagedStable;
     /// @notice Enumerable union of all currencies across `pools` (for net settlement).
     Currency[] public managedStables;
@@ -125,13 +128,37 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
     // ────────── Events ──────────
 
     // Envelop oracle compatibility (same as UniSmartWallet).
+    /// @notice Emitted once at initialize so existing Envelop V2 oracles can index this manager.
+    /// @param oracleType The Envelop oracle type tag (`ORACLE_TYPE` = 2002).
+    /// @param contractName The contract name (`"StableLPManager"`).
     event EnvelopV2OracleType(uint256 indexed oracleType, string contractName);
+    /// @notice Envelop-compatibility wrap event emitted once at initialize for the singleton token.
+    /// @param creator The manager owner (initial NFT holder).
+    /// @param wnftTokenId The singleton ownership token id (`TOKEN_ID` = 1).
+    /// @param rules Packed Envelop rules (unused here, `0x0000`).
+    /// @param data Extra Envelop payload (empty here).
     event EnvelopWrappedV2(address indexed creator, uint256 indexed wnftTokenId, bytes32 indexed rules, bytes data);
 
+    /// @notice Emitted once when the clone is initialized.
+    /// @param owner The manager owner (singleton NFT holder).
+    /// @param poolManager The V4 PoolManager address.
+    /// @param poolCount Number of configured pools.
     event Initialized(address indexed owner, address poolManager, uint256 poolCount);
+    /// @notice Emitted after an `allocate`/`allocateFrom` deploys liquidity.
+    /// @param legs Number of legs processed.
     event Allocated(uint256 legs);
+    /// @notice Emitted when `withdrawTo` delivers a stable to a recipient.
+    /// @param recipient Address that received the funds.
+    /// @param stable The delivered currency.
+    /// @param amount Amount delivered.
     event WithdrawnTo(address indexed recipient, Currency indexed stable, uint256 amount);
+    /// @notice Emitted when `reinvest` compounds fees back into a position.
+    /// @param salt The position key (`== poolId`).
+    /// @param addedLiquidity Liquidity added by compounding.
     event Reinvested(bytes32 indexed salt, uint128 addedLiquidity);
+    /// @notice Emitted for each protocol-fee skim taken as ERC-6909 claims to the treasury.
+    /// @param currency The skimmed currency.
+    /// @param amount The protocol-fee amount skimmed.
     event ProtocolFeeTaken(Currency indexed currency, uint256 amount);
 
     // ────────── Errors ──────────
@@ -153,16 +180,22 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
     error ZeroAmount();
     error ArrayLengthMismatch();
 
+    /// @notice Deploy the implementation: set the shared immutables and lock the impl from being
+    /// initialized. Clones (the actual managers) are created by {StableLPFactory}, not this constructor.
     /// @dev Sets the shared `POOL_MANAGER` immutable (in the base) and locks the implementation
     /// instance. Clones get fresh storage (`_initialized == false`), never run this constructor, but
     /// DO read the implementation's `POOL_MANAGER` immutable through delegatecall.
+    /// @param poolManager_ The Uniswap V4 PoolManager shared by every clone.
+    /// @param treasury_ The immutable protocol-fee recipient (non-zero; typically a {FeeRedeemer}).
     constructor(IPoolManager poolManager_, address treasury_) ERC721("", "") V4PositionManager(poolManager_) {
         if (treasury_ == address(0)) revert ZeroTreasury();
         PROTOCOL_TREASURY = treasury_;
         _initialized = true;
     }
 
-    /// @notice One-shot initializer, called by the factory on the freshly-cloned proxy.
+    /// @notice One-shot initializer, called by the factory on the freshly-cloned proxy: registers the
+    /// pools + managed stables, mints the singleton NFT to `p.owner`, and reverts if called twice.
+    /// @param p Init parameters: owner, packed NFT name (empty ⇒ default), and 1..MAX_POOLS pools.
     function initialize(InitParams calldata p) external {
         if (_initialized) revert AlreadyInitialized();
         _initialized = true;
@@ -201,6 +234,9 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
         }
     }
 
+    /// @notice The per-clone NFT name. Decodes the packed `_name` set at `initialize`; an empty name
+    /// falls back to the default `"Envelop LP Uniswap Manager"`.
+    /// @return The manager's NFT name.
     // Clones don't run the ERC721 constructor, so derive name from packed storage; symbol is shared.
     function name() public view override returns (string memory) {
         bytes32 n = _name;
@@ -214,11 +250,15 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
         return string(b);
     }
 
+    /// @notice The NFT symbol — the shared constant `"eStableLP"` for every clone.
+    /// @return The manager's NFT symbol.
     function symbol() public pure override returns (string memory) {
         return "eStableLP";
     }
 
     /// @notice Set the external `tokenURI` renderer. Owner-only.
+    /// @param descriptor The {IWalletDescriptor} to render `tokenURI`; the zero address ⇒ `tokenURI`
+    /// returns an empty string.
     function setPositionDescriptor(address descriptor) external onlyOwnerNFT {
         positionDescriptor = descriptor;
         emit IERC4906.MetadataUpdate(TOKEN_ID);
@@ -226,6 +266,8 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
 
     /// @notice On-chain metadata for the singleton ownership token. Delegates to the configured
     /// {IWalletDescriptor}; returns "" if none is set (never reverts).
+    /// @param id The token id (only the singleton `TOKEN_ID` = 1 exists).
+    /// @return The descriptor's data-URI, or "" when no descriptor is configured.
     function tokenURI(uint256 id) public view override returns (string memory) {
         _requireOwned(id);
         address descriptor = positionDescriptor;
@@ -233,14 +275,18 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
         return IWalletDescriptor(descriptor).tokenURI(address(this), id);
     }
 
-    /// @dev Accept native transfers (e.g. gas refunds / dust). No NFT/ERC1155 custody.
+    /// @notice Accept native transfers (e.g. gas refunds / dust, or the native side of an ETH pool).
+    /// @dev No NFT/ERC1155 custody.
     receive() external payable {}
 
     // ────────── Unlock dispatch ──────────
 
-    /// @notice Fully overrides the base dispatcher to route ONLY the ops this product uses.
-    /// Omitting OPEN/CLOSE makes the base's open/close handlers unreachable, so the compiler
-    /// strips them — a deliberate bytecode-size reduction (keeps the clone under EIP-170).
+    /// @notice PoolManager unlock callback. Fully overrides the base dispatcher to route ONLY the ops
+    /// this product uses (POKE/ALLOCATE/WITHDRAW_TO/REINVEST). Omitting OPEN/CLOSE makes the base's
+    /// open/close handlers unreachable, so the compiler strips them — a deliberate bytecode-size
+    /// reduction (keeps the clone under EIP-170). Reverts unless called by the PoolManager.
+    /// @param data ABI-encoded `(uint8 op, bytes payload)` produced by this manager before `unlock`.
+    /// @return Empty bytes (settlement happens inside the handlers).
     function unlockCallback(bytes calldata data) external override returns (bytes memory) {
         if (msg.sender != address(POOL_MANAGER)) revert NotPoolManager();
         (uint8 op, bytes memory payload) = abi.decode(data, (uint8, bytes));
@@ -254,7 +300,8 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
     // ────────── allocate ──────────
 
     /// @notice Auto mode: deploy liquidity per `legs`, drawing from whatever managed stables sit on
-    /// the manager's balance; residuals net back to the manager. Operator-driven (off-chain sizing).
+    /// the manager's balance; residuals net back to the manager. Owner-or-operator (off-chain sizing).
+    /// @param legs Per-pool actions (optional pre-swap + desired add amounts + slippage floor).
     function allocate(AllocLeg[] calldata legs) external onlyAuthorized nonReentrant {
         _validateLegs(legs);
         POOL_MANAGER.unlock(abi.encode(OP_ALLOCATE, abi.encode(legs)));
@@ -265,6 +312,10 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
     /// @notice Manual mode: deploy a specific just-deposited `stable` (>= `amount` must already sit
     /// on the manager). Guards that the operation draws down ONLY `stable` — no other managed stable
     /// balance may decrease — so deposit-and-allocate can't dip into pre-existing holdings.
+    /// Owner-or-operator.
+    /// @param stable The managed stable being deployed (the only balance allowed to decrease).
+    /// @param amount Amount that must already sit on the manager (snapshot guard reference).
+    /// @param legs Per-pool actions (optional pre-swap + desired add amounts + slippage floor).
     function allocateFrom(Currency stable, uint256 amount, AllocLeg[] calldata legs)
         external
         onlyAuthorized
@@ -364,8 +415,10 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
 
     // ────────── withdrawTo (indirect withdraw) ──────────
 
-    /// @notice Deliver `amount` of `requestedStable` to `recipient` without the stable ever
-    /// touching the manager's or owner's balance. Owner-only — this is the drain primitive.
+    /// @notice Deliver `p.amount` of `p.requestedStable` to `p.recipient` without the stable ever
+    /// touching the manager's or owner's balance (v4-native `take`). Owner-only — the drain primitive.
+    /// @param p Withdraw plan: recipient, requested stable + amount, liquidity pulls, and conversion
+    /// swaps. `reinvestRemainder` is reserved (phase-1 no-op; residuals always return to the manager).
     function withdrawTo(WithdrawToParams calldata p) external onlyOwnerNFT nonReentrant {
         if (p.recipient == address(0)) revert RecipientZero();
         if (!isManagedStable[p.requestedStable]) revert UnmanagedStable(p.requestedStable);
@@ -433,7 +486,8 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
     // ────────── reinvest / claimFees ──────────
 
     /// @notice Collect accrued fees on `salt` to the manager (no principal change). The protocol
-    /// fee is skimmed first; the remainder lands on the manager.
+    /// fee is skimmed first; the remainder lands on the manager. Owner-or-operator.
+    /// @param salt The position key (`== poolId`).
     function claimFees(bytes32 salt) external onlyAuthorized nonReentrant {
         _pokePosition(salt);
         emit IERC4906.MetadataUpdate(TOKEN_ID);
@@ -456,6 +510,9 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
     }
 
     /// @notice Compound realized fees of one pool back into its position. The pool is `leg.poolId`.
+    /// Owner-or-operator.
+    /// @param leg The pool action: which pool (`leg.poolId`), optional balancing pre-swap, and the
+    /// `minLiquidity` floor. The add is sized from the realized fee deltas, not `amount{0,1}Desired`.
     function reinvest(AllocLeg calldata leg) external onlyAuthorized nonReentrant {
         _indexOf(leg.poolId); // reverts UnknownPool if not configured
         POOL_MANAGER.unlock(abi.encode(OP_REINVEST, abi.encode(leg)));
@@ -494,7 +551,11 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
 
     /// @notice Owner escape hatch: execute a batch of arbitrary calls from the manager (e.g.
     /// rescue tokens, claim airdrops, approve a spender). A single call is just a 1-element
-    /// batch. Empty `data[i]` ⇒ native send. Owner-only — operators cannot move capital out.
+    /// batch. Empty `datas[i]` ⇒ native send. Owner-only — operators cannot move capital out.
+    /// @param targets Addresses to call, one per batch element.
+    /// @param values Native wei to forward per call (same length as `targets`).
+    /// @param datas Calldata per call; an empty `datas[i]` ⇒ plain native transfer to `targets[i]`.
+    /// @return results The raw bytes returned by each call, in order.
     function executeEncodedTxBatch(address[] calldata targets, uint256[] calldata values, bytes[] calldata datas)
         external
         onlyOwnerNFT
@@ -516,11 +577,13 @@ contract StableLPManager is SingletonNFTOwned, V4PositionManager {
     // ────────── Internal helpers ──────────
 
     /// @notice Number of configured pools.
+    /// @return The length of `pools`.
     function poolCount() external view returns (uint256) {
         return pools.length;
     }
 
     /// @notice Number of distinct managed stables (union of all pool currencies).
+    /// @return The length of `managedStables`.
     function managedStablesCount() external view returns (uint256) {
         return managedStables.length;
     }

@@ -47,12 +47,17 @@ contract UniLens {
     }
 
     /// @notice Value a single open position of `wallet` (a `UniSmartWallet` or `StableLPManager`).
+    /// @param wallet The wallet/manager contract to read.
+    /// @param salt The position key.
+    /// @return The position valued live at the current pool price (principal + uncollected fees).
     function position(address wallet, bytes32 salt) external view returns (PositionView memory) {
         V4PositionManager w = V4PositionManager(wallet);
         return _view(w, w.POOL_MANAGER(), salt);
     }
 
     /// @notice The full open-position portfolio of `wallet`, each position valued live.
+    /// @param wallet The wallet/manager contract to read.
+    /// @return views One {PositionView} per open position.
     function positions(address wallet) external view returns (PositionView[] memory views) {
         V4PositionManager w = V4PositionManager(wallet);
         IPoolManager pm = w.POOL_MANAGER();
@@ -65,6 +70,8 @@ contract UniLens {
 
     /// @notice `StableLPManager`-specific config: owner, protocol fee/treasury, managed stables with the
     /// manager's idle balance of each, and the configured pools.
+    /// @param manager The `StableLPManager` to read.
+    /// @return info The manager configuration + per-stable idle balances.
     function managerInfo(address manager) external view returns (ManagerView memory info) {
         StableLPManager m = StableLPManager(payable(manager));
         info.owner = m.ownerOf(m.TOKEN_ID());

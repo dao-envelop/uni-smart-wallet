@@ -16,10 +16,13 @@ import {ERC721} from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 /// subclass at the right moment via {_mintSingleton} (constructor for a directly
 /// deployed contract, `initialize` for a clone).
 abstract contract SingletonNFTOwned is ERC721 {
+    /// @notice Id of the single, non-burnable ownership NFT. Its holder controls the contract.
     uint256 public constant TOKEN_ID = 1;
 
     bool private _singletonMinted;
 
+    /// @notice Whether an address is currently an authorized operator (owner-delegated, can drive
+    /// position ops but cannot withdraw). Auto-cleared on ownership transfer.
     mapping(address => bool) public operators;
     /// @dev Active operators only. Kept compact via swap-and-pop on disable so the per-transfer
     /// `_clearOperators` loop stays bounded (can't be grown into a transfer-bricking gas bomb).
@@ -27,6 +30,10 @@ abstract contract SingletonNFTOwned is ERC721 {
     /// @dev 1-based index into `_operatorList` (0 ⇒ not present). Enables O(1) splice.
     mapping(address => uint256) internal _operatorIndexPlusOne;
 
+    /// @notice Emitted when an operator is enabled or disabled (also for each operator auto-cleared
+    /// on an ownership transfer).
+    /// @param operator The operator address.
+    /// @param allowed True when enabled, false when disabled/cleared.
     event OperatorSet(address indexed operator, bool allowed);
 
     error SingletonAlreadyMinted();
@@ -51,13 +58,16 @@ abstract contract SingletonNFTOwned is ERC721 {
     /// @dev Mint the singleton ownership token. Call exactly once from the subclass
     /// init path. The `_update` guard below relies on `_singletonMinted` being set
     /// only *after* this first mint completes.
+    /// @param to Recipient of the singleton ownership NFT.
     function _mintSingleton(address to) internal {
         _mint(to, TOKEN_ID);
         _singletonMinted = true;
     }
 
     /// @notice NFT-owner delegates operational rights to a bot without surrendering custody.
-    /// Operators can drive position ops but cannot withdraw funds.
+    /// Operators can drive position ops but cannot withdraw funds. Owner-only.
+    /// @param op The operator address to enable or disable.
+    /// @param allowed True to grant operator rights, false to revoke them.
     function setOperator(address op, bool allowed) external onlyOwnerNFT {
         if (op == address(0)) revert ZeroOperator();
         if (allowed) {
@@ -76,6 +86,7 @@ abstract contract SingletonNFTOwned is ERC721 {
     }
 
     /// @dev O(1) swap-and-pop removal of `op` from `_operatorList` (mirrors `_removeSalt`).
+    /// @param op The operator to splice out of the active list.
     function _spliceOperator(address op) private {
         uint256 idxPlusOne = _operatorIndexPlusOne[op];
         if (idxPlusOne == 0) return;
@@ -92,6 +103,10 @@ abstract contract SingletonNFTOwned is ERC721 {
 
     /// @dev Enforces the singleton invariant and auto-clears operators on ownership transfer.
     /// Post-constructor mints revert; burns of any tokenId revert (singleton must persist).
+    /// @param to New holder (zero ⇒ burn, which reverts).
+    /// @param tokenId Token being moved (only the singleton exists).
+    /// @param auth Address authorizing the transfer (per OZ ERC-721).
+    /// @return The previous owner (zero on the initial mint).
     function _update(address to, uint256 tokenId, address auth) internal virtual override returns (address) {
         address previousOwner = super._update(to, tokenId, auth);
         if (previousOwner == address(0)) {

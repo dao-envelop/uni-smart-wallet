@@ -4,6 +4,7 @@ pragma solidity ^0.8.20;
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {LiquidityAmounts} from "@uniswap/v4-periphery/src/libraries/LiquidityAmounts.sol";
 
+/// @title PositionMath
 /// @notice Helpers used by UniSmartWallet for V4 position math:
 ///   - tick-spacing snapping for operator-supplied ranges
 ///   - tick-range / spacing validation
@@ -15,6 +16,9 @@ library PositionMath {
     error TickOutOfRange(int24 tick);
 
     /// @notice Round `tick` DOWN to the nearest multiple of `spacing`.
+    /// @param tick The tick to snap.
+    /// @param spacing The pool's tick spacing.
+    /// @return The largest multiple of `spacing` that is ≤ `tick`.
     function snapTickLower(int24 tick, int24 spacing) internal pure returns (int24) {
         int24 compressed = tick / spacing;
         if (tick < 0 && tick % spacing != 0) compressed--;
@@ -22,6 +26,9 @@ library PositionMath {
     }
 
     /// @notice Round `tick` UP to the nearest multiple of `spacing`.
+    /// @param tick The tick to snap.
+    /// @param spacing The pool's tick spacing.
+    /// @return The smallest multiple of `spacing` that is ≥ `tick`.
     function snapTickUpper(int24 tick, int24 spacing) internal pure returns (int24) {
         int24 compressed = tick / spacing;
         if (tick > 0 && tick % spacing != 0) compressed++;
@@ -34,6 +41,9 @@ library PositionMath {
     ///   - both ticks are within the spacing-adjusted usable bounds
     /// @dev `public` so the bytecode is deployed once as a linked library, keeping the
     /// contracts that use it (UniSmartWallet / StableLPManager) under the EIP-170 size limit.
+    /// @param tickLower Lower tick of the range.
+    /// @param tickUpper Upper tick of the range.
+    /// @param spacing The pool's tick spacing.
     function requireValidTickRange(int24 tickLower, int24 tickUpper, int24 spacing) public pure {
         if (tickLower >= tickUpper) revert InvalidTickRange(tickLower, tickUpper);
         if (tickLower % spacing != 0) revert TickNotMultipleOfSpacing(tickLower, spacing);
@@ -44,6 +54,12 @@ library PositionMath {
 
     /// @notice Thin pass-through to LiquidityAmounts.getLiquidityForAmounts.
     /// @dev `public` (linked library) — see {requireValidTickRange}.
+    /// @param sqrtPriceX96 The current pool price (Q64.96).
+    /// @param tickLower Lower tick of the range.
+    /// @param tickUpper Upper tick of the range.
+    /// @param amount0 Desired currency0 amount.
+    /// @param amount1 Desired currency1 amount.
+    /// @return The liquidity that `amount0`/`amount1` support at the current price.
     function liquidityFromAmounts(
         uint160 sqrtPriceX96,
         int24 tickLower,
