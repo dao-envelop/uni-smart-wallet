@@ -105,6 +105,12 @@ BASE_RPC=https://mainnet.base.org \
   forge test --match-path test/StableLPManager.fork.t.sol -vvv
 ```
 
+### Live on-chain verification (Unichain mainnet)
+
+Every `allocate` / `allocateFrom` / `withdrawTo` / `claimFees` / `reinvest` flow was driven through the
+dApp against **Unichain mainnet** with real transactions and value preserved end-to-end — see the
+[UI-mode test report](https://gitlab.com/envelop/protocol-v2/stablelp-ui/-/blob/master/tasks/ui-mode-test-report.en.md).
+
 ## Deploy
 
 Per-chain parameters live in [`script/chain_params.json`](./script/chain_params.json) (keyed by
