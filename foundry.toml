@@ -37,6 +37,7 @@ base = { key = "${ETHERSCAN_TOKEN}" }
 arbitrum = "https://burned-hardworking-dust.arbitrum-mainnet.quiknode.pro/${WEB3_QUICKNODE_ARB}/"
 localhost = "http://localhost:8545"
 mainnet = "${ENVELOP_MAINNET}"
-base = "https://base-mainnet.core.chainstack.com/${CHAIN_STACK_ID}"
+#base = "https://base-mainnet.core.chainstack.com/${CHAIN_STACK_ID}"
+base = "https://cool-dark-emerald.base-mainnet.quiknode.pro/${WEB3_QUICKNODE_BASE}/"
 unichain = "https://falling-spring-energy.unichain-mainnet.quiknode.pro/${WEB3_QUICKNODE_UNI}/"
 unichain-sepolia = "https://skilled-proud-wildflower.unichain-sepolia.quiknode.pro/${WEB3_QUICKNODE_UNI_SEP}/"
