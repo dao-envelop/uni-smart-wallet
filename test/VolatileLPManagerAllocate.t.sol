@@ -161,4 +161,61 @@ contract VolatileLPManagerAllocateTest is Test {
         vm.expectRevert(abi.encodeWithSelector(VolatileLPManager.SwapMinOut.selector, poolId));
         mgr.allocate(_one(l));
     }
+
+    // ────────── recenter ──────────
+
+    function _recenter(bytes32 salt, int24 tl, int24 tu)
+        internal
+        pure
+        returns (VolatileLPManager.RecenterParams memory)
+    {
+        return VolatileLPManager.RecenterParams({
+            salt: salt,
+            newTickLower: tl,
+            newTickUpper: tu,
+            zeroForOne: false,
+            swapAmountIn: 0,
+            swapPriceLimit: 0,
+            minAmountOut: 0,
+            minLiquidity: 0,
+            amount0Max: type(uint128).max,
+            amount1Max: type(uint128).max
+        });
+    }
+
+    function test_recenter_movesRange() public {
+        bytes32 salt = bytes32(uint256(1));
+        vm.startPrank(owner);
+        mgr.allocate(_one(_leg(salt, -60, 60, 100e18, type(uint128).max, type(uint128).max)));
+        mgr.recenter(_recenter(salt, -120, 120));
+        vm.stopPrank();
+
+        V4PositionManager.Position memory p = mgr.positionOf(salt);
+        assertEq(p.tickLower, int24(-120), "new lower");
+        assertEq(p.tickUpper, int24(120), "new upper");
+        assertGt(p.liquidity, 0, "re-added");
+        assertEq(mgr.openPositionCount(), 1, "still one position (same salt)");
+    }
+
+    function test_recenter_withRebalanceSwap() public {
+        bytes32 salt = bytes32(uint256(3));
+        vm.startPrank(owner);
+        mgr.allocate(_one(_leg(salt, -60, 60, 100e18, type(uint128).max, type(uint128).max)));
+        VolatileLPManager.RecenterParams memory rp = _recenter(salt, -120, 120);
+        rp.zeroForOne = true;
+        rp.swapAmountIn = 5e18;
+        rp.swapPriceLimit = TickMath.MIN_SQRT_PRICE + 1;
+        mgr.recenter(rp);
+        vm.stopPrank();
+
+        assertEq(mgr.positionOf(salt).tickLower, int24(-120), "moved");
+        assertGt(mgr.positionOf(salt).liquidity, 0, "re-added after rebalance");
+    }
+
+    function test_recenter_unknownPosition_reverts() public {
+        bytes32 salt = bytes32(uint256(99));
+        vm.prank(owner);
+        vm.expectRevert(abi.encodeWithSelector(V4PositionManager.UnknownPosition.selector, salt));
+        mgr.recenter(_recenter(salt, -120, 120));
+    }
 }
