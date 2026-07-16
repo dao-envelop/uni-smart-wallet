@@ -2,7 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {Test} from "forge-std/Test.sol";
-import {UniSmartWallet} from "../../src/UniSmartWallet.sol";
+import {NFTPositionHarness} from "./NFTPositionHarness.sol";
 
 import {PoolManager} from "@uniswap/v4-core/src/PoolManager.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
@@ -18,7 +18,7 @@ import {MockERC20} from "./Mocks.sol";
 /// currency0/currency1), initializes a hookless pool at tick 0, deploys the
 /// wallet, and pre-funds the wallet with 1_000e18 of each token.
 abstract contract V4WalletTestBase is Test {
-    UniSmartWallet internal wallet;
+    NFTPositionHarness internal wallet;
     PoolManager internal poolManager;
     Currency internal currency0;
     Currency internal currency1;
@@ -51,7 +51,7 @@ abstract contract V4WalletTestBase is Test {
         poolManager.initialize(key, sqrtPriceAtTick0);
 
         vm.prank(owner);
-        wallet = new UniSmartWallet(IPoolManager(address(poolManager)));
+        wallet = new NFTPositionHarness(IPoolManager(address(poolManager)));
 
         MockERC20(Currency.unwrap(currency0)).mint(address(wallet), 1_000e18);
         MockERC20(Currency.unwrap(currency1)).mint(address(wallet), 1_000e18);

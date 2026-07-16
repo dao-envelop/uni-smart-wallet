@@ -10,7 +10,7 @@ import {PoolSwapTest} from "@uniswap/v4-core/src/test/PoolSwapTest.sol";
 import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 import {stdJson} from "forge-std/StdJson.sol";
 
-import {UniSmartWallet} from "../src/UniSmartWallet.sol";
+import {NFTPositionHarness} from "./helpers/NFTPositionHarness.sol";
 import {SingletonNFTOwned} from "../src/abstract/SingletonNFTOwned.sol";
 import {WalletPositionDescriptor} from "../src/WalletPositionDescriptor.sol";
 import {MockERC20} from "./helpers/Mocks.sol";
@@ -65,7 +65,7 @@ contract WalletPositionDescriptorTest is V4WalletTestBase {
     // ────────── tokenURI ──────────
 
     function test_tokenURI_noDescriptor_returnsEmpty() public {
-        UniSmartWallet bare = new UniSmartWallet(IPoolManager(address(poolManager)));
+        NFTPositionHarness bare = new NFTPositionHarness(IPoolManager(address(poolManager)));
         assertEq(bytes(bare.tokenURI(1)).length, 0, "no descriptor returns empty");
     }
 
@@ -101,7 +101,7 @@ contract WalletPositionDescriptorTest is V4WalletTestBase {
 
         string memory json = _decodeJson(wallet.tokenURI(1));
 
-        assertEq(json.readString(".name"), "Envelop UniSmartWallet #1", "name");
+        assertEq(json.readString(".name"), "Envelop NFT Position #1", "name");
         assertEq(json.readString(".attributes[0].value"), "2", "open position count");
 
         // position 0 == first salt opened == range [-SPACING, SPACING]
@@ -144,7 +144,7 @@ contract WalletPositionDescriptorTest is V4WalletTestBase {
 
         // image carries the header, APR label, and the (MockERC20) ticker
         string memory svg = _decodeImage(json);
-        assertTrue(_contains(svg, "Envelop UniSmartWallet"), "svg header");
+        assertTrue(_contains(svg, "Envelop NFT Position"), "svg header");
         assertTrue(_contains(svg, "~APR:"), "svg apr label");
         assertTrue(_contains(svg, "MCK"), "svg token symbol");
         assertTrue(_contains(svg, "<svg"), "svg root");

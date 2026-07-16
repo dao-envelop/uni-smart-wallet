@@ -11,7 +11,7 @@ import {PositionState} from "./lib/PositionState.sol";
 
 /// @title UniLens
 /// @notice Stateless read aggregator for frontends. One call returns the full open-position portfolio
-/// of any NFT-owned product on the shared {V4PositionManager} base (both `UniSmartWallet` and
+/// of any NFT-owned product on the shared {V4PositionManager} base (`StableLPManager` and
 /// `StableLPManager`): per-position principal + uncollected fees + the live pool price, plus
 /// `StableLPManager` config + idle balances. Reuses {PositionState} (view-only, no `unlock`) — the same
 /// valuation the on-chain `tokenURI` descriptor uses, but returned as structured data instead of
@@ -46,7 +46,7 @@ contract UniLens {
         StableLPManager.PoolConfig[] pools; // configured pools
     }
 
-    /// @notice Value a single open position of `wallet` (a `UniSmartWallet` or `StableLPManager`).
+    /// @notice Value a single open position of `wallet` (any {V4PositionManager}, e.g. `StableLPManager`).
     /// @param wallet The wallet/manager contract to read.
     /// @param salt The position key.
     /// @return The position valued live at the current pool price (principal + uncollected fees).

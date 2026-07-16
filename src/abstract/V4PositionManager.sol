@@ -19,7 +19,7 @@ import {PositionMath} from "../lib/PositionMath.sol";
 /// @title V4PositionManager
 /// @notice Reusable Uniswap V4 interaction layer: concentrated-liquidity position
 /// management (open/close/decrease/poke) + swaps, all driven through `PoolManager.unlock`.
-/// @dev Auth-agnostic on purpose. Subclasses (`UniSmartWallet`, `StableLPManager`, or a test
+/// @dev Auth-agnostic on purpose. Subclasses (`StableLPManager`, a volatile-pair manager, or a test
 /// harness) add their own access control and public surface, then call the `internal` action
 /// functions here. The PoolManager is an `immutable` set via this base's constructor: clones don't
 /// run constructors, but immutables live in the implementation's code and are read through
