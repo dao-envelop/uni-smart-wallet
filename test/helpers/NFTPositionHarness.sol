@@ -6,7 +6,7 @@ import {IERC4906} from "@openzeppelin/contracts/interfaces/IERC4906.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {SingletonNFTOwned} from "../../src/abstract/SingletonNFTOwned.sol";
-import {V4PositionManager} from "../../src/abstract/V4PositionManager.sol";
+import {V4PositionOpsHarness} from "./V4PositionOpsHarness.sol";
 import {IWalletDescriptor} from "../../src/interfaces/IWalletDescriptor.sol";
 
 /// @notice Test-only NFT-owned V4 position manager. Replaces the (removed) UniSmartWallet as the
@@ -15,11 +15,11 @@ import {IWalletDescriptor} from "../../src/interfaces/IWalletDescriptor.sol";
 /// descriptor, without the Envelop SmartWallet custody layer. Position entry points mirror the old
 /// wallet's surface (openPosition / closePosition / decreasePosition / pokePosition + descriptor +
 /// tokenURI) so the tests read the same.
-contract NFTPositionHarness is SingletonNFTOwned, V4PositionManager {
+contract NFTPositionHarness is SingletonNFTOwned, V4PositionOpsHarness {
     /// @notice External on-chain metadata renderer for `tokenURI`. Zero ⇒ `tokenURI` returns "".
     address public positionDescriptor;
 
-    constructor(IPoolManager poolManager_) ERC721("Envelop NFT Position", "eNFTP") V4PositionManager(poolManager_) {
+    constructor(IPoolManager poolManager_) ERC721("Envelop NFT Position", "eNFTP") V4PositionOpsHarness(poolManager_) {
         _mintSingleton(msg.sender);
         emit IERC4906.MetadataUpdate(TOKEN_ID);
     }
