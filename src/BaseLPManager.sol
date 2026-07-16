@@ -280,10 +280,13 @@ abstract contract BaseLPManager is SingletonNFTOwned, V4PositionManager {
 
     // ────────── Unlock dispatch ──────────
 
-    /// @notice PoolManager unlock callback. Fully overrides the base dispatcher to route ONLY the ops
-    /// this product uses (POKE/ALLOCATE/WITHDRAW_TO/REINVEST). Omitting OPEN/CLOSE makes the base's
-    /// open/close handlers unreachable, so the compiler strips them — a deliberate bytecode-size
-    /// reduction (keeps the clone under EIP-170). Reverts unless called by the PoolManager.
+    /// @notice PoolManager unlock callback. Routes the manager ops this base uses (POKE/ALLOCATE/
+    /// WITHDRAW_TO/REINVEST). Omitting OPEN/CLOSE makes the {V4PositionManager} open/close handlers
+    /// unreachable, so the compiler strips them — a deliberate bytecode-size reduction (keeps the
+    /// clone under EIP-170). Unknown ops fall through to `_dispatchExtraOp` so a subclass (e.g. a
+    /// volatile-pair manager) can add its own ops (≥ 7) without reimplementing the dispatcher; the
+    /// default `_dispatchExtraOp` reverts `UnknownOp`, so this base's behavior is unchanged.
+    /// Reverts unless called by the PoolManager.
     /// @param data ABI-encoded `(uint8 op, bytes payload)` produced by this manager before `unlock`.
     /// @return Empty bytes (settlement happens inside the handlers).
     function unlockCallback(bytes calldata data) external override returns (bytes memory) {
@@ -293,7 +296,7 @@ abstract contract BaseLPManager is SingletonNFTOwned, V4PositionManager {
         if (op == OP_ALLOCATE) return _handleAllocate(payload);
         if (op == OP_WITHDRAW_TO) return _handleWithdrawTo(payload);
         if (op == OP_REINVEST) return _handleReinvest(payload);
-        revert UnknownOp(op);
+        return _dispatchExtraOp(op, payload);
     }
 
     // ────────── allocate ──────────
