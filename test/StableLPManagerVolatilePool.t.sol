@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 
 import {Test} from "forge-std/Test.sol";
 import {StableLPManager} from "../src/StableLPManager.sol";
+import {BaseLPManager} from "../src/BaseLPManager.sol";
 import {StableLPFactory} from "../src/StableLPFactory.sol";
 import {MockERC20} from "./helpers/Mocks.sol";
 
@@ -76,11 +77,11 @@ contract StableLPManagerVolatilePoolTest is Test {
         // Moderate full-range depth so a bounded swap can walk the price out of the ±60 band.
         _seed(key);
 
-        StableLPManager.PoolConfig[] memory cfgs = new StableLPManager.PoolConfig[](1);
-        cfgs[0] = StableLPManager.PoolConfig({key: key, tickLower: TL, tickUpper: TU});
+        BaseLPManager.PoolConfig[] memory cfgs = new BaseLPManager.PoolConfig[](1);
+        cfgs[0] = BaseLPManager.PoolConfig({key: key, tickLower: TL, tickUpper: TU});
         m = StableLPManager(
             payable(factory.createManager(
-                    StableLPManager.InitParams({owner: owner, name: bytes32("Envelop VolatileLP"), pools: cfgs})
+                    BaseLPManager.InitParams({owner: owner, name: bytes32("Envelop VolatileLP"), pools: cfgs})
                 ))
         );
 
@@ -110,9 +111,9 @@ contract StableLPManagerVolatilePoolTest is Test {
         vm.stopPrank();
     }
 
-    function _leg(PoolKey memory key, uint256 amt) internal pure returns (StableLPManager.AllocLeg[] memory legs) {
-        legs = new StableLPManager.AllocLeg[](1);
-        legs[0] = StableLPManager.AllocLeg({
+    function _leg(PoolKey memory key, uint256 amt) internal pure returns (BaseLPManager.AllocLeg[] memory legs) {
+        legs = new BaseLPManager.AllocLeg[](1);
+        legs[0] = BaseLPManager.AllocLeg({
             poolId: key.toId(),
             zeroForOne: false,
             swapAmountIn: 0, // no pre-swap: add straight from balances

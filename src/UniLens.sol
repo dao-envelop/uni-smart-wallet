@@ -7,13 +7,14 @@ import {Currency, CurrencyLibrary} from "@uniswap/v4-core/src/types/Currency.sol
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {V4PositionManager} from "./abstract/V4PositionManager.sol";
 import {StableLPManager} from "./StableLPManager.sol";
+import {BaseLPManager} from "./BaseLPManager.sol";
 import {PositionState} from "./lib/PositionState.sol";
 
 /// @title UniLens
 /// @notice Stateless read aggregator for frontends. One call returns the full open-position portfolio
-/// of any NFT-owned product on the shared {V4PositionManager} base (`StableLPManager` and
-/// `StableLPManager`): per-position principal + uncollected fees + the live pool price, plus
-/// `StableLPManager` config + idle balances. Reuses {PositionState} (view-only, no `unlock`) — the same
+/// of any NFT-owned {BaseLPManager} product (e.g. `StableLPManager`, a volatile-pair manager):
+/// per-position principal + uncollected fees + the live pool price, plus manager config + idle
+/// balances. Reuses {PositionState} (view-only, no `unlock`) — the same
 /// valuation the on-chain `tokenURI` descriptor uses, but returned as structured data instead of
 /// base64/SVG. Holds no state and is unaware of which concrete product it reads, so a single deployment
 /// serves every wallet/manager on this chain.
@@ -43,7 +44,7 @@ contract UniLens {
         address treasury;
         Currency[] managedStables;
         uint256[] idleBalances; // the manager's own balance per managed stable (ERC-20 / native)
-        StableLPManager.PoolConfig[] pools; // configured pools
+        BaseLPManager.PoolConfig[] pools; // configured pools
     }
 
     /// @notice Value a single open position of `wallet` (any {V4PositionManager}, e.g. `StableLPManager`).
@@ -88,10 +89,10 @@ contract UniLens {
         }
 
         uint256 p = m.poolCount();
-        info.pools = new StableLPManager.PoolConfig[](p);
+        info.pools = new BaseLPManager.PoolConfig[](p);
         for (uint256 i = 0; i < p; ++i) {
             (PoolKey memory key, int24 tickLower, int24 tickUpper) = m.pools(i);
-            info.pools[i] = StableLPManager.PoolConfig({key: key, tickLower: tickLower, tickUpper: tickUpper});
+            info.pools[i] = BaseLPManager.PoolConfig({key: key, tickLower: tickLower, tickUpper: tickUpper});
         }
     }
 

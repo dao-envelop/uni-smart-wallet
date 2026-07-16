@@ -8,6 +8,7 @@ import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {StableLPManager} from "../src/StableLPManager.sol";
+import {BaseLPManager} from "../src/BaseLPManager.sol";
 import {StableLPFactory} from "../src/StableLPFactory.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {PoolSwapTest} from "@uniswap/v4-core/src/test/PoolSwapTest.sol";
@@ -149,8 +150,8 @@ contract GasCompareStableLPForkTest is Test {
         );
     }
 
-    function _reinvestLeg(PoolKey memory k) internal pure returns (StableLPManager.AllocLeg memory) {
-        return StableLPManager.AllocLeg({
+    function _reinvestLeg(PoolKey memory k) internal pure returns (BaseLPManager.AllocLeg memory) {
+        return BaseLPManager.AllocLeg({
             poolId: k.toId(),
             zeroForOne: false,
             swapAmountIn: 0,
@@ -210,7 +211,7 @@ contract GasCompareStableLPForkTest is Test {
         StableLPFactory factory = new StableLPFactory(address(impl));
 
         // ── createManager (measured separately) ──
-        StableLPManager.InitParams memory ip = _initParams(owner);
+        BaseLPManager.InitParams memory ip = _initParams(owner);
         uint256 g = gasleft();
         StableLPManager mgr = StableLPManager(payable(factory.createManager(ip)));
         uint256 gCreate = g - gasleft();
@@ -224,7 +225,7 @@ contract GasCompareStableLPForkTest is Test {
         require(ok, "usdt transfer");
 
         // ── allocate: 3 legs, cross-leg netting (USDT→USDC surplus funds DAI/USDC) ──
-        StableLPManager.AllocLeg[] memory legs = _legs();
+        BaseLPManager.AllocLeg[] memory legs = _legs();
         g = gasleft();
         mgr.allocate(legs);
         uint256 gAllocate = g - gasleft();
@@ -258,25 +259,25 @@ contract GasCompareStableLPForkTest is Test {
         console2.log("  USDT left (dust)", usdtLeft);
     }
 
-    function _initParams(address owner) internal view returns (StableLPManager.InitParams memory p) {
-        StableLPManager.PoolConfig[] memory cfgs = new StableLPManager.PoolConfig[](3);
+    function _initParams(address owner) internal view returns (BaseLPManager.InitParams memory p) {
+        BaseLPManager.PoolConfig[] memory cfgs = new BaseLPManager.PoolConfig[](3);
         cfgs[0] = _cfg(kUSDCUSDT);
         cfgs[1] = _cfg(kDAIUSDT);
         cfgs[2] = _cfg(kDAIUSDC);
-        p = StableLPManager.InitParams({owner: owner, name: bytes32("Envelop StableLP"), pools: cfgs});
+        p = BaseLPManager.InitParams({owner: owner, name: bytes32("Envelop StableLP"), pools: cfgs});
     }
 
-    function _cfg(PoolKey memory k) internal view returns (StableLPManager.PoolConfig memory) {
+    function _cfg(PoolKey memory k) internal view returns (BaseLPManager.PoolConfig memory) {
         (, int24 tick,,) = STATE_VIEW.getSlot0(k.toId());
-        return StableLPManager.PoolConfig({key: k, tickLower: tick - W, tickUpper: tick + W});
+        return BaseLPManager.PoolConfig({key: k, tickLower: tick - W, tickUpper: tick + W});
     }
 
     // Legs ordered so the USDC/USDT leg's surplus USDC funds the later DAI/USDC leg.
-    function _legs() internal view returns (StableLPManager.AllocLeg[] memory legs) {
-        legs = new StableLPManager.AllocLeg[](3);
+    function _legs() internal view returns (BaseLPManager.AllocLeg[] memory legs) {
+        legs = new BaseLPManager.AllocLeg[](3);
         uint160 maxLimit = TickMath.MAX_SQRT_PRICE - 1; // oneForZero (input is currency1)
         // Leg 0: USDC/USDT — swap 49 USDT→USDC (16 for here + ~33 surplus for DAI/USDC), LP 16/16.
-        legs[0] = StableLPManager.AllocLeg({
+        legs[0] = BaseLPManager.AllocLeg({
             poolId: kUSDCUSDT.toId(),
             zeroForOne: false, // USDT(c1) → USDC(c0)
             swapAmountIn: 49e6,
@@ -286,7 +287,7 @@ contract GasCompareStableLPForkTest is Test {
             minLiquidity: 0
         });
         // Leg 1: DAI/USDT — swap 16 USDT→DAI, LP ~15 DAI / 15 USDT.
-        legs[1] = StableLPManager.AllocLeg({
+        legs[1] = BaseLPManager.AllocLeg({
             poolId: kDAIUSDT.toId(),
             zeroForOne: false, // USDT(c1) → DAI(c0)
             swapAmountIn: 16e6,
@@ -296,7 +297,7 @@ contract GasCompareStableLPForkTest is Test {
             minLiquidity: 0
         });
         // Leg 2: DAI/USDC — swap 16 surplus USDC→DAI, LP ~15 DAI / 15 USDC.
-        legs[2] = StableLPManager.AllocLeg({
+        legs[2] = BaseLPManager.AllocLeg({
             poolId: kDAIUSDC.toId(),
             zeroForOne: false, // USDC(c1) → DAI(c0)
             swapAmountIn: 16e6,

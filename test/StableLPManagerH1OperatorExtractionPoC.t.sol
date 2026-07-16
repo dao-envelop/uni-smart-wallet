@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 
 import {StableLPTestBase} from "./helpers/StableLPTestBase.sol";
 import {StableLPManager} from "../src/StableLPManager.sol";
+import {BaseLPManager} from "../src/BaseLPManager.sol";
 import {MockERC20} from "./helpers/Mocks.sol";
 
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
@@ -80,8 +81,8 @@ contract StableLPManagerH1OperatorExtractionPoC is StableLPTestBase {
     /// @dev A single-leg allocate that mostly just swaps `VICTIM_SWAP` USDT -> USDC with a WIDE price
     /// limit (the only protection — chosen wide by the hostile operator). Tiny LP add so the swap is
     /// what moves value; the swap output settles back to manager idle.
-    function _wideLimitLeg(uint160 limit) internal view returns (StableLPManager.AllocLeg memory leg) {
-        leg = StableLPManager.AllocLeg({
+    function _wideLimitLeg(uint160 limit) internal view returns (BaseLPManager.AllocLeg memory leg) {
+        leg = BaseLPManager.AllocLeg({
             poolId: poolKeys[P].toId(),
             zeroForOne: usdtIsZero, // input side is the USDT the manager holds
             swapAmountIn: VICTIM_SWAP,
@@ -119,12 +120,8 @@ contract StableLPManagerH1OperatorExtractionPoC is StableLPTestBase {
         pnl = int256(_attackerStableValue()) - int256(start);
     }
 
-    function _oneLeg(StableLPManager.AllocLeg memory leg)
-        internal
-        pure
-        returns (StableLPManager.AllocLeg[] memory legs)
-    {
-        legs = new StableLPManager.AllocLeg[](1);
+    function _oneLeg(BaseLPManager.AllocLeg memory leg) internal pure returns (BaseLPManager.AllocLeg[] memory legs) {
+        legs = new BaseLPManager.AllocLeg[](1);
         legs[0] = leg;
     }
 

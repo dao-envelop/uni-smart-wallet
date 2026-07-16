@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 
 import {StableLPTestBase} from "./helpers/StableLPTestBase.sol";
 import {StableLPManager} from "../src/StableLPManager.sol";
+import {BaseLPManager} from "../src/BaseLPManager.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 
 contract StableLPFactoryTest is StableLPTestBase {
@@ -21,36 +22,36 @@ contract StableLPFactoryTest is StableLPTestBase {
     }
 
     function test_initialize_isOneShot_reverts() public {
-        vm.expectRevert(StableLPManager.AlreadyInitialized.selector);
+        vm.expectRevert(BaseLPManager.AlreadyInitialized.selector);
         mgr.initialize(_initParams(owner));
     }
 
     function test_initialize_noPools_reverts() public {
-        StableLPManager.InitParams memory p = _initParams(owner);
-        p.pools = new StableLPManager.PoolConfig[](0);
-        vm.expectRevert(StableLPManager.NoPools.selector);
+        BaseLPManager.InitParams memory p = _initParams(owner);
+        p.pools = new BaseLPManager.PoolConfig[](0);
+        vm.expectRevert(BaseLPManager.NoPools.selector);
         factory.createManager(p);
     }
 
     function test_initialize_tooManyPools_reverts() public {
-        StableLPManager.InitParams memory p = _initParams(owner);
+        BaseLPManager.InitParams memory p = _initParams(owner);
         uint256 n = uint256(mgr.MAX_POOLS()) + 1;
-        StableLPManager.PoolConfig[] memory many = new StableLPManager.PoolConfig[](n);
+        BaseLPManager.PoolConfig[] memory many = new BaseLPManager.PoolConfig[](n);
         for (uint256 i = 0; i < n; ++i) {
-            many[i] = StableLPManager.PoolConfig({key: poolKeys[0], tickLower: TL, tickUpper: TU});
+            many[i] = BaseLPManager.PoolConfig({key: poolKeys[0], tickLower: TL, tickUpper: TU});
         }
         p.pools = many;
-        vm.expectRevert(abi.encodeWithSelector(StableLPManager.TooManyPools.selector, n));
+        vm.expectRevert(abi.encodeWithSelector(BaseLPManager.TooManyPools.selector, n));
         factory.createManager(p);
     }
 
     function test_initialize_duplicatePool_reverts() public {
-        StableLPManager.InitParams memory p = _initParams(owner);
-        StableLPManager.PoolConfig[] memory dup = new StableLPManager.PoolConfig[](2);
-        dup[0] = StableLPManager.PoolConfig({key: poolKeys[0], tickLower: TL, tickUpper: TU});
-        dup[1] = StableLPManager.PoolConfig({key: poolKeys[0], tickLower: TL, tickUpper: TU}); // same poolId
+        BaseLPManager.InitParams memory p = _initParams(owner);
+        BaseLPManager.PoolConfig[] memory dup = new BaseLPManager.PoolConfig[](2);
+        dup[0] = BaseLPManager.PoolConfig({key: poolKeys[0], tickLower: TL, tickUpper: TU});
+        dup[1] = BaseLPManager.PoolConfig({key: poolKeys[0], tickLower: TL, tickUpper: TU}); // same poolId
         p.pools = dup;
-        vm.expectRevert(abi.encodeWithSelector(StableLPManager.DuplicatePool.selector, poolKeys[0].toId()));
+        vm.expectRevert(abi.encodeWithSelector(BaseLPManager.DuplicatePool.selector, poolKeys[0].toId()));
         factory.createManager(p);
     }
 
@@ -61,7 +62,7 @@ contract StableLPFactoryTest is StableLPTestBase {
     }
 
     function test_name_customPerClone() public {
-        StableLPManager.InitParams memory p = _initParams(owner);
+        BaseLPManager.InitParams memory p = _initParams(owner);
         p.name = bytes32("Acme USD Vault");
         StableLPManager m = StableLPManager(payable(factory.createManager(p)));
         assertEq(m.name(), "Acme USD Vault", "custom name round-trips");
@@ -71,14 +72,14 @@ contract StableLPFactoryTest is StableLPTestBase {
     function test_name_maxLength31() public {
         string memory max31 = "Envelop StableLP Vault v2 Alpha"; // 31 chars
         assertEq(bytes(max31).length, 31, "fixture is 31 bytes");
-        StableLPManager.InitParams memory p = _initParams(owner);
+        BaseLPManager.InitParams memory p = _initParams(owner);
         p.name = bytes32(bytes(max31));
         StableLPManager m = StableLPManager(payable(factory.createManager(p)));
         assertEq(m.name(), max31, "31-char name round-trips");
     }
 
     function test_name_emptyFallsBackToDefault() public {
-        StableLPManager.InitParams memory p = _initParams(owner);
+        BaseLPManager.InitParams memory p = _initParams(owner);
         p.name = bytes32(0);
         StableLPManager m = StableLPManager(payable(factory.createManager(p)));
         assertEq(m.name(), "Envelop LP Uniswap Manager", "empty packed name falls back to the default");
