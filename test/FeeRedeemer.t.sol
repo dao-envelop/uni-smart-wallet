@@ -5,6 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import {StableLPTestBase} from "./helpers/StableLPTestBase.sol";
 import {FeeRedeemer} from "../src/FeeRedeemer.sol";
 import {StableLPManager} from "../src/StableLPManager.sol";
+import {BaseLPManager} from "../src/BaseLPManager.sol";
 import {StableLPFactory} from "../src/StableLPFactory.sol";
 import {MockERC20} from "./helpers/Mocks.sol";
 
@@ -134,11 +135,11 @@ contract FeeRedeemerNativeTest is Test {
         redeemer = new FeeRedeemer(IPoolManager(address(poolManager)), protocol);
         StableLPManager impl = new StableLPManager(IPoolManager(address(poolManager)), address(redeemer));
         StableLPFactory factory = new StableLPFactory(address(impl));
-        StableLPManager.PoolConfig[] memory cfgs = new StableLPManager.PoolConfig[](1);
-        cfgs[0] = StableLPManager.PoolConfig({key: key, tickLower: -SPACING, tickUpper: SPACING});
+        BaseLPManager.PoolConfig[] memory cfgs = new BaseLPManager.PoolConfig[](1);
+        cfgs[0] = BaseLPManager.PoolConfig({key: key, tickLower: -SPACING, tickUpper: SPACING});
         mgr = StableLPManager(
             payable(factory.createManager(
-                    StableLPManager.InitParams({owner: owner, name: bytes32("Envelop StableLP"), pools: cfgs})
+                    BaseLPManager.InitParams({owner: owner, name: bytes32("Envelop StableLP"), pools: cfgs})
                 ))
         );
 
@@ -152,9 +153,9 @@ contract FeeRedeemerNativeTest is Test {
         MockERC20(Currency.unwrap(token)).approve(address(swapRouter), type(uint256).max);
     }
 
-    function _leg(uint256 amt) internal view returns (StableLPManager.AllocLeg[] memory legs) {
-        legs = new StableLPManager.AllocLeg[](1);
-        legs[0] = StableLPManager.AllocLeg({
+    function _leg(uint256 amt) internal view returns (BaseLPManager.AllocLeg[] memory legs) {
+        legs = new BaseLPManager.AllocLeg[](1);
+        legs[0] = BaseLPManager.AllocLeg({
             poolId: key.toId(),
             zeroForOne: false,
             swapAmountIn: 0,

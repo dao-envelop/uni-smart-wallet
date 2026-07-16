@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 
 import {Test} from "forge-std/Test.sol";
 import {StableLPManager} from "../src/StableLPManager.sol";
+import {BaseLPManager} from "../src/BaseLPManager.sol";
 import {StableLPFactory} from "../src/StableLPFactory.sol";
 
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
@@ -94,11 +95,11 @@ contract StableLPManagerForkTest is Test {
         // (so `this` is both owner and operator for the calls below).
         StableLPManager impl = new StableLPManager(POOL_MANAGER, treasury);
         StableLPFactory factory = new StableLPFactory(address(impl));
-        StableLPManager.PoolConfig[] memory cfgs = new StableLPManager.PoolConfig[](1);
-        cfgs[0] = StableLPManager.PoolConfig({key: key, tickLower: tickLower, tickUpper: tickUpper});
+        BaseLPManager.PoolConfig[] memory cfgs = new BaseLPManager.PoolConfig[](1);
+        cfgs[0] = BaseLPManager.PoolConfig({key: key, tickLower: tickLower, tickUpper: tickUpper});
         mgr = StableLPManager(
             payable(factory.createManager(
-                    StableLPManager.InitParams({owner: address(this), name: bytes32("Envelop ETH-USDC"), pools: cfgs})
+                    BaseLPManager.InitParams({owner: address(this), name: bytes32("Envelop ETH-USDC"), pools: cfgs})
                 ))
         );
 
@@ -115,9 +116,9 @@ contract StableLPManagerForkTest is Test {
 
     // ────────── helpers ──────────
 
-    function _leg(uint256 ethAmt, uint256 usdcAmt) internal view returns (StableLPManager.AllocLeg[] memory legs) {
-        legs = new StableLPManager.AllocLeg[](1);
-        legs[0] = StableLPManager.AllocLeg({
+    function _leg(uint256 ethAmt, uint256 usdcAmt) internal view returns (BaseLPManager.AllocLeg[] memory legs) {
+        legs = new BaseLPManager.AllocLeg[](1);
+        legs[0] = BaseLPManager.AllocLeg({
             poolId: poolId,
             zeroForOne: false,
             swapAmountIn: 0,
@@ -179,16 +180,16 @@ contract StableLPManagerForkTest is Test {
         uint256 amount = 5e8; // below the native principal freed by the full pull
         uint256 recipBefore = recipient.balance;
 
-        StableLPManager.WithdrawStep[] memory pulls = new StableLPManager.WithdrawStep[](1);
-        pulls[0] = StableLPManager.WithdrawStep({poolId: poolId, liquidityToPull: mgr.positionOf(salt).liquidity});
+        BaseLPManager.WithdrawStep[] memory pulls = new BaseLPManager.WithdrawStep[](1);
+        pulls[0] = BaseLPManager.WithdrawStep({poolId: poolId, liquidityToPull: mgr.positionOf(salt).liquidity});
 
         mgr.withdrawTo(
-            StableLPManager.WithdrawToParams({
+            BaseLPManager.WithdrawToParams({
                 recipient: recipient,
                 requestedStable: NATIVE,
                 amount: amount,
                 pulls: pulls,
-                swaps: new StableLPManager.WithdrawSwap[](0),
+                swaps: new BaseLPManager.WithdrawSwap[](0),
                 reinvestRemainder: false
             })
         );

@@ -11,7 +11,7 @@ import {PositionState} from "./lib/PositionState.sol";
 import {DescriptorLib} from "./lib/DescriptorLib.sol";
 
 /// @dev Minimal view of the ERC-721 `name()` exposed by both products, so the descriptor can label
-/// each token with its own product name (`UniSmartWallet` vs `StableLPManager`).
+/// each token with its own product name (e.g. `StableLPManager` or a volatile-pair manager).
 interface INftName {
     function name() external view returns (string memory);
 }

@@ -4,6 +4,7 @@ pragma solidity ^0.8.26;
 import {Test} from "forge-std/Test.sol";
 import {StableLPTestBase} from "./helpers/StableLPTestBase.sol";
 import {StableLPManager} from "../src/StableLPManager.sol";
+import {BaseLPManager} from "../src/BaseLPManager.sol";
 import {StableLPFactory} from "../src/StableLPFactory.sol";
 import {V4PositionManager} from "../src/abstract/V4PositionManager.sol";
 import {MockERC20} from "./helpers/Mocks.sol";
@@ -89,11 +90,11 @@ contract StableLPUninitializedPoolTest is Test {
             PoolKey({currency0: c0, currency1: c1, fee: FEE, tickSpacing: SPACING, hooks: IHooks(address(0))});
         // NOTE: we deliberately do NOT call pm.initialize(key, ...) — the pool stays uninitialized.
 
-        StableLPManager.PoolConfig[] memory cfgs = new StableLPManager.PoolConfig[](1);
-        cfgs[0] = StableLPManager.PoolConfig({key: key, tickLower: -60, tickUpper: 60});
+        BaseLPManager.PoolConfig[] memory cfgs = new BaseLPManager.PoolConfig[](1);
+        cfgs[0] = BaseLPManager.PoolConfig({key: key, tickLower: -60, tickUpper: 60});
         StableLPManager mgr = StableLPManager(
             payable(factory.createManager(
-                    StableLPManager.InitParams({owner: owner, name: bytes32("Envelop StableLP"), pools: cfgs})
+                    BaseLPManager.InitParams({owner: owner, name: bytes32("Envelop StableLP"), pools: cfgs})
                 ))
         );
 
@@ -101,8 +102,8 @@ contract StableLPUninitializedPoolTest is Test {
         MockERC20(Currency.unwrap(c0)).mint(address(mgr), 100e18);
         MockERC20(Currency.unwrap(c1)).mint(address(mgr), 100e18);
 
-        StableLPManager.AllocLeg[] memory legs = new StableLPManager.AllocLeg[](1);
-        legs[0] = StableLPManager.AllocLeg({
+        BaseLPManager.AllocLeg[] memory legs = new BaseLPManager.AllocLeg[](1);
+        legs[0] = BaseLPManager.AllocLeg({
             poolId: key.toId(),
             zeroForOne: false,
             swapAmountIn: 0, // no pre-swap, so we reach _addLiquidity directly

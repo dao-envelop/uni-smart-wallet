@@ -6,6 +6,7 @@ pragma solidity ^0.8.20;
 
 import {Clones} from "@openzeppelin/contracts/proxy/Clones.sol";
 import {StableLPManager} from "./StableLPManager.sol";
+import {BaseLPManager} from "./BaseLPManager.sol";
 
 /// @title StableLPFactory
 /// @notice Deploys {StableLPManager} instances as EIP-1167 minimal-proxy clones with a
@@ -37,7 +38,7 @@ contract StableLPFactory {
     /// minted to `p.owner` inside `initialize`.
     /// @param p Init parameters forwarded to {StableLPManager-initialize} (owner, name, pools).
     /// @return manager The deployed, initialized clone address.
-    function createManager(StableLPManager.InitParams calldata p) external returns (address manager) {
+    function createManager(BaseLPManager.InitParams calldata p) external returns (address manager) {
         uint256 n = nonce[p.owner]++;
         bytes32 salt = keccak256(abi.encode(p.owner, n));
         manager = Clones.cloneDeterministic(implementation, salt);

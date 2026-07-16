@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {V4PositionManager} from "../../src/abstract/V4PositionManager.sol";
+import {V4PositionOpsHarness} from "./V4PositionOpsHarness.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
@@ -12,11 +12,11 @@ import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.so
 /// used to exercise the V4 mechanics (position lifecycle + swaps) in isolation from
 /// the NFT/operator authorization that lives in the product contracts.
 /// Mirrors how a real subclass wires the base `POOL_MANAGER` and seeds the hookless pool.
-contract V4PositionManagerHarness is V4PositionManager {
+contract V4PositionManagerHarness is V4PositionOpsHarness {
     /// @dev Demonstrates the swap-then-add netting an allocate-style flow relies on.
     uint8 internal constant SWAP_THEN_ADD = 100;
 
-    constructor(IPoolManager pm) V4PositionManager(pm) {}
+    constructor(IPoolManager pm) V4PositionOpsHarness(pm) {}
 
     // ────────── Ungated pass-throughs to the base internals ──────────
 

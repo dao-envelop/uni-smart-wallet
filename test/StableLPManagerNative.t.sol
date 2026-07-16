@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 
 import {Test} from "forge-std/Test.sol";
 import {StableLPManager} from "../src/StableLPManager.sol";
+import {BaseLPManager} from "../src/BaseLPManager.sol";
 import {StableLPFactory} from "../src/StableLPFactory.sol";
 import {MockERC20} from "./helpers/Mocks.sol";
 
@@ -42,11 +43,11 @@ contract StableLPManagerNativeTest is Test {
 
         StableLPManager impl = new StableLPManager(IPoolManager(address(poolManager)), treasury);
         StableLPFactory factory = new StableLPFactory(address(impl));
-        StableLPManager.PoolConfig[] memory cfgs = new StableLPManager.PoolConfig[](1);
-        cfgs[0] = StableLPManager.PoolConfig({key: key, tickLower: TL, tickUpper: TU});
+        BaseLPManager.PoolConfig[] memory cfgs = new BaseLPManager.PoolConfig[](1);
+        cfgs[0] = BaseLPManager.PoolConfig({key: key, tickLower: TL, tickUpper: TU});
         mgr = StableLPManager(
             payable(factory.createManager(
-                    StableLPManager.InitParams({owner: owner, name: bytes32("Envelop StableLP"), pools: cfgs})
+                    BaseLPManager.InitParams({owner: owner, name: bytes32("Envelop StableLP"), pools: cfgs})
                 ))
         );
 
@@ -56,9 +57,9 @@ contract StableLPManagerNativeTest is Test {
     }
 
     /// @dev One leg, no pre-swap: add liquidity to the ETH/token pool from balances.
-    function _leg(uint256 amt) internal view returns (StableLPManager.AllocLeg[] memory legs) {
-        legs = new StableLPManager.AllocLeg[](1);
-        legs[0] = StableLPManager.AllocLeg({
+    function _leg(uint256 amt) internal view returns (BaseLPManager.AllocLeg[] memory legs) {
+        legs = new BaseLPManager.AllocLeg[](1);
+        legs[0] = BaseLPManager.AllocLeg({
             poolId: key.toId(),
             zeroForOne: false,
             swapAmountIn: 0,
@@ -87,13 +88,13 @@ contract StableLPManagerNativeTest is Test {
         address recipient = address(0xBEEF);
         uint256 amount = 1e17;
 
-        StableLPManager.WithdrawStep[] memory pulls = new StableLPManager.WithdrawStep[](1);
-        pulls[0] = StableLPManager.WithdrawStep({poolId: key.toId(), liquidityToPull: mgr.positionOf(salt).liquidity});
-        StableLPManager.WithdrawSwap[] memory swaps = new StableLPManager.WithdrawSwap[](0);
+        BaseLPManager.WithdrawStep[] memory pulls = new BaseLPManager.WithdrawStep[](1);
+        pulls[0] = BaseLPManager.WithdrawStep({poolId: key.toId(), liquidityToPull: mgr.positionOf(salt).liquidity});
+        BaseLPManager.WithdrawSwap[] memory swaps = new BaseLPManager.WithdrawSwap[](0);
 
         vm.prank(owner);
         mgr.withdrawTo(
-            StableLPManager.WithdrawToParams({
+            BaseLPManager.WithdrawToParams({
                 recipient: recipient,
                 requestedStable: NATIVE,
                 amount: amount,

@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 
 import {StableLPTestBase} from "./helpers/StableLPTestBase.sol";
 import {StableLPManager} from "../src/StableLPManager.sol";
+import {BaseLPManager} from "../src/BaseLPManager.sol";
 import {MockERC20} from "./helpers/Mocks.sol";
 
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
@@ -82,7 +83,7 @@ contract StableLPManagerProtocolFeeTest is StableLPTestBase {
         uint256 tUSDCBefore = _claimBal(USDC, treasury);
         uint256 tUSDTBefore = _claimBal(USDT, treasury);
 
-        StableLPManager.AllocLeg memory leg = StableLPManager.AllocLeg({
+        BaseLPManager.AllocLeg memory leg = BaseLPManager.AllocLeg({
             poolId: poolKeys[0].toId(),
             zeroForOne: false,
             swapAmountIn: 0,
@@ -110,15 +111,15 @@ contract StableLPManagerProtocolFeeTest is StableLPTestBase {
         uint256 tUSDTBefore = _claimBal(USDT, treasury);
 
         // Pull pool 0 (USDC/USDT) fully and deliver a little USDC to a recipient.
-        StableLPManager.WithdrawStep[] memory pulls = new StableLPManager.WithdrawStep[](1);
-        pulls[0] = StableLPManager.WithdrawStep({
+        BaseLPManager.WithdrawStep[] memory pulls = new BaseLPManager.WithdrawStep[](1);
+        pulls[0] = BaseLPManager.WithdrawStep({
             poolId: poolKeys[0].toId(), liquidityToPull: mgr.positionOf(_saltFor(0)).liquidity
         });
-        StableLPManager.WithdrawSwap[] memory swaps = new StableLPManager.WithdrawSwap[](0);
+        BaseLPManager.WithdrawSwap[] memory swaps = new BaseLPManager.WithdrawSwap[](0);
 
         vm.prank(owner);
         mgr.withdrawTo(
-            StableLPManager.WithdrawToParams({
+            BaseLPManager.WithdrawToParams({
                 recipient: address(0xBEEF),
                 requestedStable: USDC,
                 amount: 1e18,
@@ -138,7 +139,7 @@ contract StableLPManagerProtocolFeeTest is StableLPTestBase {
     // ────────── constructor ──────────
 
     function test_constructor_zeroTreasury_reverts() public {
-        vm.expectRevert(StableLPManager.ZeroTreasury.selector);
+        vm.expectRevert(BaseLPManager.ZeroTreasury.selector);
         new StableLPManager(IPoolManager(address(poolManager)), address(0));
     }
 }

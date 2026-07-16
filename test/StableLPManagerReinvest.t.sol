@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 
 import {StableLPTestBase} from "./helpers/StableLPTestBase.sol";
 import {StableLPManager} from "../src/StableLPManager.sol";
+import {BaseLPManager} from "../src/BaseLPManager.sol";
 import {MockERC20} from "./helpers/Mocks.sol";
 
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
@@ -69,7 +70,7 @@ contract StableLPManagerReinvestTest is StableLPTestBase {
     function test_reinvest_compoundsRealizedFees() public {
         uint128 liqBefore = mgr.positionOf(_saltFor(0)).liquidity;
 
-        StableLPManager.AllocLeg memory leg = StableLPManager.AllocLeg({
+        BaseLPManager.AllocLeg memory leg = BaseLPManager.AllocLeg({
             poolId: poolKeys[0].toId(),
             zeroForOne: false,
             swapAmountIn: 0, // fees already span both sides (bidirectional volume)

@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 
 import {StableLPTestBase} from "./helpers/StableLPTestBase.sol";
 import {StableLPManager} from "../src/StableLPManager.sol";
+import {BaseLPManager} from "../src/BaseLPManager.sol";
 import {SingletonNFTOwned} from "../src/abstract/SingletonNFTOwned.sol";
 import {V4PositionManager} from "../src/abstract/V4PositionManager.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
@@ -42,23 +43,23 @@ contract StableLPManagerAllocateTest is StableLPTestBase {
     }
 
     function test_allocate_noLegs_reverts() public {
-        StableLPManager.AllocLeg[] memory legs = new StableLPManager.AllocLeg[](0);
+        BaseLPManager.AllocLeg[] memory legs = new BaseLPManager.AllocLeg[](0);
         vm.prank(owner);
-        vm.expectRevert(StableLPManager.NoLegs.selector);
+        vm.expectRevert(BaseLPManager.NoLegs.selector);
         mgr.allocate(legs);
     }
 
     function test_allocate_unknownPool_reverts() public {
-        StableLPManager.AllocLeg[] memory legs = _allocateParams(FUND);
+        BaseLPManager.AllocLeg[] memory legs = _allocateParams(FUND);
         PoolId bogus = PoolId.wrap(bytes32(uint256(0xBAD))); // not a configured pool
         legs[0].poolId = bogus;
         vm.prank(owner);
-        vm.expectRevert(abi.encodeWithSelector(StableLPManager.UnknownPool.selector, bogus));
+        vm.expectRevert(abi.encodeWithSelector(BaseLPManager.UnknownPool.selector, bogus));
         mgr.allocate(legs);
     }
 
     function test_allocate_belowMinLiquidity_reverts() public {
-        StableLPManager.AllocLeg[] memory legs = _allocateParams(FUND);
+        BaseLPManager.AllocLeg[] memory legs = _allocateParams(FUND);
         legs[0].minLiquidity = type(uint128).max; // impossible floor
         vm.prank(owner);
         vm.expectRevert();
@@ -69,7 +70,7 @@ contract StableLPManagerAllocateTest is StableLPTestBase {
 
     function test_initialize_hookedPool_reverts() public {
         address badHook = address(0xBADC0DE);
-        StableLPManager.InitParams memory p = _initParams(owner);
+        BaseLPManager.InitParams memory p = _initParams(owner);
         p.pools[1].key.hooks = IHooks(badHook); // a non-zero hook on one of the 3 pools
         vm.expectRevert(abi.encodeWithSelector(V4PositionManager.HookNotAllowed.selector, badHook));
         factory.createManager(p);

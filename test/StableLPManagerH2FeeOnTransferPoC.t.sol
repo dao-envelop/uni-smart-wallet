@@ -4,6 +4,7 @@ pragma solidity ^0.8.26;
 import {Test} from "forge-std/Test.sol";
 
 import {StableLPManager} from "../src/StableLPManager.sol";
+import {BaseLPManager} from "../src/BaseLPManager.sol";
 import {StableLPFactory} from "../src/StableLPFactory.sol";
 import {MockERC20, MockFeeOnTransferERC20} from "./helpers/Mocks.sol";
 
@@ -86,12 +87,10 @@ contract StableLPManagerH2FeeOnTransferPoC is Test {
         // Deploy the manager configured on the FOT/USD pool.
         impl = new StableLPManager(IPoolManager(address(poolManager)), treasury);
         factory = new StableLPFactory(address(impl));
-        StableLPManager.PoolConfig[] memory cfgs = new StableLPManager.PoolConfig[](1);
-        cfgs[0] = StableLPManager.PoolConfig({key: key, tickLower: TL, tickUpper: TU});
+        BaseLPManager.PoolConfig[] memory cfgs = new BaseLPManager.PoolConfig[](1);
+        cfgs[0] = BaseLPManager.PoolConfig({key: key, tickLower: TL, tickUpper: TU});
         mgr = StableLPManager(
-            payable(factory.createManager(
-                    StableLPManager.InitParams({owner: owner, name: bytes32("FOT"), pools: cfgs})
-                ))
+            payable(factory.createManager(BaseLPManager.InitParams({owner: owner, name: bytes32("FOT"), pools: cfgs})))
         );
 
         // Fund + open a position while the token still behaves like a plain ERC-20.
@@ -103,9 +102,9 @@ contract StableLPManagerH2FeeOnTransferPoC is Test {
     }
 
     /// @dev A no-pre-swap leg that LPs both already-held sides (works cleanly while fee == 0).
-    function _balancedLeg() internal view returns (StableLPManager.AllocLeg[] memory legs) {
-        legs = new StableLPManager.AllocLeg[](1);
-        legs[0] = StableLPManager.AllocLeg({
+    function _balancedLeg() internal view returns (BaseLPManager.AllocLeg[] memory legs) {
+        legs = new BaseLPManager.AllocLeg[](1);
+        legs[0] = BaseLPManager.AllocLeg({
             poolId: poolId,
             zeroForOne: false,
             swapAmountIn: 0,
@@ -116,17 +115,17 @@ contract StableLPManagerH2FeeOnTransferPoC is Test {
         });
     }
 
-    function _pullAll() internal view returns (StableLPManager.WithdrawToParams memory p) {
-        StableLPManager.WithdrawStep[] memory pulls = new StableLPManager.WithdrawStep[](1);
-        pulls[0] = StableLPManager.WithdrawStep({
+    function _pullAll() internal view returns (BaseLPManager.WithdrawToParams memory p) {
+        BaseLPManager.WithdrawStep[] memory pulls = new BaseLPManager.WithdrawStep[](1);
+        pulls[0] = BaseLPManager.WithdrawStep({
             poolId: poolId, liquidityToPull: mgr.positionOf(PoolId.unwrap(poolId)).liquidity
         });
-        p = StableLPManager.WithdrawToParams({
+        p = BaseLPManager.WithdrawToParams({
             recipient: recipient,
             requestedStable: cFot,
             amount: 5_000e18,
             pulls: pulls,
-            swaps: new StableLPManager.WithdrawSwap[](0),
+            swaps: new BaseLPManager.WithdrawSwap[](0),
             reinvestRemainder: false
         });
     }
@@ -139,7 +138,7 @@ contract StableLPManagerH2FeeOnTransferPoC is Test {
         fot.setFeeBps(100); // 1% transfer fee switches on
 
         uint256 before = fot.balanceOf(recipient);
-        StableLPManager.WithdrawToParams memory p = _pullAll();
+        BaseLPManager.WithdrawToParams memory p = _pullAll();
 
         vm.prank(owner);
         mgr.withdrawTo(p); // does NOT revert — the v4 `currencyDelta` guard sees the full amount
@@ -158,9 +157,9 @@ contract StableLPManagerH2FeeOnTransferPoC is Test {
         fot.setFeeBps(100); // 1% transfer fee switches on
 
         // A pre-swap leg makes the manager owe the FOT side to the pool ⇒ `_settle` under-delivers.
-        StableLPManager.AllocLeg[] memory legs = new StableLPManager.AllocLeg[](1);
+        BaseLPManager.AllocLeg[] memory legs = new BaseLPManager.AllocLeg[](1);
         bool fotIsZero = Currency.unwrap(key.currency0) == Currency.unwrap(cFot);
-        legs[0] = StableLPManager.AllocLeg({
+        legs[0] = BaseLPManager.AllocLeg({
             poolId: poolId,
             zeroForOne: fotIsZero, // spend FOT into the pool
             swapAmountIn: 10_000e18,

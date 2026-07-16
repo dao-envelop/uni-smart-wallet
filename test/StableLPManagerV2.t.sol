@@ -4,6 +4,7 @@ pragma solidity ^0.8.26;
 import {Test} from "forge-std/Test.sol";
 import {StableLPTestBase} from "./helpers/StableLPTestBase.sol";
 import {StableLPManager} from "../src/StableLPManager.sol";
+import {BaseLPManager} from "../src/BaseLPManager.sol";
 import {StableLPFactory} from "../src/StableLPFactory.sol";
 import {MockERC20} from "./helpers/Mocks.sol";
 
@@ -29,13 +30,13 @@ contract StableLPManagerV2Test is StableLPTestBase {
     function _legSwapAndLP(uint8 i, Currency source, uint256 amount)
         internal
         view
-        returns (StableLPManager.AllocLeg memory)
+        returns (BaseLPManager.AllocLeg memory)
     {
         bool sourceIsZero = Currency.unwrap(poolKeys[i].currency0) == Currency.unwrap(source);
         uint160 limit = sourceIsZero ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1;
         uint256 half = amount / 2;
         uint256 lpEach = (half * 95) / 100;
-        return StableLPManager.AllocLeg({
+        return BaseLPManager.AllocLeg({
             poolId: poolKeys[i].toId(),
             zeroForOne: sourceIsZero,
             swapAmountIn: half,
@@ -46,8 +47,8 @@ contract StableLPManagerV2Test is StableLPTestBase {
         });
     }
 
-    function _legs(StableLPManager.AllocLeg memory one) internal pure returns (StableLPManager.AllocLeg[] memory a) {
-        a = new StableLPManager.AllocLeg[](1);
+    function _legs(BaseLPManager.AllocLeg memory one) internal pure returns (BaseLPManager.AllocLeg[] memory a) {
+        a = new BaseLPManager.AllocLeg[](1);
         a[0] = one;
     }
 
@@ -72,7 +73,7 @@ contract StableLPManagerV2Test is StableLPTestBase {
 
         // A leg that LPs pool0 (USDC/USDT) with NO pre-swap, sourcing USDT directly from the
         // manager's pre-existing balance — which manual mode forbids (only USDC may be drawn down).
-        StableLPManager.AllocLeg memory leg = StableLPManager.AllocLeg({
+        BaseLPManager.AllocLeg memory leg = BaseLPManager.AllocLeg({
             poolId: poolKeys[0].toId(),
             zeroForOne: false,
             swapAmountIn: 0,
@@ -83,20 +84,20 @@ contract StableLPManagerV2Test is StableLPTestBase {
         });
 
         vm.prank(owner);
-        vm.expectRevert(abi.encodeWithSelector(StableLPManager.UnexpectedStableSpend.selector, USDT));
+        vm.expectRevert(abi.encodeWithSelector(BaseLPManager.UnexpectedStableSpend.selector, USDT));
         mgr.allocateFrom(USDC, amt, _legs(leg));
     }
 
     function test_allocateFrom_notDeposited_reverts() public {
         vm.prank(owner);
-        vm.expectRevert(abi.encodeWithSelector(StableLPManager.NotDeposited.selector, USDC, uint256(0), uint256(1e18)));
+        vm.expectRevert(abi.encodeWithSelector(BaseLPManager.NotDeposited.selector, USDC, uint256(0), uint256(1e18)));
         mgr.allocateFrom(USDC, 1e18, _legs(_legSwapAndLP(0, USDC, 1e18)));
     }
 
     function test_allocateFrom_unmanagedStable_reverts() public {
         Currency rogue = _mkToken();
         vm.prank(owner);
-        vm.expectRevert(abi.encodeWithSelector(StableLPManager.UnmanagedStable.selector, rogue));
+        vm.expectRevert(abi.encodeWithSelector(BaseLPManager.UnmanagedStable.selector, rogue));
         mgr.allocateFrom(rogue, 1e18, _legs(_legSwapAndLP(0, USDC, 1e18)));
     }
 }
@@ -121,10 +122,10 @@ contract StableLPManyPoolsTest is Test {
         StableLPFactory factory = new StableLPFactory(address(impl));
 
         Currency hub = _tok();
-        StableLPManager.PoolConfig[] memory cfgs = new StableLPManager.PoolConfig[](7);
+        BaseLPManager.PoolConfig[] memory cfgs = new BaseLPManager.PoolConfig[](7);
         for (uint256 i = 0; i < 7; ++i) {
             (Currency c0, Currency c1) = _sorted(hub, _tok());
-            cfgs[i] = StableLPManager.PoolConfig({
+            cfgs[i] = BaseLPManager.PoolConfig({
                 key: PoolKey({currency0: c0, currency1: c1, fee: FEE, tickSpacing: SPACING, hooks: IHooks(address(0))}),
                 tickLower: -60,
                 tickUpper: 60
@@ -133,7 +134,7 @@ contract StableLPManyPoolsTest is Test {
 
         StableLPManager mgr = StableLPManager(
             payable(factory.createManager(
-                    StableLPManager.InitParams({owner: owner, name: bytes32("Envelop StableLP"), pools: cfgs})
+                    BaseLPManager.InitParams({owner: owner, name: bytes32("Envelop StableLP"), pools: cfgs})
                 ))
         );
 

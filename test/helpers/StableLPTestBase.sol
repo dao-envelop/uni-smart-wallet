@@ -4,6 +4,7 @@ pragma solidity ^0.8.26;
 import {Test} from "forge-std/Test.sol";
 
 import {StableLPManager} from "../../src/StableLPManager.sol";
+import {BaseLPManager} from "../../src/BaseLPManager.sol";
 import {StableLPFactory} from "../../src/StableLPFactory.sol";
 import {MockERC20} from "./Mocks.sol";
 
@@ -100,12 +101,12 @@ abstract contract StableLPTestBase is Test {
         vm.stopPrank();
     }
 
-    function _initParams(address owner_) internal view returns (StableLPManager.InitParams memory p) {
-        StableLPManager.PoolConfig[] memory cfgs = new StableLPManager.PoolConfig[](3);
+    function _initParams(address owner_) internal view returns (BaseLPManager.InitParams memory p) {
+        BaseLPManager.PoolConfig[] memory cfgs = new BaseLPManager.PoolConfig[](3);
         for (uint8 i = 0; i < 3; ++i) {
-            cfgs[i] = StableLPManager.PoolConfig({key: poolKeys[i], tickLower: TL, tickUpper: TU});
+            cfgs[i] = BaseLPManager.PoolConfig({key: poolKeys[i], tickLower: TL, tickUpper: TU});
         }
-        p = StableLPManager.InitParams({owner: owner_, name: bytes32("Envelop StableLP"), pools: cfgs});
+        p = BaseLPManager.InitParams({owner: owner_, name: bytes32("Envelop StableLP"), pools: cfgs});
     }
 
     /// @dev Position salt == poolId (one position per pool).
@@ -116,19 +117,19 @@ abstract contract StableLPTestBase is Test {
     /// @dev Build a 3-leg allocate that deploys `total` USDT across the pools: each leg swaps ~half
     /// of its USDT share into the pair token, then LPs both sides. Desired add amounts are set just
     /// below the swap output so the pair side never falls short at net settlement.
-    function _allocateParams(uint256 total) internal view returns (StableLPManager.AllocLeg[] memory legs) {
+    function _allocateParams(uint256 total) internal view returns (BaseLPManager.AllocLeg[] memory legs) {
         uint256 a = (total * 3334) / 10_000;
         uint256 b = (total * 3333) / 10_000;
         uint256 c = total - a - b;
         uint256[3] memory q = [a, b, c];
-        legs = new StableLPManager.AllocLeg[](3);
+        legs = new BaseLPManager.AllocLeg[](3);
         for (uint8 i = 0; i < 3; ++i) {
             // pre-swap USDT→pair: zeroForOne iff USDT is currency0; pick the matching extreme bound.
             bool quoteIsZero = Currency.unwrap(poolKeys[i].currency0) == Currency.unwrap(USDT);
             uint160 limit = quoteIsZero ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1;
             uint256 half = q[i] / 2;
             uint256 lpEach = (half * 95) / 100; // below swap output to avoid a pair shortfall at settle
-            legs[i] = StableLPManager.AllocLeg({
+            legs[i] = BaseLPManager.AllocLeg({
                 poolId: poolKeys[i].toId(),
                 zeroForOne: quoteIsZero, // input side is the USDT we hold
                 swapAmountIn: half,
@@ -144,13 +145,13 @@ abstract contract StableLPTestBase is Test {
     function _exactOut(uint8 i, Currency tokenOut, uint256 amountOut)
         internal
         view
-        returns (StableLPManager.WithdrawSwap memory)
+        returns (BaseLPManager.WithdrawSwap memory)
     {
         PoolKey memory key = poolKeys[i];
         bool outIsZero = Currency.unwrap(tokenOut) == Currency.unwrap(key.currency0);
         bool zeroForOne = !outIsZero; // output token0 ⇒ oneForZero; output token1 ⇒ zeroForOne
         uint160 limit = zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1;
-        return StableLPManager.WithdrawSwap({
+        return BaseLPManager.WithdrawSwap({
             poolId: poolKeys[i].toId(),
             zeroForOne: zeroForOne,
             amountSpecified: int256(amountOut),
