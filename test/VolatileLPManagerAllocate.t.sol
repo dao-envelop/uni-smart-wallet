@@ -16,13 +16,15 @@ import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
-import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
+import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {PoolModifyLiquidityTest} from "@uniswap/v4-core/src/test/PoolModifyLiquidityTest.sol";
+import {PoolSwapTest} from "@uniswap/v4-core/src/test/PoolSwapTest.sol";
 
 /// @notice VolatileLPManager.allocate: per-call ranges, salt-keyed multi-position, amountMax + minOut.
 contract VolatileLPManagerAllocateTest is Test {
     PoolManager internal poolManager;
     PoolModifyLiquidityTest internal lpRouter;
+    PoolSwapTest internal swapRouter;
     VolatileLPManager internal mgr;
 
     Currency internal c0;
@@ -42,6 +44,7 @@ contract VolatileLPManagerAllocateTest is Test {
     function setUp() public {
         poolManager = new PoolManager(address(this));
         lpRouter = new PoolModifyLiquidityTest(IPoolManager(address(poolManager)));
+        swapRouter = new PoolSwapTest(IPoolManager(address(poolManager)));
 
         Currency a = Currency.wrap(address(new MockERC20()));
         Currency b = Currency.wrap(address(new MockERC20()));
@@ -217,5 +220,56 @@ contract VolatileLPManagerAllocateTest is Test {
         vm.prank(owner);
         vm.expectRevert(abi.encodeWithSelector(V4PositionManager.UnknownPosition.selector, salt));
         mgr.recenter(_recenter(salt, -120, 120));
+    }
+
+    // ────────── claimFees ──────────
+
+    /// @dev A trader round-trips through the pool near tick 0 so the manager's in-range position
+    /// accrues fees on both sides.
+    function _bal(Currency c, address who) internal view returns (uint256) {
+        return MockERC20(Currency.unwrap(c)).balanceOf(who);
+    }
+
+    function _tradeToAccrueFees() internal {
+        address trader = address(0x7EA4E5);
+        MockERC20(Currency.unwrap(c0)).mint(trader, 100e18);
+        MockERC20(Currency.unwrap(c1)).mint(trader, 100e18);
+        PoolSwapTest.TestSettings memory ts = PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false});
+        vm.startPrank(trader);
+        MockERC20(Currency.unwrap(c0)).approve(address(swapRouter), type(uint256).max);
+        MockERC20(Currency.unwrap(c1)).approve(address(swapRouter), type(uint256).max);
+        swapRouter.swap(
+            key,
+            SwapParams({zeroForOne: true, amountSpecified: -1e18, sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1}),
+            ts,
+            ""
+        );
+        swapRouter.swap(
+            key,
+            SwapParams({zeroForOne: false, amountSpecified: -1e18, sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1}),
+            ts,
+            ""
+        );
+        vm.stopPrank();
+    }
+
+    function test_claimFees_afterSwaps_harvestsToManager() public {
+        bytes32 salt = bytes32(uint256(1));
+        vm.prank(owner);
+        mgr.allocate(_one(_leg(salt, -60, 60, 500e18, type(uint128).max, type(uint128).max)));
+
+        _tradeToAccrueFees();
+
+        uint256 before = _bal(c0, address(mgr)) + _bal(c1, address(mgr));
+        vm.prank(owner);
+        mgr.claimFees(salt);
+        assertGt(_bal(c0, address(mgr)) + _bal(c1, address(mgr)), before, "fees harvested to manager");
+    }
+
+    function test_claimFees_unknownPosition_reverts() public {
+        bytes32 salt = bytes32(uint256(42));
+        vm.prank(owner);
+        vm.expectRevert(abi.encodeWithSelector(V4PositionManager.UnknownPosition.selector, salt));
+        mgr.claimFees(salt);
     }
 }

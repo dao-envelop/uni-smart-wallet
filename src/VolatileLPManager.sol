@@ -106,9 +106,35 @@ contract VolatileLPManager is BaseLPManager {
     // ────────── Unlock dispatch (this product's ops) ──────────
 
     function _dispatchExtraOp(uint8 op, bytes memory payload) internal override returns (bytes memory) {
+        if (op == uint8(Op.POKE)) return _handleClaim(payload); // claimFees (with protocol fee)
         if (op == OP_ALLOCATE_V) return _handleAllocateV(payload);
         if (op == OP_RECENTER) return _handleRecenter(payload);
         return super._dispatchExtraOp(op, payload);
+    }
+
+    // ────────── claimFees ──────────
+
+    /// @notice Harvest accrued fees on `salt` to the manager (no principal change); the protocol fee
+    /// is skimmed first. Owner-or-operator.
+    /// @param salt The position key.
+    function claimFees(bytes32 salt) external onlyAuthorized nonReentrant {
+        _pokePosition(salt); // reverts UnknownPosition if not open
+        emit IERC4906.MetadataUpdate(TOKEN_ID);
+    }
+
+    /// @dev POKE handler: realize fees (liquidityDelta 0), skim the protocol cut, net the rest back.
+    function _handleClaim(bytes memory payload) internal returns (bytes memory) {
+        RemoveParams memory r = abi.decode(payload, (RemoveParams));
+        (, BalanceDelta fees) = POOL_MANAGER.modifyLiquidity(
+            r.key,
+            ModifyLiquidityParams({tickLower: r.tickLower, tickUpper: r.tickUpper, liquidityDelta: 0, salt: r.salt}),
+            ""
+        );
+        _skimFees(r.key, fees);
+        _settleCurrency(r.key.currency0);
+        _settleCurrency(r.key.currency1);
+        emit FeesCollected(r.salt, _pos(fees.amount0()), _pos(fees.amount1()));
+        return "";
     }
 
     // ────────── allocate ──────────
