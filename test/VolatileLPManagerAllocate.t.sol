@@ -272,4 +272,55 @@ contract VolatileLPManagerAllocateTest is Test {
         vm.expectRevert(abi.encodeWithSelector(V4PositionManager.UnknownPosition.selector, salt));
         mgr.claimFees(salt);
     }
+
+    // ────────── withdrawTo ──────────
+
+    function _withdraw(bytes32 salt, uint128 liq, Currency requested, uint256 amount)
+        internal
+        pure
+        returns (VolatileLPManager.VWithdrawToParams memory p)
+    {
+        VolatileLPManager.VWithdrawStep[] memory pulls = new VolatileLPManager.VWithdrawStep[](1);
+        pulls[0] = VolatileLPManager.VWithdrawStep({salt: salt, liquidityToPull: liq});
+        p = VolatileLPManager.VWithdrawToParams({
+            recipient: address(0xCAFE),
+            requestedCurrency: requested,
+            amount: amount,
+            pulls: pulls,
+            swaps: new VolatileLPManager.VWithdrawSwap[](0)
+        });
+    }
+
+    function test_withdrawTo_deliversToRecipient() public {
+        bytes32 salt = bytes32(uint256(1));
+        vm.startPrank(owner);
+        mgr.allocate(_one(_leg(salt, -60, 60, 100e18, type(uint128).max, type(uint128).max)));
+        uint128 liq = mgr.positionOf(salt).liquidity;
+        mgr.withdrawTo(_withdraw(salt, liq, c0, 10e18));
+        vm.stopPrank();
+
+        assertEq(_bal(c0, address(0xCAFE)), 10e18, "recipient received requested currency");
+        assertEq(mgr.positionOf(salt).liquidity, 0, "position fully pulled");
+        assertEq(mgr.openPositionCount(), 0, "removed from registry");
+    }
+
+    function test_withdrawTo_amountNotDelivered_reverts() public {
+        bytes32 salt = bytes32(uint256(1));
+        vm.startPrank(owner);
+        mgr.allocate(_one(_leg(salt, -60, 60, 100e18, type(uint128).max, type(uint128).max)));
+        uint128 liq = mgr.positionOf(salt).liquidity;
+        // request far more than the pulled position frees ⇒ AmountNotDelivered
+        vm.expectPartialRevert(BaseLPManager.AmountNotDelivered.selector);
+        mgr.withdrawTo(_withdraw(salt, liq, c0, 1_000_000e18));
+        vm.stopPrank();
+    }
+
+    function test_withdrawTo_byOperatorForbidden() public {
+        // withdrawTo is owner-only (onlyOwnerNFT); an operator must not drain.
+        vm.prank(owner);
+        mgr.setOperator(bot, true);
+        vm.prank(bot);
+        vm.expectRevert();
+        mgr.withdrawTo(_withdraw(bytes32(uint256(1)), 1, c0, 1));
+    }
 }
