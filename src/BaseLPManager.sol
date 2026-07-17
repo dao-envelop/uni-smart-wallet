@@ -21,16 +21,18 @@ import {PositionMath} from "./lib/PositionMath.sol";
 import {IWalletDescriptor} from "./interfaces/IWalletDescriptor.sol";
 
 /// @title BaseLPManager
-/// @notice Shared abstract base for the clone-deployed, NFT-owned LP managers. Holds a configurable
-/// set of hookless pools; the owner deposits managed currencies and the operator drives liquidity
-/// via `allocate` / `allocateFrom`, with `withdrawTo` (indirect drain via v4-native `take`),
-/// `reinvest`, and `claimFees`. Products (e.g. `StableLPManager`, a volatile-pair manager) subclass
-/// this and supply their identity (`ORACLE_TYPE` / `symbol` / product name / default NFT name) and
-/// may override the per-leg add (`_allocateLeg` / `_addLiquidity`) to change range/slippage policy.
+/// @notice Shared abstract core for the clone-deployed, NFT-owned LP managers. Holds the configured
+/// hookless pool set + managed-currency union, the one-shot `initialize`, the protocol-fee skim,
+/// currency settlement primitives, `tokenURI`/descriptor, the owner escape hatch, and the unlock
+/// dispatch shell. The liquidity model itself — allocate / withdraw / reinvest / claimFees and the
+/// per-pool-vs-per-call range + slippage policy — lives in each product subclass (`StableLPManager`,
+/// `VolatileLPManager`), which routes its own ops via `_dispatchExtraOp` and supplies its identity
+/// (`ORACLE_TYPE` / `symbol` / product name / default NFT name). This keeps each product carrying
+/// only its own model, so both fit under EIP-170.
 /// @dev Reuses {SingletonNFTOwned} (auth) and {V4PositionManager} (V4 mechanics). ERC20-only custody
 /// (accepts native via `receive`, no NFT/ERC1155 holders) with a single batch escape hatch
-/// (`executeEncodedTxBatch`) instead of Envelop's SmartWallet — keeps each clone under EIP-170.
-/// Deployed as an EIP-1167 clone; config is injected via one-shot `initialize`.
+/// (`executeEncodedTxBatch`) instead of Envelop's SmartWallet. Deployed as an EIP-1167 clone; config
+/// is injected via one-shot `initialize`.
 abstract contract BaseLPManager is SingletonNFTOwned, V4PositionManager {
     using StateLibrary for IPoolManager;
     using TransientStateLibrary for IPoolManager;
@@ -45,11 +47,6 @@ abstract contract BaseLPManager is SingletonNFTOwned, V4PositionManager {
     uint16 public constant PROTOCOL_FEE_BPS = 1000;
     /// @dev Fallback NFT name (product-specific) used when `InitParams.name` is empty (`bytes32(0)`).
     function _defaultName() internal pure virtual returns (bytes32);
-
-    // Op codes extending the base 0–3 set (see V4PositionManager).
-    uint8 internal constant OP_ALLOCATE = 4;
-    uint8 internal constant OP_WITHDRAW_TO = 5;
-    uint8 internal constant OP_REINVEST = 6;
 
     // ────────── Config structs ──────────
 
@@ -280,271 +277,17 @@ abstract contract BaseLPManager is SingletonNFTOwned, V4PositionManager {
 
     // ────────── Unlock dispatch ──────────
 
-    /// @notice PoolManager unlock callback. Fully overrides the base dispatcher to route ONLY the ops
-    /// this product uses (POKE/ALLOCATE/WITHDRAW_TO/REINVEST). Omitting OPEN/CLOSE makes the base's
-    /// open/close handlers unreachable, so the compiler strips them — a deliberate bytecode-size
-    /// reduction (keeps the clone under EIP-170). Reverts unless called by the PoolManager.
-    /// @param data ABI-encoded `(uint8 op, bytes payload)` produced by this manager before `unlock`.
-    /// @return Empty bytes (settlement happens inside the handlers).
+    /// @notice PoolManager unlock callback. The base defines no ops of its own — it decodes the
+    /// leading op code and forwards to `_dispatchExtraOp`, which each product overrides to route its
+    /// own ops (POKE/allocate/withdraw/recenter…) against the shared primitives. Omitting the
+    /// {V4PositionManager} OPEN/CLOSE handlers keeps them unreachable so the compiler strips them
+    /// (EIP-170). Reverts unless called by the PoolManager.
+    /// @param data ABI-encoded `(uint8 op, bytes payload)` produced by the product before `unlock`.
+    /// @return The product handler's return data.
     function unlockCallback(bytes calldata data) external override returns (bytes memory) {
         if (msg.sender != address(POOL_MANAGER)) revert NotPoolManager();
         (uint8 op, bytes memory payload) = abi.decode(data, (uint8, bytes));
-        if (op == uint8(Op.POKE)) return _handleClaim(payload); // claimFees (with protocol fee)
-        if (op == OP_ALLOCATE) return _handleAllocate(payload);
-        if (op == OP_WITHDRAW_TO) return _handleWithdrawTo(payload);
-        if (op == OP_REINVEST) return _handleReinvest(payload);
-        revert UnknownOp(op);
-    }
-
-    // ────────── allocate ──────────
-
-    /// @notice Auto mode: deploy liquidity per `legs`, drawing from whatever managed stables sit on
-    /// the manager's balance; residuals net back to the manager. Owner-or-operator (off-chain sizing).
-    /// @param legs Per-pool actions (optional pre-swap + desired add amounts + slippage floor).
-    function allocate(AllocLeg[] calldata legs) external onlyAuthorized nonReentrant {
-        _validateLegs(legs);
-        POOL_MANAGER.unlock(abi.encode(OP_ALLOCATE, abi.encode(legs)));
-        emit Allocated(legs.length);
-        emit IERC4906.MetadataUpdate(TOKEN_ID);
-    }
-
-    /// @notice Manual mode: deploy a specific just-deposited `stable` (>= `amount` must already sit
-    /// on the manager). Guards that the operation draws down ONLY `stable` — no other managed stable
-    /// balance may decrease — so deposit-and-allocate can't dip into pre-existing holdings.
-    /// Owner-or-operator.
-    /// @param stable The managed stable being deployed (the only balance allowed to decrease).
-    /// @param amount Amount that must already sit on the manager (snapshot guard reference).
-    /// @param legs Per-pool actions (optional pre-swap + desired add amounts + slippage floor).
-    function allocateFrom(Currency stable, uint256 amount, AllocLeg[] calldata legs)
-        external
-        onlyAuthorized
-        nonReentrant
-    {
-        if (!isManagedStable[stable]) revert UnmanagedStable(stable);
-        if (amount == 0) revert ZeroAmount();
-        uint256 have = stable.balanceOfSelf();
-        if (have < amount) revert NotDeposited(stable, have, amount);
-        _validateLegs(legs);
-
-        uint256 n = managedStables.length;
-        uint256[] memory pre = new uint256[](n);
-        for (uint256 i = 0; i < n; ++i) {
-            pre[i] = managedStables[i].balanceOfSelf();
-        }
-
-        POOL_MANAGER.unlock(abi.encode(OP_ALLOCATE, abi.encode(legs)));
-
-        // Only `stable` may have decreased; every other managed stable must end >= its pre-balance.
-        for (uint256 i = 0; i < n; ++i) {
-            Currency c = managedStables[i];
-            if (Currency.unwrap(c) == Currency.unwrap(stable)) continue;
-            if (c.balanceOfSelf() < pre[i]) revert UnexpectedStableSpend(c);
-        }
-
-        emit Allocated(legs.length);
-        emit IERC4906.MetadataUpdate(TOKEN_ID);
-    }
-
-    function _validateLegs(AllocLeg[] calldata legs) internal view {
-        if (legs.length == 0) revert NoLegs();
-        for (uint256 i = 0; i < legs.length; ++i) {
-            _indexOf(legs[i].poolId); // reverts UnknownPool if not configured
-        }
-    }
-
-    function _handleAllocate(bytes memory payload) internal returns (bytes memory) {
-        AllocLeg[] memory legs = abi.decode(payload, (AllocLeg[]));
-        for (uint256 i = 0; i < legs.length; ++i) {
-            _allocateLeg(legs[i]);
-        }
-        _settleManaged();
-        return "";
-    }
-
-    /// @dev Per-leg: optional exactIn pre-swap to balance the sides, then add liquidity sized from
-    /// the operator's desired amounts. Settlement is deferred to the final `_settleManaged()` pass.
-    function _allocateLeg(AllocLeg memory leg) internal virtual returns (uint128 L) {
-        PoolConfig memory P = pools[_indexOf(leg.poolId)];
-        if (leg.swapAmountIn > 0) {
-            BalanceDelta sd = _swap(P.key, leg.zeroForOne, -int256(leg.swapAmountIn), leg.swapPriceLimit);
-            int128 inDelta = leg.zeroForOne ? sd.amount0() : sd.amount1();
-            // exactIn: a partial fill (price limit hit) leaves |inDelta| < requested input.
-            if (uint256(uint128(-inDelta)) < leg.swapAmountIn) revert SwapSlippage(leg.poolId);
-        }
-        L = _addLiquidity(leg.poolId, P, leg.amount0Desired, leg.amount1Desired, leg.minLiquidity);
-    }
-
-    /// @dev Shared by allocate and reinvest: size liquidity at the current price, add it, and
-    /// record/merge the position (`salt == poolId`). Settlement is the caller's job. `P` is passed in
-    /// (already resolved by the caller) to avoid a re-lookup. No per-side spend cap is needed: `L` is
-    /// sized from `amount{0,1}` at the on-chain price, so the realized owed is `<= amount{0,1}`.
-    function _addLiquidity(PoolId id, PoolConfig memory P, uint256 amount0, uint256 amount1, uint128 minLiq)
-        internal
-        virtual
-        returns (uint128 L)
-    {
-        bytes32 salt = PoolId.unwrap(id);
-        (uint160 sqrtP,,,) = POOL_MANAGER.getSlot0(id);
-        if (sqrtP == 0) revert PoolUninitialized();
-
-        L = PositionMath.liquidityFromAmounts(sqrtP, P.tickLower, P.tickUpper, amount0, amount1);
-        if (L < minLiq) revert MinLiquidityNotMet(L, minLiq);
-
-        (, BalanceDelta fees) = POOL_MANAGER.modifyLiquidity(
-            P.key,
-            ModifyLiquidityParams({
-                tickLower: P.tickLower, tickUpper: P.tickUpper, liquidityDelta: int256(uint256(L)), salt: salt
-            }),
-            ""
-        );
-        _skimFees(P.key, fees); // protocol fee on any accrued fees realized by a top-up
-
-        if (positions[salt].liquidity == 0) {
-            positions[salt] = Position({
-                key: P.key,
-                tickLower: P.tickLower,
-                tickUpper: P.tickUpper,
-                liquidity: L,
-                openedAt: uint64(block.timestamp)
-            });
-            _registerSalt(salt);
-        } else {
-            positions[salt].liquidity += L;
-        }
-    }
-
-    // ────────── withdrawTo (indirect withdraw) ──────────
-
-    /// @notice Deliver `p.amount` of `p.requestedStable` to `p.recipient` without the stable ever
-    /// touching the manager's or owner's balance (v4-native `take`). Owner-only — the drain primitive.
-    /// @param p Withdraw plan: recipient, requested stable + amount, liquidity pulls, and conversion
-    /// swaps. `reinvestRemainder` is reserved (phase-1 no-op; residuals always return to the manager).
-    function withdrawTo(WithdrawToParams calldata p) external onlyOwnerNFT nonReentrant {
-        if (p.recipient == address(0)) revert RecipientZero();
-        if (!isManagedStable[p.requestedStable]) revert UnmanagedStable(p.requestedStable);
-        if (p.amount == 0) revert ZeroAmount();
-        for (uint256 i = 0; i < p.pulls.length; ++i) {
-            WithdrawStep calldata s = p.pulls[i];
-            _indexOf(s.poolId); // reverts UnknownPool if not configured
-            uint128 have = positions[PoolId.unwrap(s.poolId)].liquidity;
-            if (s.liquidityToPull > have) revert DeltaExceedsLiquidity(s.liquidityToPull, have);
-        }
-        POOL_MANAGER.unlock(abi.encode(OP_WITHDRAW_TO, abi.encode(p)));
-        emit IERC4906.MetadataUpdate(TOKEN_ID);
-    }
-
-    function _handleWithdrawTo(bytes memory payload) internal returns (bytes memory) {
-        WithdrawToParams memory p = abi.decode(payload, (WithdrawToParams));
-
-        // 1. Pull liquidity — principal + accrued fees become positive deltas.
-        for (uint256 i = 0; i < p.pulls.length; ++i) {
-            _pullLiquidity(p.pulls[i]);
-        }
-
-        // 2. Convert freed legs into the requested stable (exactOut preferred).
-        for (uint256 i = 0; i < p.swaps.length; ++i) {
-            WithdrawSwap memory w = p.swaps[i];
-            _swap(pools[_indexOf(w.poolId)].key, w.zeroForOne, w.amountSpecified, w.sqrtPriceLimitX96);
-        }
-
-        // 3. Guard: we must hold at least `amount` of the requested stable as a credit.
-        int256 got = POOL_MANAGER.currencyDelta(address(this), p.requestedStable);
-        if (got < int256(p.amount)) revert AmountNotDelivered(got > 0 ? uint256(got) : 0, p.amount);
-
-        // 4. Deliver straight from PoolManager to recipient — bypasses our balance.
-        _take(p.requestedStable, p.recipient, p.amount);
-
-        // 5. Net residuals back to the manager (settle owed, take leftovers to self).
-        _settleManaged();
-
-        emit WithdrawnTo(p.recipient, p.requestedStable, p.amount);
-        return "";
-    }
-
-    function _pullLiquidity(WithdrawStep memory s) internal {
-        if (s.liquidityToPull == 0) return;
-        bytes32 salt = PoolId.unwrap(s.poolId);
-        PoolConfig memory P = pools[_indexOf(s.poolId)];
-        (, BalanceDelta fees) = POOL_MANAGER.modifyLiquidity(
-            P.key,
-            ModifyLiquidityParams({
-                tickLower: P.tickLower,
-                tickUpper: P.tickUpper,
-                liquidityDelta: -int256(uint256(s.liquidityToPull)),
-                salt: salt
-            }),
-            ""
-        );
-        _skimFees(P.key, fees); // protocol fee on the accrued-fee component (principal untouched)
-        positions[salt].liquidity -= s.liquidityToPull;
-        if (positions[salt].liquidity == 0) {
-            _removeSalt(salt);
-            delete positions[salt];
-        }
-    }
-
-    // ────────── reinvest / claimFees ──────────
-
-    /// @notice Collect accrued fees on `salt` to the manager (no principal change). The protocol
-    /// fee is skimmed first; the remainder lands on the manager. Owner-or-operator.
-    /// @param salt The position key (`== poolId`).
-    function claimFees(bytes32 salt) external onlyAuthorized nonReentrant {
-        _pokePosition(salt);
-        emit IERC4906.MetadataUpdate(TOKEN_ID);
-    }
-
-    /// @dev POKE handler (replaces the base one): realize fees, skim the protocol cut, net the
-    /// remainder to the manager.
-    function _handleClaim(bytes memory payload) internal returns (bytes memory) {
-        RemoveParams memory r = abi.decode(payload, (RemoveParams));
-        (, BalanceDelta fees) = POOL_MANAGER.modifyLiquidity(
-            r.key,
-            ModifyLiquidityParams({tickLower: r.tickLower, tickUpper: r.tickUpper, liquidityDelta: 0, salt: r.salt}),
-            ""
-        );
-        _skimFees(r.key, fees);
-        _settleCurrency(r.key.currency0);
-        _settleCurrency(r.key.currency1);
-        emit FeesCollected(r.salt, _pos(fees.amount0()), _pos(fees.amount1()));
-        return "";
-    }
-
-    /// @notice Compound realized fees of one pool back into its position. The pool is `leg.poolId`.
-    /// Owner-or-operator.
-    /// @param leg The pool action: which pool (`leg.poolId`), optional balancing pre-swap, and the
-    /// `minLiquidity` floor. The add is sized from the realized fee deltas, not `amount{0,1}Desired`.
-    function reinvest(AllocLeg calldata leg) external onlyAuthorized nonReentrant {
-        _indexOf(leg.poolId); // reverts UnknownPool if not configured
-        POOL_MANAGER.unlock(abi.encode(OP_REINVEST, abi.encode(leg)));
-        emit IERC4906.MetadataUpdate(TOKEN_ID);
-    }
-
-    function _handleReinvest(bytes memory payload) internal returns (bytes memory) {
-        AllocLeg memory leg = abi.decode(payload, (AllocLeg));
-        PoolConfig memory P = pools[_indexOf(leg.poolId)];
-        bytes32 salt = PoolId.unwrap(leg.poolId);
-
-        // Realize fees as a positive caller delta, then skim the protocol cut before compounding.
-        (, BalanceDelta fees) = POOL_MANAGER.modifyLiquidity(
-            P.key,
-            ModifyLiquidityParams({tickLower: P.tickLower, tickUpper: P.tickUpper, liquidityDelta: 0, salt: salt}),
-            ""
-        );
-        _skimFees(P.key, fees);
-
-        if (leg.swapAmountIn > 0) {
-            _swap(P.key, leg.zeroForOne, -int256(leg.swapAmountIn), leg.swapPriceLimit);
-        }
-
-        // Size the add from the realized (positive) deltas of the two pool currencies.
-        int256 d0 = POOL_MANAGER.currencyDelta(address(this), P.key.currency0);
-        int256 d1 = POOL_MANAGER.currencyDelta(address(this), P.key.currency1);
-        uint128 L = _addLiquidity(leg.poolId, P, d0 > 0 ? uint256(d0) : 0, d1 > 0 ? uint256(d1) : 0, leg.minLiquidity);
-
-        _settleCurrency(P.key.currency0);
-        _settleCurrency(P.key.currency1);
-        emit Reinvested(salt, L);
-        return "";
+        return _dispatchExtraOp(op, payload);
     }
 
     // ────────── Owner config / inherited entry points ──────────
