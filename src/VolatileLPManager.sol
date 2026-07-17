@@ -14,6 +14,7 @@ import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.so
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {TransientStateLibrary} from "@uniswap/v4-core/src/libraries/TransientStateLibrary.sol";
 import {PositionMath} from "./lib/PositionMath.sol";
+import {IPriceOracle} from "./interfaces/IPriceOracle.sol";
 import {BaseLPManager} from "./BaseLPManager.sol";
 
 /// @title VolatileLPManager
@@ -32,6 +33,14 @@ contract VolatileLPManager is BaseLPManager {
     uint8 internal constant OP_ALLOCATE_V = 7;
     uint8 internal constant OP_RECENTER = 8;
     uint8 internal constant OP_WITHDRAW_TO_V = 9;
+
+    /// @notice Optional external price guard for on-chain swaps (allocate pre-swap / recenter
+    /// rebalance). Zero ⇒ no oracle: the operator's `amount*Max` / `minAmountOut` are the only guard.
+    /// Owner-settable via {setPriceOracle}.
+    address public priceOracle;
+
+    /// @notice Emitted when the price oracle is (re)set.
+    event PriceOracleSet(address indexed oracle);
 
     /// @notice One volatile allocation: pick a configured pool + a caller-chosen `salt`, a per-call
     /// range, an optional balancing pre-swap (bounded by `minAmountOut`), and an add sized from
@@ -127,6 +136,22 @@ contract VolatileLPManager is BaseLPManager {
 
     function _defaultName() internal pure override returns (bytes32) {
         return bytes32("Envelop Volatile LP Manager");
+    }
+
+    // ────────── Price oracle config ──────────
+
+    /// @notice Set (or clear, with the zero address) the external price guard. Owner-only.
+    /// @param oracle The {IPriceOracle} to enforce on swaps; zero ⇒ disabled.
+    function setPriceOracle(address oracle) external onlyOwnerNFT {
+        priceOracle = oracle;
+        emit PriceOracleSet(oracle);
+    }
+
+    /// @dev Enforce the oracle bound on a just-executed swap (no-op when unset). The oracle reverts if
+    /// the realized price is out of bounds; a stale/absent reference is a no-op ⇒ amountMax/minOut hold.
+    function _guardSwap(PoolKey memory key, bool zeroForOne, uint256 amountIn, uint256 amountOut) internal view {
+        address o = priceOracle;
+        if (o != address(0)) IPriceOracle(o).check(key, zeroForOne, amountIn, amountOut);
     }
 
     // ────────── Unlock dispatch (this product's ops) ──────────
@@ -259,6 +284,7 @@ contract VolatileLPManager is BaseLPManager {
             if (uint256(uint128(-inDelta)) < leg.swapAmountIn) revert SwapSlippage(leg.poolId);
             int128 outDelta = leg.zeroForOne ? sd.amount1() : sd.amount0();
             if (uint256(uint128(outDelta)) < leg.minAmountOut) revert SwapMinOut(leg.poolId);
+            _guardSwap(key, leg.zeroForOne, uint256(uint128(-inDelta)), uint256(uint128(outDelta)));
         }
         _addLiquidityV(leg, key);
     }
@@ -396,6 +422,7 @@ contract VolatileLPManager is BaseLPManager {
         if (uint256(uint128(-inDelta)) < p.swapAmountIn) revert SwapSlippage(key.toId());
         int128 outDelta = p.zeroForOne ? sd.amount1() : sd.amount0();
         if (uint256(uint128(outDelta)) < p.minAmountOut) revert SwapMinOut(key.toId());
+        _guardSwap(key, p.zeroForOne, uint256(uint128(-inDelta)), uint256(uint128(outDelta)));
     }
 
     /// @dev The manager's positive credit of `c` in the active unlock (0 if it owes or is flat).
