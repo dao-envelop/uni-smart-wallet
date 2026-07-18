@@ -21,10 +21,11 @@ import {BaseLPManager} from "./BaseLPManager.sol";
 /// @notice {BaseLPManager} product for arbitrary (volatile) asset pairs. Reuses the base clone/init,
 /// managed-currency union, protocol-fee skim, and settlement primitives, and adds what volatile pairs
 /// need over the stable model: **per-call tick ranges** and **salt-keyed multi-position** (several
-/// ranges per pool), **`amount*Max`** slippage caps on the add (owed is price-sensitive once a range
-/// can go one-sided) and **`minAmountOut`** on the balancing pre-swap. `recenter` (single-call
-/// remove→swap→re-add) and an external price-oracle guard land in later steps. Ops route via
-/// `_dispatchExtraOp` (codes ≥ 7) so the base dispatcher is reused unchanged.
+/// ranges per pool, `salt ≠ poolId` ⇒ the position stores its `poolId`), **`amount*Max`** slippage
+/// caps on the add (owed is price-sensitive once a range can go one-sided) and **`minAmountOut`** on
+/// the balancing pre-swap, plus `recenter` (single-call remove→swap→re-add) and an optional external
+/// price-oracle guard. Ops route via `_dispatchExtraOp` (codes ≥ 7) so the base dispatcher is reused
+/// unchanged.
 contract VolatileLPManager is BaseLPManager {
     using StateLibrary for IPoolManager;
     using TransientStateLibrary for IPoolManager;
@@ -38,6 +39,14 @@ contract VolatileLPManager is BaseLPManager {
     /// rebalance). Zero ⇒ no oracle: the operator's `amount*Max` / `minAmountOut` are the only guard.
     /// Owner-settable via {setPriceOracle}.
     address public priceOracle;
+
+    /// @notice Init parameters for a volatile manager clone — pools are keys only (ranges are per-call,
+    /// so there is no pool-level range to configure).
+    struct InitParams {
+        address owner; // receives the singleton NFT
+        bytes32 name; // NFT name, packed (≤31 chars); "" ⇒ default "Envelop Volatile LP Manager"
+        PoolKey[] pools; // 1..MAX_POOLS hookless pools (identity only)
+    }
 
     /// @notice Emitted when the price oracle is (re)set.
     event PriceOracleSet(address indexed oracle);
@@ -104,7 +113,7 @@ contract VolatileLPManager is BaseLPManager {
 
     /// @notice The pre-swap delivered less than `minAmountOut` of the output currency.
     error SwapMinOut(PoolId poolId);
-    /// @notice A top-up targeted an existing `salt` with a different range than it was opened at.
+    /// @notice A top-up targeted an existing `salt` with a different pool or range than it was opened at.
     error RangeMismatch(bytes32 salt);
 
     /// @notice Emitted when a position is moved to a new range.
@@ -117,6 +126,20 @@ contract VolatileLPManager is BaseLPManager {
     /// @param poolManager_ The Uniswap V4 PoolManager shared by every clone.
     /// @param treasury_ The immutable protocol-fee recipient (non-zero; typically a {FeeRedeemer}).
     constructor(IPoolManager poolManager_, address treasury_) BaseLPManager(poolManager_, treasury_) {}
+
+    /// @notice One-shot initializer, called by the factory on the freshly-cloned proxy: registers the
+    /// pools (identity only) + managed currencies, mints the singleton NFT, and reverts if called twice.
+    /// @param p Init parameters: owner, packed NFT name (empty ⇒ default), and 1..MAX_POOLS pool keys.
+    function initialize(InitParams calldata p) external {
+        _beginInit(p.name);
+        uint256 n = p.pools.length;
+        if (n == 0) revert NoPools();
+        if (n > MAX_POOLS) revert TooManyPools(n);
+        for (uint256 i = 0; i < n; ++i) {
+            _registerPool(p.pools[i]); // hookless gate + dedup + managed-currency union
+        }
+        _finishInit(p.owner, n);
+    }
 
     // ────────── Product identity ──────────
 
@@ -170,7 +193,7 @@ contract VolatileLPManager is BaseLPManager {
     /// is skimmed first. Owner-or-operator.
     /// @param salt The position key.
     function claimFees(bytes32 salt) external onlyAuthorized nonReentrant {
-        _pokePosition(salt); // reverts UnknownPosition if not open
+        _pokeFromConfig(salt); // reverts UnknownPosition if not open
         emit IERC4906.MetadataUpdate(TOKEN_ID);
     }
 
@@ -200,7 +223,7 @@ contract VolatileLPManager is BaseLPManager {
         if (!isManagedStable[p.requestedCurrency]) revert UnmanagedStable(p.requestedCurrency);
         if (p.amount == 0) revert ZeroAmount();
         for (uint256 i = 0; i < p.pulls.length; ++i) {
-            uint128 have = positions[p.pulls[i].salt].liquidity;
+            uint128 have = _positions[p.pulls[i].salt].liquidity;
             if (have == 0) revert UnknownPosition(p.pulls[i].salt);
             if (p.pulls[i].liquidityToPull > have) revert DeltaExceedsLiquidity(p.pulls[i].liquidityToPull, have);
         }
@@ -229,22 +252,23 @@ contract VolatileLPManager is BaseLPManager {
     }
 
     /// @dev Pull `liq` from the position keyed `salt` (at its stored range), skim fees, decrement or
-    /// remove the registry entry.
+    /// remove the registry entry. The pool key is reconstructed from the stored `poolId`.
     function _pullLiquidityV(bytes32 salt, uint128 liq) internal {
         if (liq == 0) return;
-        Position memory pos = positions[salt];
+        StoredPosition memory pos = _positions[salt];
+        PoolKey memory key = pools[_indexOf(pos.poolId)].key;
         (, BalanceDelta fees) = POOL_MANAGER.modifyLiquidity(
-            pos.key,
+            key,
             ModifyLiquidityParams({
                 tickLower: pos.tickLower, tickUpper: pos.tickUpper, liquidityDelta: -int256(uint256(liq)), salt: salt
             }),
             ""
         );
-        _skimFees(pos.key, fees);
-        positions[salt].liquidity -= liq;
-        if (positions[salt].liquidity == 0) {
+        _skimFees(key, fees);
+        _positions[salt].liquidity -= liq;
+        if (_positions[salt].liquidity == 0) {
             _removeSalt(salt);
-            delete positions[salt];
+            delete _positions[salt];
         }
     }
 
@@ -291,7 +315,7 @@ contract VolatileLPManager is BaseLPManager {
 
     /// @dev Size L from desired amounts at the live price, add at the caller's range under `salt`,
     /// enforce the `amount*Max` owed caps, skim the protocol fee, and record/merge the position. A
-    /// fresh salt opens a new range; an existing salt must top up the SAME range.
+    /// fresh salt opens a new range; an existing salt must top up the SAME pool + range.
     function _addLiquidityV(VolatileAllocLeg memory leg, PoolKey memory key) internal {
         uint128 L = _addLiquidityAt(
             key,
@@ -304,10 +328,10 @@ contract VolatileLPManager is BaseLPManager {
             leg.amount0Max,
             leg.amount1Max
         );
-        Position memory ex = positions[leg.salt];
+        StoredPosition memory ex = _positions[leg.salt];
         if (ex.liquidity == 0) {
-            positions[leg.salt] = Position({
-                key: key,
+            _positions[leg.salt] = StoredPosition({
+                poolId: leg.poolId,
                 tickLower: leg.tickLower,
                 tickUpper: leg.tickUpper,
                 liquidity: L,
@@ -315,9 +339,12 @@ contract VolatileLPManager is BaseLPManager {
             });
             _registerSalt(leg.salt);
         } else {
-            // A salt maps to one V4 position (owner, ticks, salt) — a top-up must reuse its range.
-            if (ex.tickLower != leg.tickLower || ex.tickUpper != leg.tickUpper) revert RangeMismatch(leg.salt);
-            positions[leg.salt].liquidity += L;
+            // A salt maps to one V4 position (owner, ticks, salt) — a top-up must reuse its pool + range.
+            if (
+                PoolId.unwrap(ex.poolId) != PoolId.unwrap(leg.poolId) || ex.tickLower != leg.tickLower
+                    || ex.tickUpper != leg.tickUpper
+            ) revert RangeMismatch(leg.salt);
+            _positions[leg.salt].liquidity += L;
         }
     }
 
@@ -364,15 +391,15 @@ contract VolatileLPManager is BaseLPManager {
     /// @notice Move an open position to a new range in one call. Owner-or-operator.
     /// @param p Recenter plan: salt, new range, optional rebalancing swap, and floors/caps.
     function recenter(RecenterParams calldata p) external onlyAuthorized nonReentrant {
-        if (positions[p.salt].liquidity == 0) revert UnknownPosition(p.salt);
+        if (_positions[p.salt].liquidity == 0) revert UnknownPosition(p.salt);
         POOL_MANAGER.unlock(abi.encode(OP_RECENTER, abi.encode(p)));
         emit IERC4906.MetadataUpdate(TOKEN_ID);
     }
 
     function _handleRecenter(bytes memory payload) internal returns (bytes memory) {
         RecenterParams memory p = abi.decode(payload, (RecenterParams));
-        Position memory pos = positions[p.salt];
-        PoolKey memory key = pos.key;
+        StoredPosition memory pos = _positions[p.salt];
+        PoolKey memory key = pools[_indexOf(pos.poolId)].key;
 
         // 1. Pull the whole position at its old range — principal + fees become positive deltas.
         {
@@ -405,9 +432,13 @@ contract VolatileLPManager is BaseLPManager {
             p.amount1Max
         );
 
-        // 4. Repoint the registry entry to the new range/liquidity (same salt, keep openedAt).
-        positions[p.salt] = Position({
-            key: key, tickLower: p.newTickLower, tickUpper: p.newTickUpper, liquidity: L, openedAt: pos.openedAt
+        // 4. Repoint the registry entry to the new range/liquidity (same salt + pool, keep openedAt).
+        _positions[p.salt] = StoredPosition({
+            poolId: pos.poolId,
+            tickLower: p.newTickLower,
+            tickUpper: p.newTickUpper,
+            liquidity: L,
+            openedAt: pos.openedAt
         });
 
         _settleManaged(); // net residuals back to the manager

@@ -135,11 +135,11 @@ contract FeeRedeemerNativeTest is Test {
         redeemer = new FeeRedeemer(IPoolManager(address(poolManager)), protocol);
         StableLPManager impl = new StableLPManager(IPoolManager(address(poolManager)), address(redeemer));
         StableLPFactory factory = new StableLPFactory(address(impl));
-        BaseLPManager.PoolConfig[] memory cfgs = new BaseLPManager.PoolConfig[](1);
-        cfgs[0] = BaseLPManager.PoolConfig({key: key, tickLower: -SPACING, tickUpper: SPACING});
+        StableLPManager.StablePoolInit[] memory cfgs = new StableLPManager.StablePoolInit[](1);
+        cfgs[0] = StableLPManager.StablePoolInit({key: key, tickLower: -SPACING, tickUpper: SPACING});
         mgr = StableLPManager(
             payable(factory.createManager(
-                    BaseLPManager.InitParams({owner: owner, name: bytes32("Envelop StableLP"), pools: cfgs})
+                    StableLPManager.InitParams({owner: owner, name: bytes32("Envelop StableLP"), pools: cfgs})
                 ))
         );
 

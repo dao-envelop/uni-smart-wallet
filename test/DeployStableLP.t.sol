@@ -11,7 +11,7 @@ import {BaseLPManager} from "../src/BaseLPManager.sol";
 
 /// Exposes CreateManager's internal config parser for assertions.
 contract CreateManagerHarness is CreateManager {
-    function parse(string memory json) external view returns (BaseLPManager.InitParams memory) {
+    function parse(string memory json) external view returns (StableLPManager.InitParams memory) {
         return _parseConfig(json);
     }
 }
@@ -65,7 +65,7 @@ contract DeployStableLPTest is Test {
             )
         );
 
-        BaseLPManager.InitParams memory p = h.parse(json);
+        StableLPManager.InitParams memory p = h.parse(json);
         assertEq(p.owner, address(0xAA), "owner");
         assertEq(p.name, bytes32("Envelop StableLP"), "name defaults when key absent");
         assertEq(p.pools.length, 2, "pool count");

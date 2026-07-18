@@ -32,9 +32,49 @@ contract StableLPManager is BaseLPManager {
     uint8 internal constant OP_WITHDRAW_TO = 5;
     uint8 internal constant OP_REINVEST = 6;
 
+    /// @notice The fixed per-pool range (a stable-product policy). One position per pool at this range.
+    struct Range {
+        int24 tickLower;
+        int24 tickUpper;
+    }
+
+    /// @notice A pool + its fixed range, as supplied at `initialize`.
+    struct StablePoolInit {
+        PoolKey key;
+        int24 tickLower;
+        int24 tickUpper;
+    }
+
+    /// @notice Init parameters for a stable manager clone.
+    struct InitParams {
+        address owner; // receives the singleton NFT
+        bytes32 name; // NFT name, packed (≤31 chars); "" ⇒ default "Envelop LP Uniswap Manager"
+        StablePoolInit[] pools; // 1..MAX_POOLS hookless stable pools + their fixed ranges
+    }
+
+    /// @notice The configured range per pool (`poolId → range`), set once at `initialize`.
+    mapping(PoolId => Range) internal _range;
+
     /// @param poolManager_ The Uniswap V4 PoolManager shared by every clone.
     /// @param treasury_ The immutable protocol-fee recipient (non-zero; typically a {FeeRedeemer}).
     constructor(IPoolManager poolManager_, address treasury_) BaseLPManager(poolManager_, treasury_) {}
+
+    /// @notice One-shot initializer, called by the factory on the freshly-cloned proxy: registers the
+    /// pools + their fixed ranges + managed stables, mints the singleton NFT, and reverts if called twice.
+    /// @param p Init parameters: owner, packed NFT name (empty ⇒ default), and 1..MAX_POOLS pools+ranges.
+    function initialize(InitParams calldata p) external {
+        _beginInit(p.name);
+        uint256 n = p.pools.length;
+        if (n == 0) revert NoPools();
+        if (n > MAX_POOLS) revert TooManyPools(n);
+        for (uint256 i = 0; i < n; ++i) {
+            StablePoolInit calldata c = p.pools[i];
+            PositionMath.requireValidTickRange(c.tickLower, c.tickUpper, c.key.tickSpacing);
+            _registerPool(c.key); // hookless gate + dedup + managed-currency union
+            _range[c.key.toId()] = Range({tickLower: c.tickLower, tickUpper: c.tickUpper});
+        }
+        _finishInit(p.owner, n);
+    }
 
     // ────────── Product identity ──────────
 
@@ -135,52 +175,55 @@ contract StableLPManager is BaseLPManager {
     /// @dev Per-leg: optional exactIn pre-swap to balance the sides, then add liquidity sized from
     /// the operator's desired amounts. Settlement is deferred to the final `_settleManaged()` pass.
     function _allocateLeg(AllocLeg memory leg) internal virtual returns (uint128 L) {
-        PoolConfig memory P = pools[_indexOf(leg.poolId)];
+        PoolKey memory key = pools[_indexOf(leg.poolId)].key;
+        Range memory rg = _range[leg.poolId];
         if (leg.swapAmountIn > 0) {
-            BalanceDelta sd = _swap(P.key, leg.zeroForOne, -int256(leg.swapAmountIn), leg.swapPriceLimit);
+            BalanceDelta sd = _swap(key, leg.zeroForOne, -int256(leg.swapAmountIn), leg.swapPriceLimit);
             int128 inDelta = leg.zeroForOne ? sd.amount0() : sd.amount1();
             // exactIn: a partial fill (price limit hit) leaves |inDelta| < requested input.
             if (uint256(uint128(-inDelta)) < leg.swapAmountIn) revert SwapSlippage(leg.poolId);
         }
-        L = _addLiquidity(leg.poolId, P, leg.amount0Desired, leg.amount1Desired, leg.minLiquidity);
+        L = _addLiquidity(
+            leg.poolId, key, rg.tickLower, rg.tickUpper, leg.amount0Desired, leg.amount1Desired, leg.minLiquidity
+        );
     }
 
-    /// @dev Shared by allocate and reinvest: size liquidity at the current price, add it, and
-    /// record/merge the position (`salt == poolId`). Settlement is the caller's job. `P` is passed in
-    /// (already resolved by the caller) to avoid a re-lookup. No per-side spend cap is needed: `L` is
-    /// sized from `amount{0,1}` at the on-chain price, so the realized owed is `<= amount{0,1}`.
-    function _addLiquidity(PoolId id, PoolConfig memory P, uint256 amount0, uint256 amount1, uint128 minLiq)
-        internal
-        virtual
-        returns (uint128 L)
-    {
+    /// @dev Shared by allocate and reinvest: size liquidity at the current price, add it at the pool's
+    /// fixed range `[tickLower,tickUpper]`, and record/merge the position (`salt == poolId`). Settlement
+    /// is the caller's job. No per-side spend cap is needed: `L` is sized from `amount{0,1}` at the
+    /// on-chain price, so the realized owed is `<= amount{0,1}`.
+    function _addLiquidity(
+        PoolId id,
+        PoolKey memory key,
+        int24 tickLower,
+        int24 tickUpper,
+        uint256 amount0,
+        uint256 amount1,
+        uint128 minLiq
+    ) internal virtual returns (uint128 L) {
         bytes32 salt = PoolId.unwrap(id);
         (uint160 sqrtP,,,) = POOL_MANAGER.getSlot0(id);
         if (sqrtP == 0) revert PoolUninitialized();
 
-        L = PositionMath.liquidityFromAmounts(sqrtP, P.tickLower, P.tickUpper, amount0, amount1);
+        L = PositionMath.liquidityFromAmounts(sqrtP, tickLower, tickUpper, amount0, amount1);
         if (L < minLiq) revert MinLiquidityNotMet(L, minLiq);
 
         (, BalanceDelta fees) = POOL_MANAGER.modifyLiquidity(
-            P.key,
+            key,
             ModifyLiquidityParams({
-                tickLower: P.tickLower, tickUpper: P.tickUpper, liquidityDelta: int256(uint256(L)), salt: salt
+                tickLower: tickLower, tickUpper: tickUpper, liquidityDelta: int256(uint256(L)), salt: salt
             }),
             ""
         );
-        _skimFees(P.key, fees); // protocol fee on any accrued fees realized by a top-up
+        _skimFees(key, fees); // protocol fee on any accrued fees realized by a top-up
 
-        if (positions[salt].liquidity == 0) {
-            positions[salt] = Position({
-                key: P.key,
-                tickLower: P.tickLower,
-                tickUpper: P.tickUpper,
-                liquidity: L,
-                openedAt: uint64(block.timestamp)
+        if (_positions[salt].liquidity == 0) {
+            _positions[salt] = StoredPosition({
+                poolId: id, tickLower: tickLower, tickUpper: tickUpper, liquidity: L, openedAt: uint64(block.timestamp)
             });
             _registerSalt(salt);
         } else {
-            positions[salt].liquidity += L;
+            _positions[salt].liquidity += L;
         }
     }
 
@@ -197,7 +240,7 @@ contract StableLPManager is BaseLPManager {
         for (uint256 i = 0; i < p.pulls.length; ++i) {
             WithdrawStep calldata s = p.pulls[i];
             _indexOf(s.poolId); // reverts UnknownPool if not configured
-            uint128 have = positions[PoolId.unwrap(s.poolId)].liquidity;
+            uint128 have = _positions[PoolId.unwrap(s.poolId)].liquidity;
             if (s.liquidityToPull > have) revert DeltaExceedsLiquidity(s.liquidityToPull, have);
         }
         POOL_MANAGER.unlock(abi.encode(OP_WITHDRAW_TO, abi.encode(p)));
@@ -235,22 +278,23 @@ contract StableLPManager is BaseLPManager {
     function _pullLiquidity(WithdrawStep memory s) internal {
         if (s.liquidityToPull == 0) return;
         bytes32 salt = PoolId.unwrap(s.poolId);
-        PoolConfig memory P = pools[_indexOf(s.poolId)];
+        PoolKey memory key = pools[_indexOf(s.poolId)].key;
+        Range memory rg = _range[s.poolId];
         (, BalanceDelta fees) = POOL_MANAGER.modifyLiquidity(
-            P.key,
+            key,
             ModifyLiquidityParams({
-                tickLower: P.tickLower,
-                tickUpper: P.tickUpper,
+                tickLower: rg.tickLower,
+                tickUpper: rg.tickUpper,
                 liquidityDelta: -int256(uint256(s.liquidityToPull)),
                 salt: salt
             }),
             ""
         );
-        _skimFees(P.key, fees); // protocol fee on the accrued-fee component (principal untouched)
-        positions[salt].liquidity -= s.liquidityToPull;
-        if (positions[salt].liquidity == 0) {
+        _skimFees(key, fees); // protocol fee on the accrued-fee component (principal untouched)
+        _positions[salt].liquidity -= s.liquidityToPull;
+        if (_positions[salt].liquidity == 0) {
             _removeSalt(salt);
-            delete positions[salt];
+            delete _positions[salt];
         }
     }
 
@@ -260,7 +304,7 @@ contract StableLPManager is BaseLPManager {
     /// fee is skimmed first; the remainder lands on the manager. Owner-or-operator.
     /// @param salt The position key (`== poolId`).
     function claimFees(bytes32 salt) external onlyAuthorized nonReentrant {
-        _pokePosition(salt);
+        _pokeFromConfig(salt);
         emit IERC4906.MetadataUpdate(TOKEN_ID);
     }
 
@@ -292,28 +336,37 @@ contract StableLPManager is BaseLPManager {
 
     function _handleReinvest(bytes memory payload) internal returns (bytes memory) {
         AllocLeg memory leg = abi.decode(payload, (AllocLeg));
-        PoolConfig memory P = pools[_indexOf(leg.poolId)];
+        PoolKey memory key = pools[_indexOf(leg.poolId)].key;
+        Range memory rg = _range[leg.poolId];
         bytes32 salt = PoolId.unwrap(leg.poolId);
 
         // Realize fees as a positive caller delta, then skim the protocol cut before compounding.
         (, BalanceDelta fees) = POOL_MANAGER.modifyLiquidity(
-            P.key,
-            ModifyLiquidityParams({tickLower: P.tickLower, tickUpper: P.tickUpper, liquidityDelta: 0, salt: salt}),
+            key,
+            ModifyLiquidityParams({tickLower: rg.tickLower, tickUpper: rg.tickUpper, liquidityDelta: 0, salt: salt}),
             ""
         );
-        _skimFees(P.key, fees);
+        _skimFees(key, fees);
 
         if (leg.swapAmountIn > 0) {
-            _swap(P.key, leg.zeroForOne, -int256(leg.swapAmountIn), leg.swapPriceLimit);
+            _swap(key, leg.zeroForOne, -int256(leg.swapAmountIn), leg.swapPriceLimit);
         }
 
         // Size the add from the realized (positive) deltas of the two pool currencies.
-        int256 d0 = POOL_MANAGER.currencyDelta(address(this), P.key.currency0);
-        int256 d1 = POOL_MANAGER.currencyDelta(address(this), P.key.currency1);
-        uint128 L = _addLiquidity(leg.poolId, P, d0 > 0 ? uint256(d0) : 0, d1 > 0 ? uint256(d1) : 0, leg.minLiquidity);
+        int256 d0 = POOL_MANAGER.currencyDelta(address(this), key.currency0);
+        int256 d1 = POOL_MANAGER.currencyDelta(address(this), key.currency1);
+        uint128 L = _addLiquidity(
+            leg.poolId,
+            key,
+            rg.tickLower,
+            rg.tickUpper,
+            d0 > 0 ? uint256(d0) : 0,
+            d1 > 0 ? uint256(d1) : 0,
+            leg.minLiquidity
+        );
 
-        _settleCurrency(P.key.currency0);
-        _settleCurrency(P.key.currency1);
+        _settleCurrency(key.currency0);
+        _settleCurrency(key.currency1);
         emit Reinvested(salt, L);
         return "";
     }

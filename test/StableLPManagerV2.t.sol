@@ -122,10 +122,10 @@ contract StableLPManyPoolsTest is Test {
         StableLPFactory factory = new StableLPFactory(address(impl));
 
         Currency hub = _tok();
-        BaseLPManager.PoolConfig[] memory cfgs = new BaseLPManager.PoolConfig[](7);
+        StableLPManager.StablePoolInit[] memory cfgs = new StableLPManager.StablePoolInit[](7);
         for (uint256 i = 0; i < 7; ++i) {
             (Currency c0, Currency c1) = _sorted(hub, _tok());
-            cfgs[i] = BaseLPManager.PoolConfig({
+            cfgs[i] = StableLPManager.StablePoolInit({
                 key: PoolKey({currency0: c0, currency1: c1, fee: FEE, tickSpacing: SPACING, hooks: IHooks(address(0))}),
                 tickLower: -60,
                 tickUpper: 60
@@ -134,7 +134,7 @@ contract StableLPManyPoolsTest is Test {
 
         StableLPManager mgr = StableLPManager(
             payable(factory.createManager(
-                    BaseLPManager.InitParams({owner: owner, name: bytes32("Envelop StableLP"), pools: cfgs})
+                    StableLPManager.InitParams({owner: owner, name: bytes32("Envelop StableLP"), pools: cfgs})
                 ))
         );
 

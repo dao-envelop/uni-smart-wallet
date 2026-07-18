@@ -211,7 +211,7 @@ contract GasCompareStableLPForkTest is Test {
         StableLPFactory factory = new StableLPFactory(address(impl));
 
         // ── createManager (measured separately) ──
-        BaseLPManager.InitParams memory ip = _initParams(owner);
+        StableLPManager.InitParams memory ip = _initParams(owner);
         uint256 g = gasleft();
         StableLPManager mgr = StableLPManager(payable(factory.createManager(ip)));
         uint256 gCreate = g - gasleft();
@@ -259,17 +259,17 @@ contract GasCompareStableLPForkTest is Test {
         console2.log("  USDT left (dust)", usdtLeft);
     }
 
-    function _initParams(address owner) internal view returns (BaseLPManager.InitParams memory p) {
-        BaseLPManager.PoolConfig[] memory cfgs = new BaseLPManager.PoolConfig[](3);
+    function _initParams(address owner) internal view returns (StableLPManager.InitParams memory p) {
+        StableLPManager.StablePoolInit[] memory cfgs = new StableLPManager.StablePoolInit[](3);
         cfgs[0] = _cfg(kUSDCUSDT);
         cfgs[1] = _cfg(kDAIUSDT);
         cfgs[2] = _cfg(kDAIUSDC);
-        p = BaseLPManager.InitParams({owner: owner, name: bytes32("Envelop StableLP"), pools: cfgs});
+        p = StableLPManager.InitParams({owner: owner, name: bytes32("Envelop StableLP"), pools: cfgs});
     }
 
-    function _cfg(PoolKey memory k) internal view returns (BaseLPManager.PoolConfig memory) {
+    function _cfg(PoolKey memory k) internal view returns (StableLPManager.StablePoolInit memory) {
         (, int24 tick,,) = STATE_VIEW.getSlot0(k.toId());
-        return BaseLPManager.PoolConfig({key: k, tickLower: tick - W, tickUpper: tick + W});
+        return StableLPManager.StablePoolInit({key: k, tickLower: tick - W, tickUpper: tick + W});
     }
 
     // Legs ordered so the USDC/USDT leg's surplus USDC funds the later DAI/USDC leg.

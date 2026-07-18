@@ -77,11 +77,11 @@ contract StableLPManagerVolatilePoolTest is Test {
         // Moderate full-range depth so a bounded swap can walk the price out of the ±60 band.
         _seed(key);
 
-        BaseLPManager.PoolConfig[] memory cfgs = new BaseLPManager.PoolConfig[](1);
-        cfgs[0] = BaseLPManager.PoolConfig({key: key, tickLower: TL, tickUpper: TU});
+        StableLPManager.StablePoolInit[] memory cfgs = new StableLPManager.StablePoolInit[](1);
+        cfgs[0] = StableLPManager.StablePoolInit({key: key, tickLower: TL, tickUpper: TU});
         m = StableLPManager(
             payable(factory.createManager(
-                    BaseLPManager.InitParams({owner: owner, name: bytes32("Envelop VolatileLP"), pools: cfgs})
+                    StableLPManager.InitParams({owner: owner, name: bytes32("Envelop VolatileLP"), pools: cfgs})
                 ))
         );
 

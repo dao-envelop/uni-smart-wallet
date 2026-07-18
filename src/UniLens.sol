@@ -91,8 +91,8 @@ contract UniLens {
         uint256 p = m.poolCount();
         info.pools = new BaseLPManager.PoolConfig[](p);
         for (uint256 i = 0; i < p; ++i) {
-            (PoolKey memory key, int24 tickLower, int24 tickUpper) = m.pools(i);
-            info.pools[i] = BaseLPManager.PoolConfig({key: key, tickLower: tickLower, tickUpper: tickUpper});
+            PoolKey memory key = m.pools(i);
+            info.pools[i] = BaseLPManager.PoolConfig({key: key});
         }
     }
 

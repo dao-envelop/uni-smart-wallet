@@ -43,11 +43,11 @@ contract StableLPManagerNativeTest is Test {
 
         StableLPManager impl = new StableLPManager(IPoolManager(address(poolManager)), treasury);
         StableLPFactory factory = new StableLPFactory(address(impl));
-        BaseLPManager.PoolConfig[] memory cfgs = new BaseLPManager.PoolConfig[](1);
-        cfgs[0] = BaseLPManager.PoolConfig({key: key, tickLower: TL, tickUpper: TU});
+        StableLPManager.StablePoolInit[] memory cfgs = new StableLPManager.StablePoolInit[](1);
+        cfgs[0] = StableLPManager.StablePoolInit({key: key, tickLower: TL, tickUpper: TU});
         mgr = StableLPManager(
             payable(factory.createManager(
-                    BaseLPManager.InitParams({owner: owner, name: bytes32("Envelop StableLP"), pools: cfgs})
+                    StableLPManager.InitParams({owner: owner, name: bytes32("Envelop StableLP"), pools: cfgs})
                 ))
         );
 
