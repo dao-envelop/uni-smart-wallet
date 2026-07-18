@@ -30,9 +30,19 @@ artifacts (addresses) are written to `deployments/<chainId>.json`.
 
 | Script | What it does |
 |---|---|
-| `DeployStableLP.s.sol` | Deploys the StableLP stack (`FeeRedeemer`, `StableLPManager` impl, `StableLPFactory`, `UniLens`, `WalletPositionDescriptor`) and writes `deployments/<chainId>.json`. |
+| `DeployStableLP.s.sol` | Deploys the LP-manager stack (`FeeRedeemer`, `StableLPManager` + `VolatileLPManager` impls, universal `LPManagerFactory`, `UniLens`, `WalletPositionDescriptor`) and writes `deployments/<chainId>.json` (keys include `impl` = stable, `volatileImpl`, `factory`). |
 | `DeployDescriptor.s.sol` | Deploys **only** a `WalletPositionDescriptor` and updates `.descriptor` in `deployments/<chainId>.json`. |
-| `CreateManager.s.sol` | Clones one `StableLPManager` via the factory. |
+| `CreateManager.s.sol` | Clones one manager (Stable **or** Volatile) via the universal factory. |
+
+### CreateManager — universal factory
+
+`LPManagerFactory.createManager(implementation, expectedOwner, initData)` clones an **allowlisted**
+implementation and forwards the product's `initialize(InitParams)` as raw calldata (the two products'
+`initialize` selectors differ), then checks the singleton NFT landed on `expectedOwner`. `CreateManager`
+builds all of this from the config JSON: set `"product": "stable"` (default) or `"product":
+"volatile"`, and it reads `.impl` / `.volatileImpl` + `.factory` from `deployments/<chainId>.json`.
+Volatile configs omit `.tickLower` / `.tickUpper` (ranges are per-call). See
+`script/manager_config.example.json` (stable) and `script/manager_config.volatile.example.json`.
 
 ## Deploy the descriptor standalone
 

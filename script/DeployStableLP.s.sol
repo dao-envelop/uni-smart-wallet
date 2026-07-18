@@ -6,15 +6,18 @@ import {console2} from "forge-std/console2.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {FeeRedeemer} from "../src/FeeRedeemer.sol";
 import {StableLPManager} from "../src/StableLPManager.sol";
-import {StableLPFactory} from "../src/StableLPFactory.sol";
+import {VolatileLPManager} from "../src/VolatileLPManager.sol";
+import {LPManagerFactory} from "../src/LPManagerFactory.sol";
 import {UniLens} from "../src/UniLens.sol";
 import {WalletPositionDescriptor} from "../src/WalletPositionDescriptor.sol";
 
-/// @notice Deploys the full StableLPManager stack for the current chain.
+/// @notice Deploys the full LP-manager stack for the current chain (Stable + Volatile impls behind one
+/// universal `LPManagerFactory`).
 ///
-/// Order matters: `FeeRedeemer` is the protocol treasury, so it is deployed first and its
-/// address is passed as `treasury_` to the `StableLPManager` implementation. Managers themselves
-/// are NOT created here — users clone them via the factory (see `CreateManager.s.sol`).
+/// Order matters: `FeeRedeemer` is the protocol treasury, so it is deployed first and its address is
+/// passed as `treasury_` to both manager implementations. The universal factory is allowlisted with
+/// both impls. Managers themselves are NOT created here — users clone them via the factory (see
+/// `CreateManager.s.sol`).
 ///
 /// Per-chain `poolManager` (required) and `initialOwner` (optional protocol admin) come from
 /// `script/chain_params.json` keyed by `block.chainid`. A zero `initialOwner` falls back to the
@@ -31,7 +34,8 @@ contract DeployStableLP is Script {
     struct Deployment {
         FeeRedeemer feeRedeemer;
         StableLPManager impl;
-        StableLPFactory factory;
+        VolatileLPManager volatileImpl;
+        LPManagerFactory factory;
         UniLens lens;
         WalletPositionDescriptor descriptor;
     }
@@ -48,11 +52,16 @@ contract DeployStableLP is Script {
         _write(pm, name, d);
     }
 
-    /// @notice Deploy the five stack contracts wired together. Public so tests can drive it.
+    /// @notice Deploy the stack contracts wired together. Public so tests can drive it. The universal
+    /// factory is allowlisted with both product implementations (Stable + Volatile).
     function deploy(IPoolManager pm, address admin) public returns (Deployment memory d) {
         d.feeRedeemer = new FeeRedeemer(pm, admin);
         d.impl = new StableLPManager(pm, address(d.feeRedeemer));
-        d.factory = new StableLPFactory(address(d.impl));
+        d.volatileImpl = new VolatileLPManager(pm, address(d.feeRedeemer));
+        address[] memory impls = new address[](2);
+        impls[0] = address(d.impl);
+        impls[1] = address(d.volatileImpl);
+        d.factory = new LPManagerFactory(admin, impls);
         d.lens = new UniLens();
         d.descriptor = new WalletPositionDescriptor();
     }
@@ -84,8 +93,9 @@ contract DeployStableLP is Script {
         console2.log("PoolManager:   ", address(pm));
         console2.log("admin/treasury owner:", admin);
         console2.log("FeeRedeemer:   ", address(d.feeRedeemer));
-        console2.log("impl:          ", address(d.impl));
-        console2.log("StableLPFactory:", address(d.factory));
+        console2.log("impl (stable): ", address(d.impl));
+        console2.log("volatileImpl:  ", address(d.volatileImpl));
+        console2.log("LPManagerFactory:", address(d.factory));
         console2.log("UniLens:       ", address(d.lens));
         console2.log("Descriptor:    ", address(d.descriptor));
     }
@@ -98,6 +108,7 @@ contract DeployStableLP is Script {
         vm.serializeAddress(key, "poolManager", address(pm));
         vm.serializeAddress(key, "feeRedeemer", address(d.feeRedeemer));
         vm.serializeAddress(key, "impl", address(d.impl));
+        vm.serializeAddress(key, "volatileImpl", address(d.volatileImpl));
         vm.serializeAddress(key, "factory", address(d.factory));
         vm.serializeAddress(key, "lens", address(d.lens));
         string memory out = vm.serializeAddress(key, "descriptor", address(d.descriptor));

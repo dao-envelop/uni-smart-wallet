@@ -5,7 +5,8 @@ import {Test} from "forge-std/Test.sol";
 
 import {StableLPManager} from "../../src/StableLPManager.sol";
 import {BaseLPManager} from "../../src/BaseLPManager.sol";
-import {StableLPFactory} from "../../src/StableLPFactory.sol";
+import {LPManagerFactory} from "../../src/LPManagerFactory.sol";
+import {FactoryHelper} from "./FactoryHelper.sol";
 import {MockERC20} from "./Mocks.sol";
 
 import {PoolManager} from "@uniswap/v4-core/src/PoolManager.sol";
@@ -25,7 +26,7 @@ import {PoolModifyLiquidityTest} from "@uniswap/v4-core/src/test/PoolModifyLiqui
 abstract contract StableLPTestBase is Test {
     PoolManager internal poolManager;
     StableLPManager internal impl;
-    StableLPFactory internal factory;
+    LPManagerFactory internal factory;
     StableLPManager internal mgr;
     PoolModifyLiquidityTest internal lpRouter;
 
@@ -65,8 +66,8 @@ abstract contract StableLPTestBase is Test {
         }
 
         impl = new StableLPManager(IPoolManager(address(poolManager)), treasury);
-        factory = new StableLPFactory(address(impl));
-        mgr = StableLPManager(payable(factory.createManager(_initParams(owner))));
+        factory = FactoryHelper.single(address(this), address(impl));
+        mgr = FactoryHelper.cloneStable(factory, address(impl), _initParams(owner));
 
         MockERC20(Currency.unwrap(USDT)).mint(address(mgr), FUND);
     }
