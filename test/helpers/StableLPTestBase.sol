@@ -101,12 +101,14 @@ abstract contract StableLPTestBase is Test {
         vm.stopPrank();
     }
 
-    function _initParams(address owner_) internal view returns (BaseLPManager.InitParams memory p) {
-        BaseLPManager.PoolConfig[] memory cfgs = new BaseLPManager.PoolConfig[](3);
+    function _initParams(address owner_) internal view returns (StableLPManager.InitParams memory p) {
+        StableLPManager.StablePoolInit[] memory cfgs = new StableLPManager.StablePoolInit[](3);
         for (uint8 i = 0; i < 3; ++i) {
-            cfgs[i] = BaseLPManager.PoolConfig({key: poolKeys[i], tickLower: TL, tickUpper: TU});
+            cfgs[i] = StableLPManager.StablePoolInit({key: poolKeys[i], tickLower: TL, tickUpper: TU});
         }
-        p = BaseLPManager.InitParams({owner: owner_, name: bytes32("Envelop StableLP"), pools: cfgs});
+        p = StableLPManager.InitParams({
+            owner: owner_, name: bytes32("Envelop StableLP"), descriptor: address(0), pools: cfgs
+        });
     }
 
     /// @dev Position salt == poolId (one position per pool).

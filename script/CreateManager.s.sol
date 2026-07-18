@@ -7,7 +7,6 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {StableLPManager} from "../src/StableLPManager.sol";
-import {BaseLPManager} from "../src/BaseLPManager.sol";
 import {StableLPFactory} from "../src/StableLPFactory.sol";
 
 /// @notice Clones one StableLPManager via the factory from a pool-config JSON.
@@ -27,7 +26,11 @@ contract CreateManager is Script {
     function run() external returns (address manager) {
         address factory = _readFactory(block.chainid);
         string memory cfgPath = vm.envOr("MANAGER_CONFIG", string("script/manager_config.example.json"));
-        BaseLPManager.InitParams memory p = _parseConfig(vm.readFile(cfgPath));
+        StableLPManager.InitParams memory p = _parseConfig(vm.readFile(cfgPath));
+
+        // Default the tokenURI renderer to the chain's deployed descriptor (config `.descriptor`
+        // overrides). Wired at init so the clone renders `tokenURI` without a follow-up owner call.
+        if (p.descriptor == address(0)) p.descriptor = _readDescriptor(block.chainid);
 
         vm.startBroadcast();
         manager = StableLPFactory(factory).createManager(p);
@@ -44,12 +47,20 @@ contract CreateManager is Script {
         return vm.parseJsonAddress(json, ".factory");
     }
 
-    function _parseConfig(string memory json) internal view returns (BaseLPManager.InitParams memory p) {
+    /// @dev The chain's deployed descriptor (`.descriptor` in the deployments file), or zero if absent.
+    function _readDescriptor(uint256 chainId) internal view returns (address) {
+        string memory json = vm.readFile(string.concat("./deployments/", vm.toString(chainId), ".json"));
+        return vm.keyExistsJson(json, ".descriptor") ? vm.parseJsonAddress(json, ".descriptor") : address(0);
+    }
+
+    function _parseConfig(string memory json) internal view returns (StableLPManager.InitParams memory p) {
         p.owner = vm.parseJsonAddress(json, ".owner");
         // Optional NFT name (≤31 chars), packed into bytes32; defaults to the shared brand name.
         p.name = vm.keyExistsJson(json, ".name")
             ? _packName(vm.parseJsonString(json, ".name"))
             : bytes32("Envelop StableLP");
+        // Optional explicit descriptor; when absent, `run()` defaults it to the chain's deployed one.
+        p.descriptor = vm.keyExistsJson(json, ".descriptor") ? vm.parseJsonAddress(json, ".descriptor") : address(0);
 
         address[] memory c0 = vm.parseJsonAddressArray(json, ".currency0");
         address[] memory c1 = vm.parseJsonAddressArray(json, ".currency1");
@@ -66,9 +77,9 @@ contract CreateManager is Script {
                 || upper.length != n
         ) revert LengthMismatch();
 
-        p.pools = new BaseLPManager.PoolConfig[](n);
+        p.pools = new StableLPManager.StablePoolInit[](n);
         for (uint256 i = 0; i < n; ++i) {
-            p.pools[i] = BaseLPManager.PoolConfig({
+            p.pools[i] = StableLPManager.StablePoolInit({
                 key: PoolKey({
                     currency0: Currency.wrap(c0[i]),
                     currency1: Currency.wrap(c1[i]),

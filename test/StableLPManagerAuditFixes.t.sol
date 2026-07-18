@@ -90,11 +90,13 @@ contract StableLPUninitializedPoolTest is Test {
             PoolKey({currency0: c0, currency1: c1, fee: FEE, tickSpacing: SPACING, hooks: IHooks(address(0))});
         // NOTE: we deliberately do NOT call pm.initialize(key, ...) — the pool stays uninitialized.
 
-        BaseLPManager.PoolConfig[] memory cfgs = new BaseLPManager.PoolConfig[](1);
-        cfgs[0] = BaseLPManager.PoolConfig({key: key, tickLower: -60, tickUpper: 60});
+        StableLPManager.StablePoolInit[] memory cfgs = new StableLPManager.StablePoolInit[](1);
+        cfgs[0] = StableLPManager.StablePoolInit({key: key, tickLower: -60, tickUpper: 60});
         StableLPManager mgr = StableLPManager(
             payable(factory.createManager(
-                    BaseLPManager.InitParams({owner: owner, name: bytes32("Envelop StableLP"), pools: cfgs})
+                    StableLPManager.InitParams({
+                        owner: owner, name: bytes32("Envelop StableLP"), descriptor: address(0), pools: cfgs
+                    })
                 ))
         );
 

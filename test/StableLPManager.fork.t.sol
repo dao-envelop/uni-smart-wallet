@@ -95,11 +95,13 @@ contract StableLPManagerForkTest is Test {
         // (so `this` is both owner and operator for the calls below).
         StableLPManager impl = new StableLPManager(POOL_MANAGER, treasury);
         StableLPFactory factory = new StableLPFactory(address(impl));
-        BaseLPManager.PoolConfig[] memory cfgs = new BaseLPManager.PoolConfig[](1);
-        cfgs[0] = BaseLPManager.PoolConfig({key: key, tickLower: tickLower, tickUpper: tickUpper});
+        StableLPManager.StablePoolInit[] memory cfgs = new StableLPManager.StablePoolInit[](1);
+        cfgs[0] = StableLPManager.StablePoolInit({key: key, tickLower: tickLower, tickUpper: tickUpper});
         mgr = StableLPManager(
             payable(factory.createManager(
-                    BaseLPManager.InitParams({owner: address(this), name: bytes32("Envelop ETH-USDC"), pools: cfgs})
+                    StableLPManager.InitParams({
+                        owner: address(this), name: bytes32("Envelop ETH-USDC"), descriptor: address(0), pools: cfgs
+                    })
                 ))
         );
 

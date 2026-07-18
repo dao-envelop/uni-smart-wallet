@@ -12,12 +12,18 @@ import {PositionMath} from "../../src/lib/PositionMath.sol";
 
 /// @notice Test-only mixin that restores the standalone explicit-liquidity position lifecycle
 /// (open / close / decrease + the fees-only poke handler) on top of {V4PositionManager}. These ops
-/// were removed from the production base when UniSmartWallet was retired — no product contract uses
-/// them — so they live here purely to drive the descriptor / lens / PositionState / base-mechanics
-/// test suites. Routed through an `unlockCallback` override; unknown ops fall through to
+/// were removed from the production base when the JIT-LP wallet product was retired — no product
+/// contract uses them — so they live here purely to drive the descriptor / lens / PositionState /
+/// base-mechanics test suites. Because these positions use arbitrary keys (no configured-pool set to
+/// reconstruct from), the harness keeps its OWN full-`Position` storage (with the key) and implements
+/// `positionOf` over it. Routed through an `unlockCallback` override; unknown ops fall through to
 /// `_dispatchExtraOp` so concrete harnesses can still add their own ops.
 abstract contract V4PositionOpsHarness is V4PositionManager {
     using StateLibrary for IPoolManager;
+
+    /// @dev Harness-local position store: full `Position` (key included) keyed by salt. The production
+    /// base owns no position storage — each consumer keeps its own; this is the harness's.
+    mapping(bytes32 => Position) internal _pos;
 
     struct OpenParams {
         PoolKey key;
@@ -50,6 +56,11 @@ abstract contract V4PositionOpsHarness is V4PositionManager {
 
     constructor(IPoolManager poolManager_) V4PositionManager(poolManager_) {}
 
+    /// @inheritdoc V4PositionManager
+    function positionOf(bytes32 salt) external view override returns (Position memory) {
+        return _pos[salt];
+    }
+
     /// @dev Route the canonical ops (0–3) to the local handlers; everything else to the subclass.
     function unlockCallback(bytes calldata data) external virtual override returns (bytes memory) {
         if (msg.sender != address(POOL_MANAGER)) revert NotPoolManager();
@@ -73,7 +84,7 @@ abstract contract V4PositionOpsHarness is V4PositionManager {
         uint128 amount0Max,
         uint128 amount1Max
     ) internal {
-        if (positions[salt].liquidity != 0) revert SaltCollision(salt);
+        if (_pos[salt].liquidity != 0) revert SaltCollision(salt);
         if (liquidity == 0) revert ZeroLiquidity();
         if (address(key.hooks) != address(0)) revert HookNotAllowed(address(key.hooks));
 
@@ -131,7 +142,7 @@ abstract contract V4PositionOpsHarness is V4PositionManager {
         if (owed0 > 0) _settle(p.key.currency0, owed0);
         if (owed1 > 0) _settle(p.key.currency1, owed1);
 
-        positions[p.salt] = Position({
+        _pos[p.salt] = Position({
             key: p.key,
             tickLower: p.tickLower,
             tickUpper: p.tickUpper,
@@ -147,24 +158,49 @@ abstract contract V4PositionOpsHarness is V4PositionManager {
     // ────────── close / decrease / poke ──────────
 
     function _closePosition(bytes32 salt) internal {
-        Position memory p = positions[salt];
+        Position memory p = _pos[salt];
         if (p.liquidity == 0) revert UnknownPosition(salt);
         _unlockRemove(Op.CLOSE, p, p.liquidity, salt);
     }
 
     function _decreasePosition(bytes32 salt, uint128 deltaLiquidity) internal {
-        Position memory p = positions[salt];
+        Position memory p = _pos[salt];
         if (p.liquidity == 0) revert UnknownPosition(salt);
         if (deltaLiquidity == 0) revert ZeroDelta();
         if (deltaLiquidity > p.liquidity) revert DeltaExceedsLiquidity(deltaLiquidity, p.liquidity);
         _unlockRemove(Op.DECREASE, p, deltaLiquidity, salt);
     }
 
+    function _pokePosition(bytes32 salt) internal {
+        Position memory p = _pos[salt];
+        if (p.liquidity == 0) revert UnknownPosition(salt);
+        _unlockRemove(Op.POKE, p, 0, salt);
+    }
+
+    /// @dev Shared unlock dispatch for close/decrease/poke — they differ only in op code and the
+    /// liquidity delta to remove (0 for poke ⇒ fees only).
+    function _unlockRemove(Op op, Position memory p, uint128 deltaLiquidity, bytes32 salt) internal {
+        POOL_MANAGER.unlock(
+            abi.encode(
+                op,
+                abi.encode(
+                    RemoveParams({
+                        key: p.key,
+                        tickLower: p.tickLower,
+                        tickUpper: p.tickUpper,
+                        deltaLiquidity: deltaLiquidity,
+                        salt: salt
+                    })
+                )
+            )
+        );
+    }
+
     function _handleClose(bytes memory payload) internal returns (bytes memory) {
         RemoveParams memory r = abi.decode(payload, (RemoveParams));
         (uint256 owed0, uint256 owed1, uint256 fees0, uint256 fees1) = _withdrawLiquidity(r);
         _removeSalt(r.salt);
-        delete positions[r.salt];
+        delete _pos[r.salt];
         emit PositionClosed(r.salt, owed0 - fees0, owed1 - fees1, fees0, fees1);
         return "";
     }
@@ -172,7 +208,7 @@ abstract contract V4PositionOpsHarness is V4PositionManager {
     function _handleDecrease(bytes memory payload) internal returns (bytes memory) {
         RemoveParams memory r = abi.decode(payload, (RemoveParams));
         (uint256 owed0, uint256 owed1, uint256 fees0, uint256 fees1) = _withdrawLiquidity(r);
-        positions[r.salt].liquidity -= r.deltaLiquidity;
+        _pos[r.salt].liquidity -= r.deltaLiquidity;
         emit PositionDecreased(r.salt, r.deltaLiquidity, owed0 - fees0, owed1 - fees1, fees0, fees1);
         return "";
     }

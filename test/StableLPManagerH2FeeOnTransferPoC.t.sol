@@ -87,10 +87,14 @@ contract StableLPManagerH2FeeOnTransferPoC is Test {
         // Deploy the manager configured on the FOT/USD pool.
         impl = new StableLPManager(IPoolManager(address(poolManager)), treasury);
         factory = new StableLPFactory(address(impl));
-        BaseLPManager.PoolConfig[] memory cfgs = new BaseLPManager.PoolConfig[](1);
-        cfgs[0] = BaseLPManager.PoolConfig({key: key, tickLower: TL, tickUpper: TU});
+        StableLPManager.StablePoolInit[] memory cfgs = new StableLPManager.StablePoolInit[](1);
+        cfgs[0] = StableLPManager.StablePoolInit({key: key, tickLower: TL, tickUpper: TU});
         mgr = StableLPManager(
-            payable(factory.createManager(BaseLPManager.InitParams({owner: owner, name: bytes32("FOT"), pools: cfgs})))
+            payable(factory.createManager(
+                    StableLPManager.InitParams({
+                        owner: owner, name: bytes32("FOT"), descriptor: address(0), pools: cfgs
+                    })
+                ))
         );
 
         // Fund + open a position while the token still behaves like a plain ERC-20.

@@ -15,7 +15,7 @@ import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {PoolSwapTest} from "@uniswap/v4-core/src/test/PoolSwapTest.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 
-/// @notice UniLens over a UniSmartWallet: each `PositionView` must equal the underlying `positionOf` +
+/// @notice UniLens over an NFT-owned position manager: each `PositionView` must equal the underlying `positionOf` +
 /// `PositionState.value` (the library the lens wraps), including fees carried through after real swaps.
 contract UniLensWalletTest is V4WalletTestBase {
     UniLens internal lens;

@@ -14,13 +14,14 @@ import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 /// @title V4PositionManager
-/// @notice Reusable Uniswap V4 interaction layer: concentrated-liquidity position
-/// management (open/close/decrease/poke) + swaps, all driven through `PoolManager.unlock`.
-/// @dev Auth-agnostic on purpose. Subclasses (`StableLPManager`, a volatile-pair manager, or a test
-/// harness) add their own access control and public surface, then call the `internal` action
-/// functions here. The PoolManager is an `immutable` set via this base's constructor: clones don't
-/// run constructors, but immutables live in the implementation's code and are read through
-/// delegatecall, so a single shared `POOL_MANAGER` works for both direct deploys and clones.
+/// @notice Reusable Uniswap V4 interaction layer: the `PoolManager.unlock` dispatcher shell, the
+/// swap/settle/take primitives, the salt registry, and the canonical `Position` **view type**.
+/// @dev Config-agnostic and auth-agnostic on purpose. It owns NO position storage: subclasses keep
+/// their own store (a manager reconstructs a position's `PoolKey` from its configured-pool set; the
+/// test harness keeps the full key locally) and implement `positionOf`. The PoolManager is an
+/// `immutable` set via this base's constructor: clones don't run constructors, but immutables live in
+/// the implementation's code and are read through delegatecall, so a single shared `POOL_MANAGER`
+/// works for both direct deploys and clones.
 abstract contract V4PositionManager is IUnlockCallback, ReentrancyGuard {
     using CurrencySettler for Currency;
     using CurrencyLibrary for Currency;
@@ -47,8 +48,11 @@ abstract contract V4PositionManager is IUnlockCallback, ReentrancyGuard {
         POKE
     }
 
-    // ────────── Position state ──────────
+    // ────────── Position view type ──────────
 
+    /// @notice The canonical position shape returned by `positionOf` and read by the descriptor / lens
+    /// / valuation contracts. NOTE: this is a **view/return type**, not the on-chain storage layout —
+    /// managers store a leaner record (poolId instead of the full key) and reconstruct `key` here.
     struct Position {
         PoolKey key;
         int24 tickLower;
@@ -57,8 +61,18 @@ abstract contract V4PositionManager is IUnlockCallback, ReentrancyGuard {
         uint64 openedAt;
     }
 
-    /// @notice The open position keyed by its caller-chosen salt (zero-liquidity ⇒ no position).
-    mapping(bytes32 => Position) public positions;
+    /// @dev Payload shared by the close/decrease/poke handlers: a fully-resolved position (with key)
+    /// plus the liquidity delta to remove (0 for poke ⇒ fees only).
+    struct RemoveParams {
+        PoolKey key;
+        int24 tickLower;
+        int24 tickUpper;
+        uint128 deltaLiquidity;
+        bytes32 salt;
+    }
+
+    // ────────── Salt registry ──────────
+
     /// @notice Enumerable list of salts with an open position (for portfolio iteration).
     bytes32[] public openSalts;
     /// @dev 1-based index into openSalts so 0 means "not present". Enables O(1) splice.
@@ -89,72 +103,29 @@ abstract contract V4PositionManager is IUnlockCallback, ReentrancyGuard {
 
     // ────────── Unlock callback (extensible dispatcher) ──────────
 
-    /// @notice PoolManager unlock callback. Handles the canonical ops (0–3) and forwards anything else
-    /// to `_dispatchExtraOp` so subclasses can add new ops (e.g. ALLOCATE / WITHDRAW_TO / REINVEST)
-    /// without reimplementing the dispatcher. Reverts unless called by the PoolManager.
+    /// @notice PoolManager unlock callback. The base defines no ops of its own — it decodes a leading
+    /// `(uint8 op, bytes payload)` and forwards to `_dispatchExtraOp`, which subclasses override to
+    /// route their own ops against the shared primitives. Reverts unless called by the PoolManager.
     /// @param data ABI-encoded `(uint8 op, bytes payload)` produced by this contract before `unlock`.
-    /// @return Empty bytes (settlement happens inside the handlers).
+    /// @return The handler's return data (settlement happens inside the handlers).
     function unlockCallback(bytes calldata data) external virtual override returns (bytes memory) {
         if (msg.sender != address(POOL_MANAGER)) revert NotPoolManager();
         (uint8 op, bytes memory payload) = abi.decode(data, (uint8, bytes));
-        // Canonical ops (0–3) are handled by subclasses that need them: the manager products
-        // override this callback for their own ops; the test-only V4PositionOpsHarness re-adds the
-        // standalone open/close/decrease/poke lifecycle. Anything unrecognized reverts in the default.
         return _dispatchExtraOp(op, payload);
     }
 
-    /// @dev Override to handle subclass-specific op codes (≥ 4). The second arg is the
-    /// op payload (unnamed here since the base default ignores it). Default: reject.
+    /// @dev Override to handle subclass-specific op codes. The second arg is the op payload (unnamed
+    /// here since the base default ignores it). Default: reject.
     /// @param op The op code that the base dispatcher did not recognize.
     /// @return The handler's return data (the base default reverts instead).
     function _dispatchExtraOp(uint8 op, bytes memory) internal virtual returns (bytes memory) {
         revert UnknownOp(op);
     }
 
-    // ────────── Position ops: fee harvest (poke) ──────────
+    // ────────── Salt registry helpers ──────────
 
-    struct RemoveParams {
-        PoolKey key;
-        int24 tickLower;
-        int24 tickUpper;
-        uint128 deltaLiquidity;
-        bytes32 salt;
-    }
-
-    /// @dev Harvest fees only (liquidityDelta == 0) for a position; principal unchanged. The only
-    /// standalone remove op kept in the production base — `StableLPManager.claimFees` uses it (it
-    /// routes `Op.POKE` to its own fee-splitting handler via an `unlockCallback` override).
-    /// @param salt The position key.
-    function _pokePosition(bytes32 salt) internal {
-        Position memory p = positions[salt];
-        if (p.liquidity == 0) revert UnknownPosition(salt);
-
-        _unlockRemove(Op.POKE, p, 0, salt);
-    }
-
-    /// @dev Shared unlock dispatch for close/decrease/poke — they differ only in op code
-    /// and the liquidity delta to remove (0 for poke ⇒ fees only).
-    function _unlockRemove(Op op, Position memory p, uint128 deltaLiquidity, bytes32 salt) internal {
-        IPoolManager pm = POOL_MANAGER;
-        pm.unlock(
-            abi.encode(
-                op,
-                abi.encode(
-                    RemoveParams({
-                        key: p.key,
-                        tickLower: p.tickLower,
-                        tickUpper: p.tickUpper,
-                        deltaLiquidity: deltaLiquidity,
-                        salt: salt
-                    })
-                )
-            )
-        );
-    }
-
-    /// @dev Register a new salt in the open-position index (push + 1-based index).
-    /// Shared by `_handleOpen` and subclass flows (e.g. allocate) so the O(1) registry
-    /// bookkeeping lives in one place.
+    /// @dev Register a new salt in the open-position index (push + 1-based index). Shared by every
+    /// subclass flow so the O(1) registry bookkeeping lives in one place.
     /// @param salt The position key to add to `openSalts`.
     function _registerSalt(bytes32 salt) internal {
         openSalts.push(salt);
@@ -165,7 +136,7 @@ abstract contract V4PositionManager is IUnlockCallback, ReentrancyGuard {
     /// @param salt The position key to remove from `openSalts`.
     function _removeSalt(bytes32 salt) internal {
         uint256 idxPlusOne = _saltIndexPlusOne[salt];
-        if (idxPlusOne == 0) return; // defensive — shouldn't happen if positions[salt] was set
+        if (idxPlusOne == 0) return; // defensive — shouldn't happen if the position was set
         uint256 idx = idxPlusOne - 1;
         uint256 lastIdx = openSalts.length - 1;
         if (idx != lastIdx) {
@@ -237,12 +208,11 @@ abstract contract V4PositionManager is IUnlockCallback, ReentrancyGuard {
 
     // ────────── Views ──────────
 
-    /// @notice The stored position for a salt (zero-liquidity struct if none).
+    /// @notice The stored position for a salt (zero-liquidity struct if none). Subclasses implement
+    /// this over their own storage, reconstructing `key` as needed.
     /// @param salt The position key.
     /// @return The {Position} record (pool key, ticks, liquidity, openedAt).
-    function positionOf(bytes32 salt) external view returns (Position memory) {
-        return positions[salt];
-    }
+    function positionOf(bytes32 salt) external view virtual returns (Position memory);
 
     /// @notice Number of currently open positions.
     /// @return The length of `openSalts`.

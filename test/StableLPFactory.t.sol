@@ -27,18 +27,18 @@ contract StableLPFactoryTest is StableLPTestBase {
     }
 
     function test_initialize_noPools_reverts() public {
-        BaseLPManager.InitParams memory p = _initParams(owner);
-        p.pools = new BaseLPManager.PoolConfig[](0);
+        StableLPManager.InitParams memory p = _initParams(owner);
+        p.pools = new StableLPManager.StablePoolInit[](0);
         vm.expectRevert(BaseLPManager.NoPools.selector);
         factory.createManager(p);
     }
 
     function test_initialize_tooManyPools_reverts() public {
-        BaseLPManager.InitParams memory p = _initParams(owner);
+        StableLPManager.InitParams memory p = _initParams(owner);
         uint256 n = uint256(mgr.MAX_POOLS()) + 1;
-        BaseLPManager.PoolConfig[] memory many = new BaseLPManager.PoolConfig[](n);
+        StableLPManager.StablePoolInit[] memory many = new StableLPManager.StablePoolInit[](n);
         for (uint256 i = 0; i < n; ++i) {
-            many[i] = BaseLPManager.PoolConfig({key: poolKeys[0], tickLower: TL, tickUpper: TU});
+            many[i] = StableLPManager.StablePoolInit({key: poolKeys[0], tickLower: TL, tickUpper: TU});
         }
         p.pools = many;
         vm.expectRevert(abi.encodeWithSelector(BaseLPManager.TooManyPools.selector, n));
@@ -46,10 +46,10 @@ contract StableLPFactoryTest is StableLPTestBase {
     }
 
     function test_initialize_duplicatePool_reverts() public {
-        BaseLPManager.InitParams memory p = _initParams(owner);
-        BaseLPManager.PoolConfig[] memory dup = new BaseLPManager.PoolConfig[](2);
-        dup[0] = BaseLPManager.PoolConfig({key: poolKeys[0], tickLower: TL, tickUpper: TU});
-        dup[1] = BaseLPManager.PoolConfig({key: poolKeys[0], tickLower: TL, tickUpper: TU}); // same poolId
+        StableLPManager.InitParams memory p = _initParams(owner);
+        StableLPManager.StablePoolInit[] memory dup = new StableLPManager.StablePoolInit[](2);
+        dup[0] = StableLPManager.StablePoolInit({key: poolKeys[0], tickLower: TL, tickUpper: TU});
+        dup[1] = StableLPManager.StablePoolInit({key: poolKeys[0], tickLower: TL, tickUpper: TU}); // same poolId
         p.pools = dup;
         vm.expectRevert(abi.encodeWithSelector(BaseLPManager.DuplicatePool.selector, poolKeys[0].toId()));
         factory.createManager(p);
@@ -62,7 +62,7 @@ contract StableLPFactoryTest is StableLPTestBase {
     }
 
     function test_name_customPerClone() public {
-        BaseLPManager.InitParams memory p = _initParams(owner);
+        StableLPManager.InitParams memory p = _initParams(owner);
         p.name = bytes32("Acme USD Vault");
         StableLPManager m = StableLPManager(payable(factory.createManager(p)));
         assertEq(m.name(), "Acme USD Vault", "custom name round-trips");
@@ -72,17 +72,30 @@ contract StableLPFactoryTest is StableLPTestBase {
     function test_name_maxLength31() public {
         string memory max31 = "Envelop StableLP Vault v2 Alpha"; // 31 chars
         assertEq(bytes(max31).length, 31, "fixture is 31 bytes");
-        BaseLPManager.InitParams memory p = _initParams(owner);
+        StableLPManager.InitParams memory p = _initParams(owner);
         p.name = bytes32(bytes(max31));
         StableLPManager m = StableLPManager(payable(factory.createManager(p)));
         assertEq(m.name(), max31, "31-char name round-trips");
     }
 
     function test_name_emptyFallsBackToDefault() public {
-        BaseLPManager.InitParams memory p = _initParams(owner);
+        StableLPManager.InitParams memory p = _initParams(owner);
         p.name = bytes32(0);
         StableLPManager m = StableLPManager(payable(factory.createManager(p)));
         assertEq(m.name(), "Envelop LP Uniswap Manager", "empty packed name falls back to the default");
         assertEq(m.symbol(), "eStableLP", "symbol unchanged");
+    }
+
+    function test_initialize_setsDefaultDescriptor() public {
+        address descriptor = address(0xDE5C);
+        StableLPManager.InitParams memory p = _initParams(owner);
+        p.descriptor = descriptor;
+        StableLPManager m = StableLPManager(payable(factory.createManager(p)));
+        assertEq(m.positionDescriptor(), descriptor, "descriptor wired at init");
+    }
+
+    function test_initialize_zeroDescriptor_leavesUnset() public view {
+        // setUp's _initParams passes descriptor == address(0) ⇒ none set (owner can set later).
+        assertEq(mgr.positionDescriptor(), address(0), "no descriptor when zero at init");
     }
 }

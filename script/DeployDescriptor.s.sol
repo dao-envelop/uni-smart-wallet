@@ -6,7 +6,7 @@ import {console2} from "forge-std/console2.sol";
 import {WalletPositionDescriptor} from "../src/WalletPositionDescriptor.sol";
 
 /// @notice Deploys a standalone {WalletPositionDescriptor} — the shared on-chain `tokenURI`
-/// renderer used by both `UniSmartWallet` and `StableLPManager`.
+/// renderer used by the NFT-owned LP managers (`StableLPManager`, `VolatileLPManager`).
 ///
 /// Use this to ship a new descriptor without re-running the whole StableLP stack
 /// (`DeployStableLP.s.sol`), which would also redeploy the factory/impl/treasury and orphan

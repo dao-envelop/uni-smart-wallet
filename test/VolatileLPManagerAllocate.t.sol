@@ -57,9 +57,11 @@ contract VolatileLPManagerAllocateTest is Test {
         VolatileLPManager impl = new VolatileLPManager(IPoolManager(address(poolManager)), treasury);
         mgr = VolatileLPManager(payable(Clones.clone(address(impl))));
 
-        BaseLPManager.PoolConfig[] memory cfgs = new BaseLPManager.PoolConfig[](1);
-        cfgs[0] = BaseLPManager.PoolConfig({key: key, tickLower: -60, tickUpper: 60}); // config range unused by volatile
-        mgr.initialize(BaseLPManager.InitParams({owner: owner, name: bytes32("Vol"), pools: cfgs}));
+        PoolKey[] memory cfgs = new PoolKey[](1); // volatile config is keys only — ranges are per-call
+        cfgs[0] = key;
+        mgr.initialize(
+            VolatileLPManager.InitParams({owner: owner, name: bytes32("Vol"), descriptor: address(0), pools: cfgs})
+        );
 
         MockERC20(Currency.unwrap(c0)).mint(address(mgr), FUND);
         MockERC20(Currency.unwrap(c1)).mint(address(mgr), FUND);

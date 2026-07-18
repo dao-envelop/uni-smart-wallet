@@ -12,27 +12,26 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
-import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {TransientStateLibrary} from "@uniswap/v4-core/src/libraries/TransientStateLibrary.sol";
 import {SingletonNFTOwned} from "./abstract/SingletonNFTOwned.sol";
 import {V4PositionManager} from "./abstract/V4PositionManager.sol";
-import {PositionMath} from "./lib/PositionMath.sol";
 import {IWalletDescriptor} from "./interfaces/IWalletDescriptor.sol";
 
 /// @title BaseLPManager
 /// @notice Shared abstract core for the clone-deployed, NFT-owned LP managers. Holds the configured
-/// hookless pool set + managed-currency union, the one-shot `initialize`, the protocol-fee skim,
-/// currency settlement primitives, `tokenURI`/descriptor, the owner escape hatch, and the unlock
-/// dispatch shell. The liquidity model itself — allocate / withdraw / reinvest / claimFees and the
-/// per-pool-vs-per-call range + slippage policy — lives in each product subclass (`StableLPManager`,
-/// `VolatileLPManager`), which routes its own ops via `_dispatchExtraOp` and supplies its identity
-/// (`ORACLE_TYPE` / `symbol` / product name / default NFT name). This keeps each product carrying
-/// only its own model, so both fit under EIP-170.
+/// hookless pool set (identity only) + managed-currency union, the init scaffolding, the protocol-fee
+/// skim, currency settlement primitives, `tokenURI`/descriptor, the owner escape hatch, the unlock
+/// dispatch shell, and the manager position store (`StoredPosition`, keyed by salt, reconstructing the
+/// full `PoolKey` from the configured set on read). The liquidity model itself — allocate / withdraw /
+/// reinvest / claimFees and the per-pool-vs-per-call range + slippage policy — lives in each product
+/// subclass (`StableLPManager`, `VolatileLPManager`), which supplies its own `initialize` (with its
+/// own range convention), routes its ops via `_dispatchExtraOp`, and supplies its identity
+/// (`ORACLE_TYPE` / `symbol` / product name / default NFT name). This keeps each product carrying only
+/// its own model, so both fit under EIP-170.
 /// @dev Reuses {SingletonNFTOwned} (auth) and {V4PositionManager} (V4 mechanics). ERC20-only custody
 /// (accepts native via `receive`, no NFT/ERC1155 holders) with a single batch escape hatch
-/// (`executeEncodedTxBatch`) instead of Envelop's SmartWallet. Deployed as an EIP-1167 clone; config
-/// is injected via one-shot `initialize`.
+/// (`executeEncodedTxBatch`). Deployed as an EIP-1167 clone; config is injected via one-shot init.
 abstract contract BaseLPManager is SingletonNFTOwned, V4PositionManager {
     using StateLibrary for IPoolManager;
     using TransientStateLibrary for IPoolManager;
@@ -45,21 +44,27 @@ abstract contract BaseLPManager is SingletonNFTOwned, V4PositionManager {
     uint8 public constant MAX_POOLS = 8;
     /// @notice Protocol fee skimmed from every realized fee accrual, in basis points (10%).
     uint16 public constant PROTOCOL_FEE_BPS = 1000;
-    /// @dev Fallback NFT name (product-specific) used when `InitParams.name` is empty (`bytes32(0)`).
+    /// @dev Fallback NFT name (product-specific) used when the init name is empty (`bytes32(0)`).
     function _defaultName() internal pure virtual returns (bytes32);
 
     // ────────── Config structs ──────────
 
+    /// @notice A configured pool — identity only. Position ranges are NOT a pool-level attribute here:
+    /// each product decides its range convention (Stable: fixed per-pool; Volatile: per-call).
     struct PoolConfig {
-        PoolKey key; // a stable pool (arbitrary pair); its poolId is the position salt
-        int24 tickLower;
-        int24 tickUpper;
+        PoolKey key;
     }
 
-    struct InitParams {
-        address owner; // receives the singleton NFT
-        bytes32 name; // NFT name, packed (≤31 chars, trailing zeros trimmed); "" ⇒ default name "Envelop LP Uniswap Manager"
-        PoolConfig[] pools; // 1..MAX_POOLS arbitrary stable pools
+    /// @notice On-chain position record. Stores the pool by `poolId` (1 slot) rather than the full
+    /// `PoolKey` (3 slots) — the key is reconstructed from the configured set in `positionOf`. For a
+    /// `salt == poolId` product (Stable) `poolId` is redundant with the salt; for a multi-position
+    /// product (Volatile, `salt ≠ poolId`) it is the only link from the salt to its pool.
+    struct StoredPosition {
+        PoolId poolId;
+        int24 tickLower;
+        int24 tickUpper;
+        uint128 liquidity;
+        uint64 openedAt;
     }
 
     // ────────── allocate structs ──────────
@@ -104,7 +109,7 @@ abstract contract BaseLPManager is SingletonNFTOwned, V4PositionManager {
 
     // ────────── State ──────────
 
-    /// @notice The configured pools (fixed at `initialize`); each entry's poolId is its position salt.
+    /// @notice The configured pools (fixed at init); identity only — ranges live per product.
     PoolConfig[] public pools;
     /// @notice 1-based index of a pool in `pools` keyed by its poolId (0 ⇒ not configured).
     mapping(PoolId => uint256) internal _poolIndexPlusOne;
@@ -112,8 +117,10 @@ abstract contract BaseLPManager is SingletonNFTOwned, V4PositionManager {
     mapping(Currency => bool) public isManagedStable;
     /// @notice Enumerable union of all currencies across `pools` (for net settlement).
     Currency[] public managedStables;
+    /// @notice The open position keyed by salt (zero-liquidity ⇒ no position).
+    mapping(bytes32 => StoredPosition) internal _positions;
     bool private _initialized;
-    bytes32 private _name; // per-clone NFT name, packed; set once in initialize
+    bytes32 private _name; // per-clone NFT name, packed; set once at init
 
     /// @notice External on-chain metadata renderer for `tokenURI`. Zero ⇒ `tokenURI` returns "".
     address public positionDescriptor;
@@ -124,10 +131,10 @@ abstract contract BaseLPManager is SingletonNFTOwned, V4PositionManager {
 
     // ────────── Events ──────────
 
-    // Envelop oracle compatibility (same as UniSmartWallet).
+    // Envelop oracle compatibility.
     /// @notice Emitted once at initialize so existing Envelop V2 oracles can index this manager.
-    /// @param oracleType The Envelop oracle type tag (`ORACLE_TYPE` = 2002).
-    /// @param contractName The contract name (`"StableLPManager"`).
+    /// @param oracleType The Envelop oracle type tag (`ORACLE_TYPE`).
+    /// @param contractName The contract name (e.g. `"StableLPManager"`).
     event EnvelopV2OracleType(uint256 indexed oracleType, string contractName);
     /// @notice Envelop-compatibility wrap event emitted once at initialize for the singleton token.
     /// @param creator The manager owner (initial NFT holder).
@@ -178,7 +185,7 @@ abstract contract BaseLPManager is SingletonNFTOwned, V4PositionManager {
     error ArrayLengthMismatch();
 
     /// @notice Deploy the implementation: set the shared immutables and lock the impl from being
-    /// initialized. Clones (the actual managers) are created by {StableLPFactory}, not this constructor.
+    /// initialized. Clones (the actual managers) are created by a factory, not this constructor.
     /// @dev Sets the shared `POOL_MANAGER` immutable (in the base) and locks the implementation
     /// instance. Clones get fresh storage (`_initialized == false`), never run this constructor, but
     /// DO read the implementation's `POOL_MANAGER` immutable through delegatecall.
@@ -190,37 +197,43 @@ abstract contract BaseLPManager is SingletonNFTOwned, V4PositionManager {
         _initialized = true;
     }
 
-    /// @notice One-shot initializer, called by the factory on the freshly-cloned proxy: registers the
-    /// pools + managed stables, mints the singleton NFT to `p.owner`, and reverts if called twice.
-    /// @param p Init parameters: owner, packed NFT name (empty ⇒ default), and 1..MAX_POOLS pools.
-    function initialize(InitParams calldata p) external {
+    // ────────── Init scaffolding (used by each product's `initialize`) ──────────
+
+    /// @dev Start the one-shot init: reverts on re-init, marks initialized, records the packed name.
+    /// Called FIRST in a product's `initialize` so a double call reverts before any pool registration.
+    /// @param name_ The packed NFT name (empty ⇒ product default).
+    function _beginInit(bytes32 name_) internal {
         if (_initialized) revert AlreadyInitialized();
         _initialized = true;
-        _name = p.name;
+        _name = name_;
+    }
 
-        uint256 n = p.pools.length;
-        if (n == 0) revert NoPools();
-        if (n > MAX_POOLS) revert TooManyPools(n);
+    /// @dev Register one configured pool: hookless gate, dedup by poolId, push identity, and union its
+    /// currencies into the managed-stable set. Ranges (if any) are the product's concern.
+    /// @param key The pool to configure (must be hookless and not already configured).
+    function _registerPool(PoolKey memory key) internal {
+        if (address(key.hooks) != address(0)) revert HookNotAllowed(address(key.hooks));
+        PoolId id = key.toId();
+        if (_poolIndexPlusOne[id] != 0) revert DuplicatePool(id); // poolId is a position salt ⇒ must be unique
+        pools.push(PoolConfig({key: key}));
+        _poolIndexPlusOne[id] = pools.length; // 1-based
+        _registerManaged(key.currency0);
+        _registerManaged(key.currency1);
+    }
 
-        for (uint256 i = 0; i < n; ++i) {
-            PoolConfig calldata c = p.pools[i];
-            // Hookless-only: a pool with a non-zero hook can break LP economics, so reject config outright.
-            if (address(c.key.hooks) != address(0)) revert HookNotAllowed(address(c.key.hooks));
-            PositionMath.requireValidTickRange(c.tickLower, c.tickUpper, c.key.tickSpacing);
-            PoolId id = c.key.toId();
-            if (_poolIndexPlusOne[id] != 0) revert DuplicatePool(id); // poolId == position salt ⇒ must be unique
-            pools.push(c);
-            _poolIndexPlusOne[id] = pools.length; // 1-based
-            _registerManaged(c.key.currency0);
-            _registerManaged(c.key.currency1);
-        }
-
-        _mintSingleton(p.owner);
-
+    /// @dev Finish the one-shot init: optionally wire the `tokenURI` renderer, mint the singleton NFT
+    /// to `owner_`, and emit the init/oracle events. Called LAST in a product's `initialize`.
+    /// @param owner_ The manager owner (receives the singleton NFT).
+    /// @param poolCount_ Number of configured pools (for the `Initialized` event).
+    /// @param descriptor_ The default `tokenURI` renderer to set at init; zero ⇒ none (owner can set
+    /// it later via `setPositionDescriptor`).
+    function _finishInit(address owner_, uint256 poolCount_, address descriptor_) internal {
+        if (descriptor_ != address(0)) positionDescriptor = descriptor_;
+        _mintSingleton(owner_);
         emit IERC4906.MetadataUpdate(TOKEN_ID);
         emit EnvelopV2OracleType(ORACLE_TYPE(), _productName());
-        emit EnvelopWrappedV2(p.owner, TOKEN_ID, 0x0000, "");
-        emit Initialized(p.owner, address(POOL_MANAGER), n);
+        emit EnvelopWrappedV2(owner_, TOKEN_ID, 0x0000, "");
+        emit Initialized(owner_, address(POOL_MANAGER), poolCount_);
     }
 
     /// @dev Add a currency to the managed-stable set (dedup via the mapping).
@@ -231,8 +244,8 @@ abstract contract BaseLPManager is SingletonNFTOwned, V4PositionManager {
         }
     }
 
-    /// @notice The per-clone NFT name. Decodes the packed `_name` set at `initialize`; an empty name
-    /// falls back to the default `"Envelop LP Uniswap Manager"`.
+    /// @notice The per-clone NFT name. Decodes the packed `_name` set at init; an empty name falls
+    /// back to the product default.
     /// @return The manager's NFT name.
     // Clones don't run the ERC721 constructor, so derive name from packed storage; symbol is shared.
     function name() public view override returns (string memory) {
@@ -279,15 +292,50 @@ abstract contract BaseLPManager is SingletonNFTOwned, V4PositionManager {
 
     /// @notice PoolManager unlock callback. The base defines no ops of its own — it decodes the
     /// leading op code and forwards to `_dispatchExtraOp`, which each product overrides to route its
-    /// own ops (POKE/allocate/withdraw/recenter…) against the shared primitives. Omitting the
-    /// {V4PositionManager} OPEN/CLOSE handlers keeps them unreachable so the compiler strips them
-    /// (EIP-170). Reverts unless called by the PoolManager.
+    /// own ops (POKE/allocate/withdraw/recenter…) against the shared primitives. Reverts unless called
+    /// by the PoolManager.
     /// @param data ABI-encoded `(uint8 op, bytes payload)` produced by the product before `unlock`.
     /// @return The product handler's return data.
     function unlockCallback(bytes calldata data) external override returns (bytes memory) {
         if (msg.sender != address(POOL_MANAGER)) revert NotPoolManager();
         (uint8 op, bytes memory payload) = abi.decode(data, (uint8, bytes));
         return _dispatchExtraOp(op, payload);
+    }
+
+    // ────────── Position views + poke ──────────
+
+    /// @inheritdoc V4PositionManager
+    /// @dev Reconstructs the full `PoolKey` from the configured set (`poolId → pools[_indexOf]`); an
+    /// absent position (`liquidity == 0`) returns the empty struct without reconstruction.
+    function positionOf(bytes32 salt) external view override returns (Position memory pos) {
+        StoredPosition memory s = _positions[salt];
+        if (s.liquidity == 0) return pos;
+        pos = Position({
+            key: pools[_indexOf(s.poolId)].key,
+            tickLower: s.tickLower,
+            tickUpper: s.tickUpper,
+            liquidity: s.liquidity,
+            openedAt: s.openedAt
+        });
+    }
+
+    /// @dev Harvest fees only (liquidityDelta == 0) for a position; principal unchanged. Reconstructs
+    /// the pool key from config and routes `Op.POKE` to the product's own poke handler.
+    /// @param salt The position key.
+    function _pokeFromConfig(bytes32 salt) internal {
+        StoredPosition memory s = _positions[salt];
+        if (s.liquidity == 0) revert UnknownPosition(salt);
+        PoolKey memory key = pools[_indexOf(s.poolId)].key;
+        POOL_MANAGER.unlock(
+            abi.encode(
+                uint8(Op.POKE),
+                abi.encode(
+                    RemoveParams({
+                        key: key, tickLower: s.tickLower, tickUpper: s.tickUpper, deltaLiquidity: 0, salt: salt
+                    })
+                )
+            )
+        );
     }
 
     // ────────── Owner config / inherited entry points ──────────
