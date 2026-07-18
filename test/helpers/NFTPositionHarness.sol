@@ -9,12 +9,11 @@ import {SingletonNFTOwned} from "../../src/abstract/SingletonNFTOwned.sol";
 import {V4PositionOpsHarness} from "./V4PositionOpsHarness.sol";
 import {IWalletDescriptor} from "../../src/interfaces/IWalletDescriptor.sol";
 
-/// @notice Test-only NFT-owned V4 position manager. Replaces the (removed) UniSmartWallet as the
-/// shared scaffolding vehicle for the descriptor / lens / PositionState suites: it wires
-/// {SingletonNFTOwned} auth + operators to the {V4PositionManager} mechanics and a pluggable
-/// descriptor, without the Envelop SmartWallet custody layer. Position entry points mirror the old
-/// wallet's surface (openPosition / closePosition / decreasePosition / pokePosition + descriptor +
-/// tokenURI) so the tests read the same.
+/// @notice Test-only NFT-owned V4 position manager: the shared scaffolding vehicle for the descriptor
+/// / lens / PositionState suites. It wires {SingletonNFTOwned} auth + operators to the
+/// {V4PositionManager} mechanics and a pluggable descriptor, with a standalone position lifecycle
+/// (openPosition / closePosition / decreasePosition / pokePosition + descriptor + tokenURI) — the
+/// generic surface those view contracts read against, independent of any product manager.
 contract NFTPositionHarness is SingletonNFTOwned, V4PositionOpsHarness {
     /// @notice External on-chain metadata renderer for `tokenURI`. Zero ⇒ `tokenURI` returns "".
     address public positionDescriptor;

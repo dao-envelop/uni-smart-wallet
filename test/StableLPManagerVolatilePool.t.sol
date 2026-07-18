@@ -27,7 +27,7 @@ import {PoolModifyLiquidityTest} from "@uniswap/v4-core/src/test/PoolModifyLiqui
 ///
 /// These tests PASS: the degradation is the expected behavior, not a bug. They exist to justify that
 /// arbitrary/volatile assets need a different product (per-call/updatable ranges + `amount*Max` +
-/// active recentering — the `UniSmartWallet.openPosition` model), not `StableLPManager`.
+/// active recentering — the `VolatileLPManager` model), not `StableLPManager`.
 contract StableLPManagerVolatilePoolTest is Test {
     using StateLibrary for IPoolManager;
 
