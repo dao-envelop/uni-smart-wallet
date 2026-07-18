@@ -21,11 +21,11 @@ import {BaseLPManager} from "./BaseLPManager.sol";
 /// @notice {BaseLPManager} product for arbitrary (volatile) asset pairs. Reuses the base clone/init,
 /// managed-currency union, protocol-fee skim, and settlement primitives, and adds what volatile pairs
 /// need over the stable model: **per-call tick ranges** and **salt-keyed multi-position** (several
-/// ranges per pool, `salt ≠ poolId` ⇒ the position stores its `poolId`), **`amount*Max`** slippage
-/// caps on the add (owed is price-sensitive once a range can go one-sided) and **`minAmountOut`** on
-/// the balancing pre-swap, plus `recenter` (single-call remove→swap→re-add) and an optional external
-/// price-oracle guard. Ops route via `_dispatchExtraOp` (codes ≥ 7) so the base dispatcher is reused
-/// unchanged.
+/// ranges per pool, `salt ≠ poolId` ⇒ the position stores its `poolId`) and **`minAmountOut`** on the
+/// balancing pre-swap, plus `recenter` (single-call remove→swap→re-add) and an optional external
+/// price-oracle guard. The add is sized from desired amounts with a `minLiquidity` floor (owed ≤
+/// desired by construction — no `amount*Max` cap, as in `StableLPManager`). Ops route via
+/// `_dispatchExtraOp` (codes ≥ 7) so the base dispatcher is reused unchanged.
 contract VolatileLPManager is BaseLPManager {
     using StateLibrary for IPoolManager;
     using TransientStateLibrary for IPoolManager;
@@ -36,7 +36,7 @@ contract VolatileLPManager is BaseLPManager {
     uint8 internal constant OP_WITHDRAW_TO_V = 9;
 
     /// @notice Optional external price guard for on-chain swaps (allocate pre-swap / recenter
-    /// rebalance). Zero ⇒ no oracle: the operator's `amount*Max` / `minAmountOut` are the only guard.
+    /// rebalance). Zero ⇒ no oracle: the operator's `minLiquidity` / `minAmountOut` are the only guard.
     /// Owner-settable via {setPriceOracle}.
     address public priceOracle;
 
@@ -53,8 +53,10 @@ contract VolatileLPManager is BaseLPManager {
     event PriceOracleSet(address indexed oracle);
 
     /// @notice One volatile allocation: pick a configured pool + a caller-chosen `salt`, a per-call
-    /// range, an optional balancing pre-swap (bounded by `minAmountOut`), and an add sized from
-    /// desired amounts with `amount{0,1}Max` slippage caps. A pool can hold many salts/ranges at once.
+    /// range, an optional balancing pre-swap (bounded by `minAmountOut`), and an add sized from desired
+    /// amounts. A pool can hold many salts/ranges at once. Slippage on the add is `minLiquidity`: L is
+    /// sized from `amount{0,1}Desired` via `getLiquidityForAmounts`, so owed ≤ desired by construction —
+    /// no separate `amount*Max` cap is needed (matching `StableLPManager` and v4's own from-amounts add).
     struct VolatileAllocLeg {
         PoolId poolId; // which configured pool (key comes from `pools`)
         bytes32 salt; // caller-chosen position key (fresh ⇒ new range; existing ⇒ top-up same range)
@@ -67,8 +69,6 @@ contract VolatileLPManager is BaseLPManager {
         uint256 amount0Desired; // add amounts (bound the spend; L is sized from these at the live price)
         uint256 amount1Desired;
         uint128 minLiquidity; // floor on minted L (slippage on the add)
-        uint128 amount0Max; // slippage cap on currency0 owed by the add
-        uint128 amount1Max; // slippage cap on currency1 owed by the add
     }
 
     /// @notice Move an existing position to a new range in one call: pull all its liquidity, optionally
@@ -82,9 +82,7 @@ contract VolatileLPManager is BaseLPManager {
         uint256 swapAmountIn; // exactIn for the rebalancing swap
         uint160 swapPriceLimit; // sqrtPriceLimitX96 — price bound on the swap
         uint256 minAmountOut; // floor on the rebalancing swap output
-        uint128 minLiquidity; // floor on the re-added L
-        uint128 amount0Max; // slippage cap on currency0 owed by the re-add
-        uint128 amount1Max; // slippage cap on currency1 owed by the re-add
+        uint128 minLiquidity; // floor on the re-added L (slippage on the add; owed ≤ freed by construction)
     }
 
     /// @notice A single position (by salt) to pull liquidity from during `withdrawTo`.
@@ -298,14 +296,18 @@ contract VolatileLPManager is BaseLPManager {
         return "";
     }
 
-    /// @dev Per-leg: optional exactIn pre-swap (bounded by minAmountOut) to balance the sides, then
-    /// add at the caller's range with the `amount*Max` caps. Settlement is deferred to `_settleManaged`.
+    /// @dev Per-leg: optional exactIn pre-swap (bounded by `minAmountOut`) to balance the sides, then
+    /// add at the caller's range (sized from desired amounts, floored by `minLiquidity`). Settlement is
+    /// deferred to `_settleManaged`. The pre-swap carries the canonical Uniswap pair of guards —
+    /// `swapPriceLimit` (marginal-price ceiling) and `minAmountOut` (total-output floor) — plus a
+    /// full-fill requirement that enforces "swap exactly `swapAmountIn`" (a partial pre-swap would
+    /// under-balance the sides before the add).
     function _allocateLegV(VolatileAllocLeg memory leg) internal {
         PoolKey memory key = pools[_indexOf(leg.poolId)].key;
         if (leg.swapAmountIn > 0) {
             BalanceDelta sd = _swap(key, leg.zeroForOne, -int256(leg.swapAmountIn), leg.swapPriceLimit);
             int128 inDelta = leg.zeroForOne ? sd.amount0() : sd.amount1();
-            // exactIn: a partial fill (price limit hit) leaves |inDelta| < requested input.
+            // Full-fill guard: a partial fill (swapPriceLimit hit) leaves |inDelta| < requested input.
             if (uint256(uint128(-inDelta)) < leg.swapAmountIn) revert SwapSlippage(leg.poolId);
             int128 outDelta = leg.zeroForOne ? sd.amount1() : sd.amount0();
             if (uint256(uint128(outDelta)) < leg.minAmountOut) revert SwapMinOut(leg.poolId);
@@ -315,19 +317,11 @@ contract VolatileLPManager is BaseLPManager {
     }
 
     /// @dev Size L from desired amounts at the live price, add at the caller's range under `salt`,
-    /// enforce the `amount*Max` owed caps, skim the protocol fee, and record/merge the position. A
-    /// fresh salt opens a new range; an existing salt must top up the SAME pool + range.
+    /// skim the protocol fee, and record/merge the position. A fresh salt opens a new range; an
+    /// existing salt must top up the SAME pool + range.
     function _addLiquidityV(VolatileAllocLeg memory leg, PoolKey memory key) internal {
         uint128 L = _addLiquidityAt(
-            key,
-            leg.tickLower,
-            leg.tickUpper,
-            leg.salt,
-            leg.amount0Desired,
-            leg.amount1Desired,
-            leg.minLiquidity,
-            leg.amount0Max,
-            leg.amount1Max
+            key, leg.tickLower, leg.tickUpper, leg.salt, leg.amount0Desired, leg.amount1Desired, leg.minLiquidity
         );
         StoredPosition memory ex = _positions[leg.salt];
         if (ex.liquidity == 0) {
@@ -350,8 +344,10 @@ contract VolatileLPManager is BaseLPManager {
     }
 
     /// @dev Size L from desired amounts at the live price, add under `salt` at [tl,tu], skim the
-    /// protocol fee, and enforce the owed `amount*Max` caps. Registry bookkeeping is the caller's job.
-    /// Shared by allocate and recenter (kept in its own frame — the stack is tight without via-ir).
+    /// protocol fee. `minLiq` is the slippage floor: L is sized from `amount0`/`amount1` via
+    /// `getLiquidityForAmounts` (L rounded down), so owed ≤ the desired amounts by construction and no
+    /// separate owed-cap is needed. Registry bookkeeping is the caller's job. Shared by allocate and
+    /// recenter (kept in its own frame — the stack is tight without via-ir).
     function _addLiquidityAt(
         PoolKey memory key,
         int24 tl,
@@ -359,9 +355,7 @@ contract VolatileLPManager is BaseLPManager {
         bytes32 salt,
         uint256 amount0,
         uint256 amount1,
-        uint128 minLiq,
-        uint128 amt0Max,
-        uint128 amt1Max
+        uint128 minLiq
     ) internal returns (uint128 L) {
         PositionMath.requireValidTickRange(tl, tu, key.tickSpacing);
         {
@@ -370,21 +364,12 @@ contract VolatileLPManager is BaseLPManager {
             L = PositionMath.liquidityFromAmounts(sqrtP, tl, tu, amount0, amount1);
         }
         if (L < minLiq) revert MinLiquidityNotMet(L, minLiq);
-        (BalanceDelta delta, BalanceDelta fees) = POOL_MANAGER.modifyLiquidity(
+        (, BalanceDelta fees) = POOL_MANAGER.modifyLiquidity(
             key,
             ModifyLiquidityParams({tickLower: tl, tickUpper: tu, liquidityDelta: int256(uint256(L)), salt: salt}),
             ""
         );
         _skimFees(key, fees);
-        _checkOwed(delta, amt0Max, amt1Max);
-    }
-
-    /// @dev Revert if the add's owed (negative caller delta) exceeds either slippage cap.
-    function _checkOwed(BalanceDelta delta, uint128 amt0Max, uint128 amt1Max) internal pure {
-        int128 d0 = delta.amount0();
-        if (d0 < 0 && uint256(uint128(-d0)) > amt0Max) revert ExceedsAmount0Max(uint256(uint128(-d0)), amt0Max);
-        int128 d1 = delta.amount1();
-        if (d1 < 0 && uint256(uint128(-d1)) > amt1Max) revert ExceedsAmount1Max(uint256(uint128(-d1)), amt1Max);
     }
 
     // ────────── recenter ──────────
@@ -428,9 +413,7 @@ contract VolatileLPManager is BaseLPManager {
             p.salt,
             _posDelta(key.currency0),
             _posDelta(key.currency1),
-            p.minLiquidity,
-            p.amount0Max,
-            p.amount1Max
+            p.minLiquidity
         );
 
         // 4. Repoint the registry entry to the new range/liquidity (same salt + pool, keep openedAt).
