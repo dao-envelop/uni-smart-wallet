@@ -5,7 +5,8 @@ import {Test} from "forge-std/Test.sol";
 import {StableLPTestBase} from "./helpers/StableLPTestBase.sol";
 import {StableLPManager} from "../src/StableLPManager.sol";
 import {BaseLPManager} from "../src/BaseLPManager.sol";
-import {StableLPFactory} from "../src/StableLPFactory.sol";
+import {LPManagerFactory} from "../src/LPManagerFactory.sol";
+import {FactoryHelper} from "./helpers/FactoryHelper.sol";
 import {V4PositionManager} from "../src/abstract/V4PositionManager.sol";
 import {MockERC20} from "./helpers/Mocks.sol";
 
@@ -81,7 +82,7 @@ contract StableLPUninitializedPoolTest is Test {
     function test_allocate_uninitializedPool_reverts() public {
         PoolManager pm = new PoolManager(address(this));
         StableLPManager impl = new StableLPManager(IPoolManager(address(pm)), address(0xFEE5));
-        StableLPFactory factory = new StableLPFactory(address(impl));
+        LPManagerFactory factory = FactoryHelper.single(address(this), address(impl));
 
         Currency a = _tok();
         Currency b = _tok();
@@ -92,12 +93,12 @@ contract StableLPUninitializedPoolTest is Test {
 
         StableLPManager.StablePoolInit[] memory cfgs = new StableLPManager.StablePoolInit[](1);
         cfgs[0] = StableLPManager.StablePoolInit({key: key, tickLower: -60, tickUpper: 60});
-        StableLPManager mgr = StableLPManager(
-            payable(factory.createManager(
-                    StableLPManager.InitParams({
-                        owner: owner, name: bytes32("Envelop StableLP"), descriptor: address(0), pools: cfgs
-                    })
-                ))
+        StableLPManager mgr = FactoryHelper.cloneStable(
+            factory,
+            address(impl),
+            StableLPManager.InitParams({
+                owner: owner, name: bytes32("Envelop StableLP"), descriptor: address(0), pools: cfgs
+            })
         );
 
         // Fund the manager so settlement isn't the first thing to fail.

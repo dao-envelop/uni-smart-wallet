@@ -4,7 +4,8 @@ pragma solidity ^0.8.26;
 import {Test} from "forge-std/Test.sol";
 import {StableLPManager} from "../src/StableLPManager.sol";
 import {BaseLPManager} from "../src/BaseLPManager.sol";
-import {StableLPFactory} from "../src/StableLPFactory.sol";
+import {LPManagerFactory} from "../src/LPManagerFactory.sol";
+import {FactoryHelper} from "./helpers/FactoryHelper.sol";
 
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
@@ -94,15 +95,15 @@ contract StableLPManagerForkTest is Test {
         // Deploy the manager configured on the native/USDC pool; NFT mints to this test contract
         // (so `this` is both owner and operator for the calls below).
         StableLPManager impl = new StableLPManager(POOL_MANAGER, treasury);
-        StableLPFactory factory = new StableLPFactory(address(impl));
+        LPManagerFactory factory = FactoryHelper.single(address(this), address(impl));
         StableLPManager.StablePoolInit[] memory cfgs = new StableLPManager.StablePoolInit[](1);
         cfgs[0] = StableLPManager.StablePoolInit({key: key, tickLower: tickLower, tickUpper: tickUpper});
-        mgr = StableLPManager(
-            payable(factory.createManager(
-                    StableLPManager.InitParams({
-                        owner: address(this), name: bytes32("Envelop ETH-USDC"), descriptor: address(0), pools: cfgs
-                    })
-                ))
+        mgr = FactoryHelper.cloneStable(
+            factory,
+            address(impl),
+            StableLPManager.InitParams({
+                owner: address(this), name: bytes32("Envelop ETH-USDC"), descriptor: address(0), pools: cfgs
+            })
         );
 
         // Fund the manager with native ETH + USDC.

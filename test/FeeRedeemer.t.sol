@@ -6,7 +6,8 @@ import {StableLPTestBase} from "./helpers/StableLPTestBase.sol";
 import {FeeRedeemer} from "../src/FeeRedeemer.sol";
 import {StableLPManager} from "../src/StableLPManager.sol";
 import {BaseLPManager} from "../src/BaseLPManager.sol";
-import {StableLPFactory} from "../src/StableLPFactory.sol";
+import {LPManagerFactory} from "../src/LPManagerFactory.sol";
+import {FactoryHelper} from "./helpers/FactoryHelper.sol";
 import {MockERC20} from "./helpers/Mocks.sol";
 
 import {PoolManager} from "@uniswap/v4-core/src/PoolManager.sol";
@@ -35,8 +36,8 @@ contract FeeRedeemerTest is StableLPTestBase {
         redeemer = new FeeRedeemer(IPoolManager(address(poolManager)), protocol);
 
         StableLPManager implR = new StableLPManager(IPoolManager(address(poolManager)), address(redeemer));
-        StableLPFactory factoryR = new StableLPFactory(address(implR));
-        feeMgr = StableLPManager(payable(factoryR.createManager(_initParams(owner))));
+        LPManagerFactory factoryR = FactoryHelper.single(address(this), address(implR));
+        feeMgr = FactoryHelper.cloneStable(factoryR, address(implR), _initParams(owner));
         MockERC20(Currency.unwrap(USDT)).mint(address(feeMgr), FUND);
 
         swapRouter = new PoolSwapTest(IPoolManager(address(poolManager)));
@@ -134,15 +135,15 @@ contract FeeRedeemerNativeTest is Test {
 
         redeemer = new FeeRedeemer(IPoolManager(address(poolManager)), protocol);
         StableLPManager impl = new StableLPManager(IPoolManager(address(poolManager)), address(redeemer));
-        StableLPFactory factory = new StableLPFactory(address(impl));
+        LPManagerFactory factory = FactoryHelper.single(address(this), address(impl));
         StableLPManager.StablePoolInit[] memory cfgs = new StableLPManager.StablePoolInit[](1);
         cfgs[0] = StableLPManager.StablePoolInit({key: key, tickLower: -SPACING, tickUpper: SPACING});
-        mgr = StableLPManager(
-            payable(factory.createManager(
-                    StableLPManager.InitParams({
-                        owner: owner, name: bytes32("Envelop StableLP"), descriptor: address(0), pools: cfgs
-                    })
-                ))
+        mgr = FactoryHelper.cloneStable(
+            factory,
+            address(impl),
+            StableLPManager.InitParams({
+                owner: owner, name: bytes32("Envelop StableLP"), descriptor: address(0), pools: cfgs
+            })
         );
 
         vm.deal(address(mgr), 100 ether);

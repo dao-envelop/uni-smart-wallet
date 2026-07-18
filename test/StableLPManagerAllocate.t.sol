@@ -2,6 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {StableLPTestBase} from "./helpers/StableLPTestBase.sol";
+import {FactoryHelper} from "./helpers/FactoryHelper.sol";
 import {StableLPManager} from "../src/StableLPManager.sol";
 import {BaseLPManager} from "../src/BaseLPManager.sol";
 import {SingletonNFTOwned} from "../src/abstract/SingletonNFTOwned.sol";
@@ -72,7 +73,8 @@ contract StableLPManagerAllocateTest is StableLPTestBase {
         address badHook = address(0xBADC0DE);
         StableLPManager.InitParams memory p = _initParams(owner);
         p.pools[1].key.hooks = IHooks(badHook); // a non-zero hook on one of the 3 pools
+        // The factory bubbles the clone's own init revert.
         vm.expectRevert(abi.encodeWithSelector(V4PositionManager.HookNotAllowed.selector, badHook));
-        factory.createManager(p);
+        FactoryHelper.cloneStable(factory, address(impl), p);
     }
 }

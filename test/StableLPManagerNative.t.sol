@@ -4,7 +4,8 @@ pragma solidity ^0.8.26;
 import {Test} from "forge-std/Test.sol";
 import {StableLPManager} from "../src/StableLPManager.sol";
 import {BaseLPManager} from "../src/BaseLPManager.sol";
-import {StableLPFactory} from "../src/StableLPFactory.sol";
+import {LPManagerFactory} from "../src/LPManagerFactory.sol";
+import {FactoryHelper} from "./helpers/FactoryHelper.sol";
 import {MockERC20} from "./helpers/Mocks.sol";
 
 import {PoolManager} from "@uniswap/v4-core/src/PoolManager.sol";
@@ -42,15 +43,15 @@ contract StableLPManagerNativeTest is Test {
         salt = PoolId.unwrap(key.toId());
 
         StableLPManager impl = new StableLPManager(IPoolManager(address(poolManager)), treasury);
-        StableLPFactory factory = new StableLPFactory(address(impl));
+        LPManagerFactory factory = FactoryHelper.single(address(this), address(impl));
         StableLPManager.StablePoolInit[] memory cfgs = new StableLPManager.StablePoolInit[](1);
         cfgs[0] = StableLPManager.StablePoolInit({key: key, tickLower: TL, tickUpper: TU});
-        mgr = StableLPManager(
-            payable(factory.createManager(
-                    StableLPManager.InitParams({
-                        owner: owner, name: bytes32("Envelop StableLP"), descriptor: address(0), pools: cfgs
-                    })
-                ))
+        mgr = FactoryHelper.cloneStable(
+            factory,
+            address(impl),
+            StableLPManager.InitParams({
+                owner: owner, name: bytes32("Envelop StableLP"), descriptor: address(0), pools: cfgs
+            })
         );
 
         // Fund the manager with native ETH + the pair token.

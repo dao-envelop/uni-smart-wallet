@@ -5,7 +5,8 @@ import {Test} from "forge-std/Test.sol";
 import {StableLPTestBase} from "./helpers/StableLPTestBase.sol";
 import {StableLPManager} from "../src/StableLPManager.sol";
 import {BaseLPManager} from "../src/BaseLPManager.sol";
-import {StableLPFactory} from "../src/StableLPFactory.sol";
+import {LPManagerFactory} from "../src/LPManagerFactory.sol";
+import {FactoryHelper} from "./helpers/FactoryHelper.sol";
 import {MockERC20} from "./helpers/Mocks.sol";
 
 import {PoolManager} from "@uniswap/v4-core/src/PoolManager.sol";
@@ -119,7 +120,7 @@ contract StableLPManyPoolsTest is Test {
     function test_init_sevenPools_countsAndUnion() public {
         PoolManager pm = new PoolManager(address(this));
         StableLPManager impl = new StableLPManager(IPoolManager(address(pm)), address(0xFEE5));
-        StableLPFactory factory = new StableLPFactory(address(impl));
+        LPManagerFactory factory = FactoryHelper.single(address(this), address(impl));
 
         Currency hub = _tok();
         StableLPManager.StablePoolInit[] memory cfgs = new StableLPManager.StablePoolInit[](7);
@@ -132,12 +133,12 @@ contract StableLPManyPoolsTest is Test {
             });
         }
 
-        StableLPManager mgr = StableLPManager(
-            payable(factory.createManager(
-                    StableLPManager.InitParams({
-                        owner: owner, name: bytes32("Envelop StableLP"), descriptor: address(0), pools: cfgs
-                    })
-                ))
+        StableLPManager mgr = FactoryHelper.cloneStable(
+            factory,
+            address(impl),
+            StableLPManager.InitParams({
+                owner: owner, name: bytes32("Envelop StableLP"), descriptor: address(0), pools: cfgs
+            })
         );
 
         assertEq(mgr.poolCount(), 7, "seven pools configured");

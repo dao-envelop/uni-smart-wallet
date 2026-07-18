@@ -9,7 +9,8 @@ import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {StableLPManager} from "../src/StableLPManager.sol";
 import {BaseLPManager} from "../src/BaseLPManager.sol";
-import {StableLPFactory} from "../src/StableLPFactory.sol";
+import {LPManagerFactory} from "../src/LPManagerFactory.sol";
+import {FactoryHelper} from "./helpers/FactoryHelper.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {PoolSwapTest} from "@uniswap/v4-core/src/test/PoolSwapTest.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
@@ -208,12 +209,12 @@ contract GasCompareStableLPForkTest is Test {
         address treasury = makeAddr("slp_treasury");
 
         StableLPManager impl = new StableLPManager(POOL_MANAGER, treasury);
-        StableLPFactory factory = new StableLPFactory(address(impl));
+        LPManagerFactory factory = FactoryHelper.single(address(this), address(impl));
 
         // ── createManager (measured separately) ──
         StableLPManager.InitParams memory ip = _initParams(owner);
         uint256 g = gasleft();
-        StableLPManager mgr = StableLPManager(payable(factory.createManager(ip)));
+        StableLPManager mgr = FactoryHelper.cloneStable(factory, address(impl), ip);
         uint256 gCreate = g - gasleft();
 
         // ── deposit: plain USDT transfer to the manager ──

@@ -1,0 +1,11 @@
+{
+  "_comment": "Parallel-array pool config for CreateManager.s.sol with product=volatile. Keys only — no tickLower/tickUpper (Volatile ranges are per-call). Every array must be the same length (one entry per pool). currency0 < currency1 (sorted). hooks must be 0x0 (hookless gate). Replace the placeholder token addresses with real sorted pairs on the target chain.",
+  "product": "volatile",
+  "owner": "0x0000000000000000000000000000000000000000",
+  "name": "Envelop VolatileLP",
+  "currency0": ["0x0000000000000000000000000000000000000000"],
+  "currency1": ["0x0000000000000000000000000000000000000001"],
+  "fee": [3000],
+  "tickSpacing": [60],
+  "hooks": ["0x0000000000000000000000000000000000000000"]
+}

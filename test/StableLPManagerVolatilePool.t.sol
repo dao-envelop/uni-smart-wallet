@@ -4,7 +4,8 @@ pragma solidity ^0.8.26;
 import {Test} from "forge-std/Test.sol";
 import {StableLPManager} from "../src/StableLPManager.sol";
 import {BaseLPManager} from "../src/BaseLPManager.sol";
-import {StableLPFactory} from "../src/StableLPFactory.sol";
+import {LPManagerFactory} from "../src/LPManagerFactory.sol";
+import {FactoryHelper} from "./helpers/FactoryHelper.sol";
 import {MockERC20} from "./helpers/Mocks.sol";
 
 import {PoolManager} from "@uniswap/v4-core/src/PoolManager.sol";
@@ -33,7 +34,7 @@ contract StableLPManagerVolatilePoolTest is Test {
 
     PoolManager internal poolManager;
     StableLPManager internal impl;
-    StableLPFactory internal factory;
+    LPManagerFactory internal factory;
     PoolModifyLiquidityTest internal lpRouter;
     PoolSwapTest internal swapRouter;
 
@@ -54,7 +55,7 @@ contract StableLPManagerVolatilePoolTest is Test {
         lpRouter = new PoolModifyLiquidityTest(IPoolManager(address(poolManager)));
         swapRouter = new PoolSwapTest(IPoolManager(address(poolManager)));
         impl = new StableLPManager(IPoolManager(address(poolManager)), treasury);
-        factory = new StableLPFactory(address(impl));
+        factory = FactoryHelper.single(address(this), address(impl));
     }
 
     // ────────── scaffold ──────────
@@ -79,12 +80,12 @@ contract StableLPManagerVolatilePoolTest is Test {
 
         StableLPManager.StablePoolInit[] memory cfgs = new StableLPManager.StablePoolInit[](1);
         cfgs[0] = StableLPManager.StablePoolInit({key: key, tickLower: TL, tickUpper: TU});
-        m = StableLPManager(
-            payable(factory.createManager(
-                    StableLPManager.InitParams({
-                        owner: owner, name: bytes32("Envelop VolatileLP"), descriptor: address(0), pools: cfgs
-                    })
-                ))
+        m = FactoryHelper.cloneStable(
+            factory,
+            address(impl),
+            StableLPManager.InitParams({
+                owner: owner, name: bytes32("Envelop VolatileLP"), descriptor: address(0), pools: cfgs
+            })
         );
 
         MockERC20(Currency.unwrap(c0)).mint(address(m), 1_000e18);

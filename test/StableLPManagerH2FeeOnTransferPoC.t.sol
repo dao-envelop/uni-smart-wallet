@@ -5,7 +5,8 @@ import {Test} from "forge-std/Test.sol";
 
 import {StableLPManager} from "../src/StableLPManager.sol";
 import {BaseLPManager} from "../src/BaseLPManager.sol";
-import {StableLPFactory} from "../src/StableLPFactory.sol";
+import {LPManagerFactory} from "../src/LPManagerFactory.sol";
+import {FactoryHelper} from "./helpers/FactoryHelper.sol";
 import {MockERC20, MockFeeOnTransferERC20} from "./helpers/Mocks.sol";
 
 import {PoolManager} from "@uniswap/v4-core/src/PoolManager.sol";
@@ -33,7 +34,7 @@ contract StableLPManagerH2FeeOnTransferPoC is Test {
     PoolManager internal poolManager;
     PoolModifyLiquidityTest internal lpRouter;
     StableLPManager internal impl;
-    StableLPFactory internal factory;
+    LPManagerFactory internal factory;
     StableLPManager internal mgr;
 
     MockFeeOnTransferERC20 internal fot; // a "stable" that can switch on a transfer fee
@@ -86,15 +87,13 @@ contract StableLPManagerH2FeeOnTransferPoC is Test {
 
         // Deploy the manager configured on the FOT/USD pool.
         impl = new StableLPManager(IPoolManager(address(poolManager)), treasury);
-        factory = new StableLPFactory(address(impl));
+        factory = FactoryHelper.single(address(this), address(impl));
         StableLPManager.StablePoolInit[] memory cfgs = new StableLPManager.StablePoolInit[](1);
         cfgs[0] = StableLPManager.StablePoolInit({key: key, tickLower: TL, tickUpper: TU});
-        mgr = StableLPManager(
-            payable(factory.createManager(
-                    StableLPManager.InitParams({
-                        owner: owner, name: bytes32("FOT"), descriptor: address(0), pools: cfgs
-                    })
-                ))
+        mgr = FactoryHelper.cloneStable(
+            factory,
+            address(impl),
+            StableLPManager.InitParams({owner: owner, name: bytes32("FOT"), descriptor: address(0), pools: cfgs})
         );
 
         // Fund + open a position while the token still behaves like a plain ERC-20.

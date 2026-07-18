@@ -8,11 +8,24 @@ import {DeployStableLP} from "../script/DeployStableLP.s.sol";
 import {CreateManager} from "../script/CreateManager.s.sol";
 import {StableLPManager} from "../src/StableLPManager.sol";
 import {BaseLPManager} from "../src/BaseLPManager.sol";
+import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 
-/// Exposes CreateManager's internal config parser for assertions.
+/// Exposes CreateManager's internal config parsing for assertions (rebuilds the Stable InitParams the
+/// way `_stableInit` does, minus impl lookup + encoding).
 contract CreateManagerHarness is CreateManager {
-    function parse(string memory json) external view returns (StableLPManager.InitParams memory) {
-        return _parseConfig(json);
+    function parse(string memory json) external view returns (StableLPManager.InitParams memory p) {
+        (PoolKey[] memory keys, int256[] memory lower, int256[] memory upper) = _parseStablePools(json);
+        StableLPManager.StablePoolInit[] memory pools = new StableLPManager.StablePoolInit[](keys.length);
+        for (uint256 i = 0; i < keys.length; ++i) {
+            pools[i] =
+                StableLPManager.StablePoolInit({key: keys[i], tickLower: int24(lower[i]), tickUpper: int24(upper[i])});
+        }
+        p = StableLPManager.InitParams({
+            owner: vm.parseJsonAddress(json, ".owner"),
+            name: _readName(json, false),
+            descriptor: address(0),
+            pools: pools
+        });
     }
 }
 
@@ -32,12 +45,16 @@ contract DeployStableLPTest is Test {
         assertEq(d.feeRedeemer.owner(), admin, "feeRedeemer owner");
         assertEq(address(d.feeRedeemer.POOL_MANAGER()), address(pm), "feeRedeemer pm");
 
-        // Implementation taxes fees to the FeeRedeemer and shares the PoolManager.
-        assertEq(d.impl.PROTOCOL_TREASURY(), address(d.feeRedeemer), "impl treasury == feeRedeemer");
-        assertEq(address(d.impl.POOL_MANAGER()), address(pm), "impl pm");
+        // Both implementations tax fees to the FeeRedeemer and share the PoolManager.
+        assertEq(d.impl.PROTOCOL_TREASURY(), address(d.feeRedeemer), "stable impl treasury == feeRedeemer");
+        assertEq(address(d.impl.POOL_MANAGER()), address(pm), "stable impl pm");
+        assertEq(d.volatileImpl.PROTOCOL_TREASURY(), address(d.feeRedeemer), "volatile impl treasury == feeRedeemer");
+        assertEq(address(d.volatileImpl.POOL_MANAGER()), address(pm), "volatile impl pm");
 
-        // Factory clones the implementation.
-        assertEq(d.factory.implementation(), address(d.impl), "factory impl");
+        // Universal factory is owned by admin and allowlists BOTH products.
+        assertEq(d.factory.owner(), admin, "factory owner == admin");
+        assertTrue(d.factory.isImplementation(address(d.impl)), "stable impl allowlisted");
+        assertTrue(d.factory.isImplementation(address(d.volatileImpl)), "volatile impl allowlisted");
 
         assertTrue(address(d.lens) != address(0), "lens");
         assertTrue(address(d.descriptor) != address(0), "descriptor");
