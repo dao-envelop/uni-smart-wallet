@@ -28,6 +28,10 @@ contract CreateManager is Script {
         string memory cfgPath = vm.envOr("MANAGER_CONFIG", string("script/manager_config.example.json"));
         StableLPManager.InitParams memory p = _parseConfig(vm.readFile(cfgPath));
 
+        // Default the tokenURI renderer to the chain's deployed descriptor (config `.descriptor`
+        // overrides). Wired at init so the clone renders `tokenURI` without a follow-up owner call.
+        if (p.descriptor == address(0)) p.descriptor = _readDescriptor(block.chainid);
+
         vm.startBroadcast();
         manager = StableLPFactory(factory).createManager(p);
         vm.stopBroadcast();
@@ -43,12 +47,20 @@ contract CreateManager is Script {
         return vm.parseJsonAddress(json, ".factory");
     }
 
+    /// @dev The chain's deployed descriptor (`.descriptor` in the deployments file), or zero if absent.
+    function _readDescriptor(uint256 chainId) internal view returns (address) {
+        string memory json = vm.readFile(string.concat("./deployments/", vm.toString(chainId), ".json"));
+        return vm.keyExistsJson(json, ".descriptor") ? vm.parseJsonAddress(json, ".descriptor") : address(0);
+    }
+
     function _parseConfig(string memory json) internal view returns (StableLPManager.InitParams memory p) {
         p.owner = vm.parseJsonAddress(json, ".owner");
         // Optional NFT name (≤31 chars), packed into bytes32; defaults to the shared brand name.
         p.name = vm.keyExistsJson(json, ".name")
             ? _packName(vm.parseJsonString(json, ".name"))
             : bytes32("Envelop StableLP");
+        // Optional explicit descriptor; when absent, `run()` defaults it to the chain's deployed one.
+        p.descriptor = vm.keyExistsJson(json, ".descriptor") ? vm.parseJsonAddress(json, ".descriptor") : address(0);
 
         address[] memory c0 = vm.parseJsonAddressArray(json, ".currency0");
         address[] memory c1 = vm.parseJsonAddressArray(json, ".currency1");

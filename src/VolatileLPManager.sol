@@ -45,6 +45,7 @@ contract VolatileLPManager is BaseLPManager {
     struct InitParams {
         address owner; // receives the singleton NFT
         bytes32 name; // NFT name, packed (≤31 chars); "" ⇒ default "Envelop Volatile LP Manager"
+        address descriptor; // default tokenURI renderer; zero ⇒ none (owner sets later)
         PoolKey[] pools; // 1..MAX_POOLS hookless pools (identity only)
     }
 
@@ -138,7 +139,7 @@ contract VolatileLPManager is BaseLPManager {
         for (uint256 i = 0; i < n; ++i) {
             _registerPool(p.pools[i]); // hookless gate + dedup + managed-currency union
         }
-        _finishInit(p.owner, n);
+        _finishInit(p.owner, n, p.descriptor);
     }
 
     // ────────── Product identity ──────────

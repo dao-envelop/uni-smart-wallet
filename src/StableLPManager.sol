@@ -49,6 +49,7 @@ contract StableLPManager is BaseLPManager {
     struct InitParams {
         address owner; // receives the singleton NFT
         bytes32 name; // NFT name, packed (≤31 chars); "" ⇒ default "Envelop LP Uniswap Manager"
+        address descriptor; // default tokenURI renderer; zero ⇒ none (owner sets later)
         StablePoolInit[] pools; // 1..MAX_POOLS hookless stable pools + their fixed ranges
     }
 
@@ -73,7 +74,7 @@ contract StableLPManager is BaseLPManager {
             _registerPool(c.key); // hookless gate + dedup + managed-currency union
             _range[c.key.toId()] = Range({tickLower: c.tickLower, tickUpper: c.tickUpper});
         }
-        _finishInit(p.owner, n);
+        _finishInit(p.owner, n, p.descriptor);
     }
 
     // ────────── Product identity ──────────

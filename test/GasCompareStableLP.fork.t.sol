@@ -264,7 +264,9 @@ contract GasCompareStableLPForkTest is Test {
         cfgs[0] = _cfg(kUSDCUSDT);
         cfgs[1] = _cfg(kDAIUSDT);
         cfgs[2] = _cfg(kDAIUSDC);
-        p = StableLPManager.InitParams({owner: owner, name: bytes32("Envelop StableLP"), pools: cfgs});
+        p = StableLPManager.InitParams({
+            owner: owner, name: bytes32("Envelop StableLP"), descriptor: address(0), pools: cfgs
+        });
     }
 
     function _cfg(PoolKey memory k) internal view returns (StableLPManager.StablePoolInit memory) {

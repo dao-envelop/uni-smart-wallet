@@ -47,7 +47,9 @@ contract StableLPManagerNativeTest is Test {
         cfgs[0] = StableLPManager.StablePoolInit({key: key, tickLower: TL, tickUpper: TU});
         mgr = StableLPManager(
             payable(factory.createManager(
-                    StableLPManager.InitParams({owner: owner, name: bytes32("Envelop StableLP"), pools: cfgs})
+                    StableLPManager.InitParams({
+                        owner: owner, name: bytes32("Envelop StableLP"), descriptor: address(0), pools: cfgs
+                    })
                 ))
         );
 

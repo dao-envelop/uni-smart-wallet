@@ -85,4 +85,17 @@ contract StableLPFactoryTest is StableLPTestBase {
         assertEq(m.name(), "Envelop LP Uniswap Manager", "empty packed name falls back to the default");
         assertEq(m.symbol(), "eStableLP", "symbol unchanged");
     }
+
+    function test_initialize_setsDefaultDescriptor() public {
+        address descriptor = address(0xDE5C);
+        StableLPManager.InitParams memory p = _initParams(owner);
+        p.descriptor = descriptor;
+        StableLPManager m = StableLPManager(payable(factory.createManager(p)));
+        assertEq(m.positionDescriptor(), descriptor, "descriptor wired at init");
+    }
+
+    function test_initialize_zeroDescriptor_leavesUnset() public view {
+        // setUp's _initParams passes descriptor == address(0) ⇒ none set (owner can set later).
+        assertEq(mgr.positionDescriptor(), address(0), "no descriptor when zero at init");
+    }
 }

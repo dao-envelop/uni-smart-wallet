@@ -99,7 +99,9 @@ contract StableLPManagerForkTest is Test {
         cfgs[0] = StableLPManager.StablePoolInit({key: key, tickLower: tickLower, tickUpper: tickUpper});
         mgr = StableLPManager(
             payable(factory.createManager(
-                    StableLPManager.InitParams({owner: address(this), name: bytes32("Envelop ETH-USDC"), pools: cfgs})
+                    StableLPManager.InitParams({
+                        owner: address(this), name: bytes32("Envelop ETH-USDC"), descriptor: address(0), pools: cfgs
+                    })
                 ))
         );
 

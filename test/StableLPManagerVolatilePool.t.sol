@@ -81,7 +81,9 @@ contract StableLPManagerVolatilePoolTest is Test {
         cfgs[0] = StableLPManager.StablePoolInit({key: key, tickLower: TL, tickUpper: TU});
         m = StableLPManager(
             payable(factory.createManager(
-                    StableLPManager.InitParams({owner: owner, name: bytes32("Envelop VolatileLP"), pools: cfgs})
+                    StableLPManager.InitParams({
+                        owner: owner, name: bytes32("Envelop VolatileLP"), descriptor: address(0), pools: cfgs
+                    })
                 ))
         );
 

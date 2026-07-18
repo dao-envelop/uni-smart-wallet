@@ -221,11 +221,14 @@ abstract contract BaseLPManager is SingletonNFTOwned, V4PositionManager {
         _registerManaged(key.currency1);
     }
 
-    /// @dev Finish the one-shot init: mint the singleton NFT to `owner_` and emit the init/oracle
-    /// events. Called LAST in a product's `initialize`.
+    /// @dev Finish the one-shot init: optionally wire the `tokenURI` renderer, mint the singleton NFT
+    /// to `owner_`, and emit the init/oracle events. Called LAST in a product's `initialize`.
     /// @param owner_ The manager owner (receives the singleton NFT).
     /// @param poolCount_ Number of configured pools (for the `Initialized` event).
-    function _finishInit(address owner_, uint256 poolCount_) internal {
+    /// @param descriptor_ The default `tokenURI` renderer to set at init; zero ⇒ none (owner can set
+    /// it later via `setPositionDescriptor`).
+    function _finishInit(address owner_, uint256 poolCount_, address descriptor_) internal {
+        if (descriptor_ != address(0)) positionDescriptor = descriptor_;
         _mintSingleton(owner_);
         emit IERC4906.MetadataUpdate(TOKEN_ID);
         emit EnvelopV2OracleType(ORACLE_TYPE(), _productName());

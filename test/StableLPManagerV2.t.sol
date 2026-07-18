@@ -134,7 +134,9 @@ contract StableLPManyPoolsTest is Test {
 
         StableLPManager mgr = StableLPManager(
             payable(factory.createManager(
-                    StableLPManager.InitParams({owner: owner, name: bytes32("Envelop StableLP"), pools: cfgs})
+                    StableLPManager.InitParams({
+                        owner: owner, name: bytes32("Envelop StableLP"), descriptor: address(0), pools: cfgs
+                    })
                 ))
         );
 
