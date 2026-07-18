@@ -106,7 +106,7 @@ sequenceDiagram
     participant T as Treasury
     participant R as Recipient
 
-    Ow->>M: withdrawTo(recipient, requestedStable, amount, pulls, swaps)
+    Ow->>M: withdrawTo(recipient, requestedCurrency, amount, pulls, swaps)
     Note over M: require managed(requestedStable), amount>0,<br/>каждый pull: liquidityToPull ≤ позиция
     M->>PM: unlock(OP_WITHDRAW_TO, p)
     activate PM

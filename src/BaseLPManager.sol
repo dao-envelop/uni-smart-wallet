@@ -12,6 +12,7 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {TransientStateLibrary} from "@uniswap/v4-core/src/libraries/TransientStateLibrary.sol";
 import {SingletonNFTOwned} from "./abstract/SingletonNFTOwned.sol";
@@ -84,27 +85,27 @@ abstract contract BaseLPManager is SingletonNFTOwned, V4PositionManager {
 
     // ────────── withdrawTo structs ──────────
 
+    /// @notice One position (by salt) to pull liquidity from during `withdrawTo`. Salt-keyed for both
+    /// products: Stable's `salt == poolId`, Volatile's salt is caller-chosen — either way the pool key
+    /// and range are read from the stored position, not passed here.
     struct WithdrawStep {
-        PoolId poolId;
+        bytes32 salt; // the open position to pull from
         uint128 liquidityToPull; // modifyLiquidity(-L)
     }
 
     struct WithdrawSwap {
-        PoolId poolId;
+        PoolId poolId; // configured pool to swap in (key from `pools`)
         bool zeroForOne;
-        int256 amountSpecified; // convert a freed leg into requestedStable (exactOut preferred)
+        int256 amountSpecified; // convert a freed leg into requestedCurrency (exactOut preferred)
         uint160 sqrtPriceLimitX96; // per-swap slippage guard
     }
 
     struct WithdrawToParams {
         address recipient;
-        Currency requestedStable;
+        Currency requestedCurrency;
         uint256 amount; // exact amount delivered to recipient
         WithdrawStep[] pulls;
         WithdrawSwap[] swaps;
-        /// @dev Phase 1: residuals always return to the manager; reinvest-on-withdraw is not
-        /// yet implemented (use `reinvest()`). Field retained for ABI/spec compatibility.
-        bool reinvestRemainder;
     }
 
     // ────────── State ──────────
@@ -300,6 +301,86 @@ abstract contract BaseLPManager is SingletonNFTOwned, V4PositionManager {
         if (msg.sender != address(POOL_MANAGER)) revert NotPoolManager();
         (uint8 op, bytes memory payload) = abi.decode(data, (uint8, bytes));
         return _dispatchExtraOp(op, payload);
+    }
+
+    /// @dev Shared op code owned by the base (the indirect-drain path is product-agnostic). Products
+    /// use codes ≥ 6 (Stable 4/6, Volatile 7/8), so 5 is reserved here and reached via `super`.
+    uint8 internal constant OP_WITHDRAW_TO = 5;
+
+    /// @dev Base handles the shared `withdrawTo` op; unknown codes fall through to the product override
+    /// chain (each product `super`-calls here for codes it does not recognize).
+    function _dispatchExtraOp(uint8 op, bytes memory payload) internal virtual override returns (bytes memory) {
+        if (op == OP_WITHDRAW_TO) return _handleWithdrawTo(payload);
+        return super._dispatchExtraOp(op, payload);
+    }
+
+    // ────────── withdrawTo (indirect drain, product-agnostic) ──────────
+
+    /// @notice Deliver `p.amount` of `p.requestedCurrency` straight to `p.recipient` via the v4-native
+    /// `take` (never landing on the manager's or owner's balance). Pull the named positions (by salt),
+    /// convert freed legs via `p.swaps`, then take the requested amount. Owner-only — the drain primitive.
+    /// @param p Withdraw plan: recipient, requested currency + amount, salt-keyed pulls, conversion swaps.
+    function withdrawTo(WithdrawToParams calldata p) external onlyOwnerNFT nonReentrant {
+        if (p.recipient == address(0)) revert RecipientZero();
+        if (!isManagedStable[p.requestedCurrency]) revert UnmanagedStable(p.requestedCurrency);
+        if (p.amount == 0) revert ZeroAmount();
+        for (uint256 i = 0; i < p.pulls.length; ++i) {
+            uint128 have = _positions[p.pulls[i].salt].liquidity;
+            if (have == 0) revert UnknownPosition(p.pulls[i].salt);
+            if (p.pulls[i].liquidityToPull > have) revert DeltaExceedsLiquidity(p.pulls[i].liquidityToPull, have);
+        }
+        POOL_MANAGER.unlock(abi.encode(OP_WITHDRAW_TO, abi.encode(p)));
+        emit IERC4906.MetadataUpdate(TOKEN_ID);
+    }
+
+    function _handleWithdrawTo(bytes memory payload) internal returns (bytes memory) {
+        WithdrawToParams memory p = abi.decode(payload, (WithdrawToParams));
+
+        // 1. Pull liquidity — principal + accrued fees become positive deltas.
+        for (uint256 i = 0; i < p.pulls.length; ++i) {
+            _pullLiquidity(p.pulls[i].salt, p.pulls[i].liquidityToPull);
+        }
+
+        // 2. Convert freed legs into the requested currency (exactOut preferred).
+        for (uint256 i = 0; i < p.swaps.length; ++i) {
+            WithdrawSwap memory w = p.swaps[i];
+            _swap(pools[_indexOf(w.poolId)].key, w.zeroForOne, w.amountSpecified, w.sqrtPriceLimitX96);
+        }
+
+        // 3. Guard: we must hold at least `amount` of the requested currency as a credit.
+        int256 got = POOL_MANAGER.currencyDelta(address(this), p.requestedCurrency);
+        if (got < int256(p.amount)) revert AmountNotDelivered(got > 0 ? uint256(got) : 0, p.amount);
+
+        // 4. Deliver straight from PoolManager to recipient — bypasses our balance.
+        _take(p.requestedCurrency, p.recipient, p.amount);
+
+        // 5. Net residuals back to the manager (settle owed, take leftovers to self).
+        _settleManaged();
+
+        emit WithdrawnTo(p.recipient, p.requestedCurrency, p.amount);
+        return "";
+    }
+
+    /// @dev Pull `liq` from the position keyed `salt` (at its stored range), skim the protocol fee off
+    /// the accrued-fee component (principal untouched), and decrement/remove the registry entry. The
+    /// pool key + range come from the stored position, so this is identical for both products.
+    function _pullLiquidity(bytes32 salt, uint128 liq) internal {
+        if (liq == 0) return;
+        StoredPosition memory pos = _positions[salt];
+        PoolKey memory key = pools[_indexOf(pos.poolId)].key;
+        (, BalanceDelta fees) = POOL_MANAGER.modifyLiquidity(
+            key,
+            ModifyLiquidityParams({
+                tickLower: pos.tickLower, tickUpper: pos.tickUpper, liquidityDelta: -int256(uint256(liq)), salt: salt
+            }),
+            ""
+        );
+        _skimFees(key, fees);
+        _positions[salt].liquidity -= liq;
+        if (_positions[salt].liquidity == 0) {
+            _removeSalt(salt);
+            delete _positions[salt];
+        }
     }
 
     // ────────── Position views + poke ──────────

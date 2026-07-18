@@ -183,16 +183,15 @@ contract StableLPManagerForkTest is Test {
         uint256 recipBefore = recipient.balance;
 
         BaseLPManager.WithdrawStep[] memory pulls = new BaseLPManager.WithdrawStep[](1);
-        pulls[0] = BaseLPManager.WithdrawStep({poolId: poolId, liquidityToPull: mgr.positionOf(salt).liquidity});
+        pulls[0] = BaseLPManager.WithdrawStep({salt: salt, liquidityToPull: mgr.positionOf(salt).liquidity});
 
         mgr.withdrawTo(
             BaseLPManager.WithdrawToParams({
                 recipient: recipient,
-                requestedStable: NATIVE,
+                requestedCurrency: NATIVE,
                 amount: amount,
                 pulls: pulls,
-                swaps: new BaseLPManager.WithdrawSwap[](0),
-                reinvestRemainder: false
+                swaps: new BaseLPManager.WithdrawSwap[](0)
             })
         );
 

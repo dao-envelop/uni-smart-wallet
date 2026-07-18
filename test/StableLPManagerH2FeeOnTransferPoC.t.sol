@@ -122,15 +122,14 @@ contract StableLPManagerH2FeeOnTransferPoC is Test {
     function _pullAll() internal view returns (BaseLPManager.WithdrawToParams memory p) {
         BaseLPManager.WithdrawStep[] memory pulls = new BaseLPManager.WithdrawStep[](1);
         pulls[0] = BaseLPManager.WithdrawStep({
-            poolId: poolId, liquidityToPull: mgr.positionOf(PoolId.unwrap(poolId)).liquidity
+            salt: PoolId.unwrap(poolId), liquidityToPull: mgr.positionOf(PoolId.unwrap(poolId)).liquidity
         });
         p = BaseLPManager.WithdrawToParams({
             recipient: recipient,
-            requestedStable: cFot,
+            requestedCurrency: cFot,
             amount: 5_000e18,
             pulls: pulls,
-            swaps: new BaseLPManager.WithdrawSwap[](0),
-            reinvestRemainder: false
+            swaps: new BaseLPManager.WithdrawSwap[](0)
         });
     }
 
