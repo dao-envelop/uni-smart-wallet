@@ -20,7 +20,7 @@ import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/Pool
 import {PoolModifyLiquidityTest} from "@uniswap/v4-core/src/test/PoolModifyLiquidityTest.sol";
 import {PoolSwapTest} from "@uniswap/v4-core/src/test/PoolSwapTest.sol";
 
-/// @notice VolatileLPManager.allocate: per-call ranges, salt-keyed multi-position, amountMax + minOut.
+/// @notice VolatileLPManager.allocate: per-call ranges, salt-keyed multi-position, minLiquidity + minOut.
 contract VolatileLPManagerAllocateTest is Test {
     PoolManager internal poolManager;
     PoolModifyLiquidityTest internal lpRouter;
@@ -84,7 +84,7 @@ contract VolatileLPManagerAllocateTest is Test {
         vm.stopPrank();
     }
 
-    function _leg(bytes32 salt, int24 tl, int24 tu, uint256 amt, uint128 max0, uint128 max1)
+    function _leg(bytes32 salt, int24 tl, int24 tu, uint256 amt)
         internal
         pure
         returns (VolatileLPManager.VolatileAllocLeg memory)
@@ -100,9 +100,7 @@ contract VolatileLPManagerAllocateTest is Test {
             minAmountOut: 0,
             amount0Desired: amt,
             amount1Desired: amt,
-            minLiquidity: 0,
-            amount0Max: max0,
-            amount1Max: max1
+            minLiquidity: 0
         });
     }
 
@@ -119,7 +117,7 @@ contract VolatileLPManagerAllocateTest is Test {
     function test_allocate_opensPosition() public {
         bytes32 salt = bytes32(uint256(1));
         vm.prank(owner);
-        mgr.allocate(_one(_leg(salt, -60, 60, 100e18, type(uint128).max, type(uint128).max)));
+        mgr.allocate(_one(_leg(salt, -60, 60, 100e18)));
 
         V4PositionManager.Position memory p = mgr.positionOf(salt);
         assertGt(p.liquidity, 0, "liquidity");
@@ -130,34 +128,37 @@ contract VolatileLPManagerAllocateTest is Test {
 
     function test_allocate_multiPositionPerPool() public {
         vm.startPrank(owner);
-        mgr.allocate(_one(_leg(bytes32(uint256(1)), -60, 60, 100e18, type(uint128).max, type(uint128).max)));
-        mgr.allocate(_one(_leg(bytes32(uint256(2)), -120, 120, 100e18, type(uint128).max, type(uint128).max)));
+        mgr.allocate(_one(_leg(bytes32(uint256(1)), -60, 60, 100e18)));
+        mgr.allocate(_one(_leg(bytes32(uint256(2)), -120, 120, 100e18)));
         vm.stopPrank();
 
         assertEq(mgr.openPositionCount(), 2, "two positions in one pool");
         assertEq(mgr.positionOf(bytes32(uint256(2))).tickLower, int24(-120), "second range");
     }
 
-    function test_allocate_amountMaxExceeded_reverts() public {
-        // amount0Max = 1 wei is far below the owed for a 100e18-sized add ⇒ revert.
+    function test_allocate_minLiquidityNotMet_reverts() public {
+        // minLiquidity floored at uint128.max is far above the L a 100e18-sized add yields ⇒ revert.
+        // (There is no amount*Max cap: L is sized from desired amounts, so owed ≤ desired by
+        // construction; minLiquidity is the add's slippage guard.)
+        VolatileLPManager.VolatileAllocLeg memory l = _leg(bytes32(uint256(1)), -60, 60, 100e18);
+        l.minLiquidity = type(uint128).max;
         vm.prank(owner);
-        vm.expectRevert();
-        mgr.allocate(_one(_leg(bytes32(uint256(1)), -60, 60, 100e18, 1, type(uint128).max)));
+        vm.expectPartialRevert(BaseLPManager.MinLiquidityNotMet.selector);
+        mgr.allocate(_one(l));
     }
 
     function test_allocate_rangeMismatch_reverts() public {
         bytes32 salt = bytes32(uint256(7));
         vm.startPrank(owner);
-        mgr.allocate(_one(_leg(salt, -60, 60, 100e18, type(uint128).max, type(uint128).max)));
+        mgr.allocate(_one(_leg(salt, -60, 60, 100e18)));
         // top up the same salt at a different range ⇒ RangeMismatch
         vm.expectRevert(abi.encodeWithSelector(VolatileLPManager.RangeMismatch.selector, salt));
-        mgr.allocate(_one(_leg(salt, -120, 120, 50e18, type(uint128).max, type(uint128).max)));
+        mgr.allocate(_one(_leg(salt, -120, 120, 50e18)));
         vm.stopPrank();
     }
 
     function test_allocate_preSwap_minAmountOut_reverts() public {
-        VolatileLPManager.VolatileAllocLeg memory l =
-            _leg(bytes32(uint256(1)), -60, 60, 10e18, type(uint128).max, type(uint128).max);
+        VolatileLPManager.VolatileAllocLeg memory l = _leg(bytes32(uint256(1)), -60, 60, 10e18);
         l.zeroForOne = true;
         l.swapAmountIn = 10e18;
         l.swapPriceLimit = TickMath.MIN_SQRT_PRICE + 1;
@@ -182,16 +183,14 @@ contract VolatileLPManagerAllocateTest is Test {
             swapAmountIn: 0,
             swapPriceLimit: 0,
             minAmountOut: 0,
-            minLiquidity: 0,
-            amount0Max: type(uint128).max,
-            amount1Max: type(uint128).max
+            minLiquidity: 0
         });
     }
 
     function test_recenter_movesRange() public {
         bytes32 salt = bytes32(uint256(1));
         vm.startPrank(owner);
-        mgr.allocate(_one(_leg(salt, -60, 60, 100e18, type(uint128).max, type(uint128).max)));
+        mgr.allocate(_one(_leg(salt, -60, 60, 100e18)));
         mgr.recenter(_recenter(salt, -120, 120));
         vm.stopPrank();
 
@@ -205,7 +204,7 @@ contract VolatileLPManagerAllocateTest is Test {
     function test_recenter_withRebalanceSwap() public {
         bytes32 salt = bytes32(uint256(3));
         vm.startPrank(owner);
-        mgr.allocate(_one(_leg(salt, -60, 60, 100e18, type(uint128).max, type(uint128).max)));
+        mgr.allocate(_one(_leg(salt, -60, 60, 100e18)));
         VolatileLPManager.RecenterParams memory rp = _recenter(salt, -120, 120);
         rp.zeroForOne = true;
         rp.swapAmountIn = 5e18;
@@ -258,7 +257,7 @@ contract VolatileLPManagerAllocateTest is Test {
     function test_claimFees_afterSwaps_harvestsToManager() public {
         bytes32 salt = bytes32(uint256(1));
         vm.prank(owner);
-        mgr.allocate(_one(_leg(salt, -60, 60, 500e18, type(uint128).max, type(uint128).max)));
+        mgr.allocate(_one(_leg(salt, -60, 60, 500e18)));
 
         _tradeToAccrueFees();
 
@@ -296,7 +295,7 @@ contract VolatileLPManagerAllocateTest is Test {
     function test_withdrawTo_deliversToRecipient() public {
         bytes32 salt = bytes32(uint256(1));
         vm.startPrank(owner);
-        mgr.allocate(_one(_leg(salt, -60, 60, 100e18, type(uint128).max, type(uint128).max)));
+        mgr.allocate(_one(_leg(salt, -60, 60, 100e18)));
         uint128 liq = mgr.positionOf(salt).liquidity;
         mgr.withdrawTo(_withdraw(salt, liq, c0, 10e18));
         vm.stopPrank();
@@ -309,7 +308,7 @@ contract VolatileLPManagerAllocateTest is Test {
     function test_withdrawTo_amountNotDelivered_reverts() public {
         bytes32 salt = bytes32(uint256(1));
         vm.startPrank(owner);
-        mgr.allocate(_one(_leg(salt, -60, 60, 100e18, type(uint128).max, type(uint128).max)));
+        mgr.allocate(_one(_leg(salt, -60, 60, 100e18)));
         uint128 liq = mgr.positionOf(salt).liquidity;
         // request far more than the pulled position frees ⇒ AmountNotDelivered
         vm.expectPartialRevert(BaseLPManager.AmountNotDelivered.selector);

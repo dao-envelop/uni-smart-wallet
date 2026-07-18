@@ -72,9 +72,10 @@ The repo implements **NFT-owned Uniswap V4 LP managers** that interact with the 
   price; `minLiquidity` is the floor). `InitParams.pools` is `StablePoolInit[] { key, tickLower, tickUpper }`.
 - **`VolatileLPManager`** (`src/VolatileLPManager.sol`) — arbitrary/volatile pairs. **`salt ≠ poolId`**:
   a pool holds **many positions** (each a caller-chosen salt) at **per-call ranges**; the position
-  records its `poolId`. Adds `amount*Max` caps on the add, `minAmountOut` on the balancing pre-swap,
-  `recenter` (single-call remove→swap→re-add), and an optional external `IPriceOracle` guard
-  (`setPriceOracle`). `InitParams.pools` is `PoolKey[]` (keys only — ranges are per-call). No factory yet.
+  records its `poolId`. Adds `minAmountOut` on the balancing pre-swap, `recenter` (single-call
+  remove→swap→re-add), and an optional external `IPriceOracle` guard (`setPriceOracle`). Like Stable,
+  the add is sized from desired amounts with a `minLiquidity` floor — no `amount*Max` (owed ≤ desired
+  by construction). `InitParams.pools` is `PoolKey[]` (keys only — ranges are per-call). No factory yet.
 
 ### Authorization model
 
