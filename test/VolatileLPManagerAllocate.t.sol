@@ -279,16 +279,16 @@ contract VolatileLPManagerAllocateTest is Test {
     function _withdraw(bytes32 salt, uint128 liq, Currency requested, uint256 amount)
         internal
         pure
-        returns (VolatileLPManager.VWithdrawToParams memory p)
+        returns (BaseLPManager.WithdrawToParams memory p)
     {
-        VolatileLPManager.VWithdrawStep[] memory pulls = new VolatileLPManager.VWithdrawStep[](1);
-        pulls[0] = VolatileLPManager.VWithdrawStep({salt: salt, liquidityToPull: liq});
-        p = VolatileLPManager.VWithdrawToParams({
+        BaseLPManager.WithdrawStep[] memory pulls = new BaseLPManager.WithdrawStep[](1);
+        pulls[0] = BaseLPManager.WithdrawStep({salt: salt, liquidityToPull: liq});
+        p = BaseLPManager.WithdrawToParams({
             recipient: address(0xCAFE),
             requestedCurrency: requested,
             amount: amount,
             pulls: pulls,
-            swaps: new VolatileLPManager.VWithdrawSwap[](0)
+            swaps: new BaseLPManager.WithdrawSwap[](0)
         });
     }
 

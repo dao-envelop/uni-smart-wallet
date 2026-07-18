@@ -27,9 +27,8 @@ contract StableLPManager is BaseLPManager {
     using StateLibrary for IPoolManager;
     using TransientStateLibrary for IPoolManager;
 
-    // Op codes extending the base 0–3 set (see V4PositionManager).
+    // Op codes extending the base set (0–3 canonical + base OP_WITHDRAW_TO = 5, see BaseLPManager).
     uint8 internal constant OP_ALLOCATE = 4;
-    uint8 internal constant OP_WITHDRAW_TO = 5;
     uint8 internal constant OP_REINVEST = 6;
 
     /// @notice The fixed per-pool range (a stable-product policy). One position per pool at this range.
@@ -99,11 +98,11 @@ contract StableLPManager is BaseLPManager {
 
     // ────────── Unlock dispatch (this product's ops) ──────────
 
-    /// @dev Route the stable ops: POKE→claimFees (fee-splitting), ALLOCATE/WITHDRAW_TO/REINVEST.
+    /// @dev Route the stable ops: POKE→claimFees (fee-splitting), ALLOCATE/REINVEST. Withdraw (op 5)
+    /// is handled by the base via `super`.
     function _dispatchExtraOp(uint8 op, bytes memory payload) internal override returns (bytes memory) {
         if (op == uint8(Op.POKE)) return _handleClaim(payload);
         if (op == OP_ALLOCATE) return _handleAllocate(payload);
-        if (op == OP_WITHDRAW_TO) return _handleWithdrawTo(payload);
         if (op == OP_REINVEST) return _handleReinvest(payload);
         return super._dispatchExtraOp(op, payload);
     }
@@ -225,77 +224,6 @@ contract StableLPManager is BaseLPManager {
             _registerSalt(salt);
         } else {
             _positions[salt].liquidity += L;
-        }
-    }
-
-    // ────────── withdrawTo (indirect withdraw) ──────────
-
-    /// @notice Deliver `p.amount` of `p.requestedStable` to `p.recipient` without the stable ever
-    /// touching the manager's or owner's balance (v4-native `take`). Owner-only — the drain primitive.
-    /// @param p Withdraw plan: recipient, requested stable + amount, liquidity pulls, and conversion
-    /// swaps. `reinvestRemainder` is reserved (phase-1 no-op; residuals always return to the manager).
-    function withdrawTo(WithdrawToParams calldata p) external onlyOwnerNFT nonReentrant {
-        if (p.recipient == address(0)) revert RecipientZero();
-        if (!isManagedStable[p.requestedStable]) revert UnmanagedStable(p.requestedStable);
-        if (p.amount == 0) revert ZeroAmount();
-        for (uint256 i = 0; i < p.pulls.length; ++i) {
-            WithdrawStep calldata s = p.pulls[i];
-            _indexOf(s.poolId); // reverts UnknownPool if not configured
-            uint128 have = _positions[PoolId.unwrap(s.poolId)].liquidity;
-            if (s.liquidityToPull > have) revert DeltaExceedsLiquidity(s.liquidityToPull, have);
-        }
-        POOL_MANAGER.unlock(abi.encode(OP_WITHDRAW_TO, abi.encode(p)));
-        emit IERC4906.MetadataUpdate(TOKEN_ID);
-    }
-
-    function _handleWithdrawTo(bytes memory payload) internal returns (bytes memory) {
-        WithdrawToParams memory p = abi.decode(payload, (WithdrawToParams));
-
-        // 1. Pull liquidity — principal + accrued fees become positive deltas.
-        for (uint256 i = 0; i < p.pulls.length; ++i) {
-            _pullLiquidity(p.pulls[i]);
-        }
-
-        // 2. Convert freed legs into the requested stable (exactOut preferred).
-        for (uint256 i = 0; i < p.swaps.length; ++i) {
-            WithdrawSwap memory w = p.swaps[i];
-            _swap(pools[_indexOf(w.poolId)].key, w.zeroForOne, w.amountSpecified, w.sqrtPriceLimitX96);
-        }
-
-        // 3. Guard: we must hold at least `amount` of the requested stable as a credit.
-        int256 got = POOL_MANAGER.currencyDelta(address(this), p.requestedStable);
-        if (got < int256(p.amount)) revert AmountNotDelivered(got > 0 ? uint256(got) : 0, p.amount);
-
-        // 4. Deliver straight from PoolManager to recipient — bypasses our balance.
-        _take(p.requestedStable, p.recipient, p.amount);
-
-        // 5. Net residuals back to the manager (settle owed, take leftovers to self).
-        _settleManaged();
-
-        emit WithdrawnTo(p.recipient, p.requestedStable, p.amount);
-        return "";
-    }
-
-    function _pullLiquidity(WithdrawStep memory s) internal {
-        if (s.liquidityToPull == 0) return;
-        bytes32 salt = PoolId.unwrap(s.poolId);
-        PoolKey memory key = pools[_indexOf(s.poolId)].key;
-        Range memory rg = _range[s.poolId];
-        (, BalanceDelta fees) = POOL_MANAGER.modifyLiquidity(
-            key,
-            ModifyLiquidityParams({
-                tickLower: rg.tickLower,
-                tickUpper: rg.tickUpper,
-                liquidityDelta: -int256(uint256(s.liquidityToPull)),
-                salt: salt
-            }),
-            ""
-        );
-        _skimFees(key, fees); // protocol fee on the accrued-fee component (principal untouched)
-        _positions[salt].liquidity -= s.liquidityToPull;
-        if (_positions[salt].liquidity == 0) {
-            _removeSalt(salt);
-            delete _positions[salt];
         }
     }
 

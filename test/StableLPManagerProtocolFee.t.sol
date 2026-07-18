@@ -112,20 +112,14 @@ contract StableLPManagerProtocolFeeTest is StableLPTestBase {
 
         // Pull pool 0 (USDC/USDT) fully and deliver a little USDC to a recipient.
         BaseLPManager.WithdrawStep[] memory pulls = new BaseLPManager.WithdrawStep[](1);
-        pulls[0] = BaseLPManager.WithdrawStep({
-            poolId: poolKeys[0].toId(), liquidityToPull: mgr.positionOf(_saltFor(0)).liquidity
-        });
+        pulls[0] =
+            BaseLPManager.WithdrawStep({salt: _saltFor(0), liquidityToPull: mgr.positionOf(_saltFor(0)).liquidity});
         BaseLPManager.WithdrawSwap[] memory swaps = new BaseLPManager.WithdrawSwap[](0);
 
         vm.prank(owner);
         mgr.withdrawTo(
             BaseLPManager.WithdrawToParams({
-                recipient: address(0xBEEF),
-                requestedStable: USDC,
-                amount: 1e18,
-                pulls: pulls,
-                swaps: swaps,
-                reinvestRemainder: false
+                recipient: address(0xBEEF), requestedCurrency: USDC, amount: 1e18, pulls: pulls, swaps: swaps
             })
         );
 

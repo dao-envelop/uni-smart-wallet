@@ -118,22 +118,24 @@ at the on-chain price and minted at that same price, realized owed is always `�
 already bounds the spend).
 
 ### `withdrawTo(WithdrawToParams p)` — indirect drain (owner-only)
+Shared with `VolatileLPManager` — the struct + handler live in `BaseLPManager` (task_029). Pulls are
+**salt-keyed**: for Stable `salt == PoolId.unwrap(poolId)`, and the pool key + range are read from the
+stored position, not passed in.
 ```solidity
 struct WithdrawToParams {
     address recipient;
-    Currency requestedStable;     // must be managed
+    Currency requestedCurrency;   // must be managed
     uint256 amount;               // exact amount delivered to recipient
-    WithdrawStep[] pulls;         // {PoolId poolId; uint128 liquidityToPull}
+    WithdrawStep[] pulls;         // {bytes32 salt; uint128 liquidityToPull}
     WithdrawSwap[] swaps;         // {PoolId poolId; bool zeroForOne; int256 amountSpecified; uint160 limit}
-    bool reinvestRemainder;       // no-op (phase-1; residuals always return to the manager)
 }
 ```
 Inside one unlock: pull liquidity from `pulls` (principal + fees become positive deltas; protocol fee
 skimmed from the fee component), convert freed legs via `swaps`, require
-`currencyDelta(requestedStable) >= amount` (`AmountNotDelivered`), `take(requestedStable, recipient,
+`currencyDelta(requestedCurrency) >= amount` (`AmountNotDelivered`), `take(requestedCurrency, recipient,
 amount)` **straight from PoolManager to the recipient**, then `_settleManaged` returns residuals to the
-manager. The requested stable never touches the manager/owner balance. `reinvestRemainder` is accepted
-for ABI/spec compat but ignored.
+manager. The requested currency never touches the manager/owner balance. An unknown salt reverts
+`UnknownPosition`; an over-pull reverts `DeltaExceedsLiquidity`.
 
 ### `reinvest(AllocLeg leg)` — compound (operator/owner)
 Realize fees (`modifyLiquidity(0)`), skim the protocol cut, optionally pre-swap, then **add the
@@ -197,7 +199,7 @@ or **DOCUMENTED/ACCEPTED**.
 | LOW | auto-`allocate` has no aggregate cap — an operator can deploy the manager's **entire idle balance** (recoverable; not theft). | DOCUMENTED — operator-trusted by design. |
 | LOW/INFO | **Fee-on-transfer / rebasing** tokens break `_settle` / the `allocateFrom` snapshot / `withdrawTo` delivery (all assume `received == sent`). | DOCUMENTED — managed currencies must be standard ERC-20 (or native). |
 | INFO | Protocol fee accrues as **ERC-6909**; the treasury must redeem via `unlock→burn→take`. | Resolved — use `src/FeeRedeemer.sol` as the treasury (task_018). |
-| INFO | No deadlines on entry points; no two-step NFT ownership handoff; `reinvestRemainder` is a no-op. | ACCEPTED. |
+| INFO | No deadlines on entry points; no two-step NFT ownership handoff. | ACCEPTED. (The dead `reinvestRemainder` no-op field was removed in task_029 when `withdrawTo` was unified into `BaseLPManager`.) |
 | — | Pools are **hookless-only** (categorical reject); positions are operator-driven so all slippage discipline lives off-chain. | By design. |
 
 ## EIP-170

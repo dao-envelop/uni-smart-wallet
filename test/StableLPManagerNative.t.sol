@@ -91,18 +91,13 @@ contract StableLPManagerNativeTest is Test {
         uint256 amount = 1e17;
 
         BaseLPManager.WithdrawStep[] memory pulls = new BaseLPManager.WithdrawStep[](1);
-        pulls[0] = BaseLPManager.WithdrawStep({poolId: key.toId(), liquidityToPull: mgr.positionOf(salt).liquidity});
+        pulls[0] = BaseLPManager.WithdrawStep({salt: salt, liquidityToPull: mgr.positionOf(salt).liquidity});
         BaseLPManager.WithdrawSwap[] memory swaps = new BaseLPManager.WithdrawSwap[](0);
 
         vm.prank(owner);
         mgr.withdrawTo(
             BaseLPManager.WithdrawToParams({
-                recipient: recipient,
-                requestedStable: NATIVE,
-                amount: amount,
-                pulls: pulls,
-                swaps: swaps,
-                reinvestRemainder: false
+                recipient: recipient, requestedCurrency: NATIVE, amount: amount, pulls: pulls, swaps: swaps
             })
         );
 

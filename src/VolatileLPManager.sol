@@ -30,10 +30,9 @@ contract VolatileLPManager is BaseLPManager {
     using StateLibrary for IPoolManager;
     using TransientStateLibrary for IPoolManager;
 
-    // Volatile op codes extend the base set (POKE + StableLP's 4–6); ≥ 7 here.
+    // Volatile op codes extend the base set (0–3 canonical + base OP_WITHDRAW_TO = 5); ≥ 7 here.
     uint8 internal constant OP_ALLOCATE_V = 7;
     uint8 internal constant OP_RECENTER = 8;
-    uint8 internal constant OP_WITHDRAW_TO_V = 9;
 
     /// @notice Optional external price guard for on-chain swaps (allocate pre-swap / recenter
     /// rebalance). Zero ⇒ no oracle: the operator's `minLiquidity` / `minAmountOut` are the only guard.
@@ -83,31 +82,6 @@ contract VolatileLPManager is BaseLPManager {
         uint160 swapPriceLimit; // sqrtPriceLimitX96 — price bound on the swap
         uint256 minAmountOut; // floor on the rebalancing swap output
         uint128 minLiquidity; // floor on the re-added L (slippage on the add; owed ≤ freed by construction)
-    }
-
-    /// @notice A single position (by salt) to pull liquidity from during `withdrawTo`.
-    struct VWithdrawStep {
-        bytes32 salt; // the open position to pull from
-        uint128 liquidityToPull; // modifyLiquidity(-L) on it
-    }
-
-    /// @notice Convert a freed leg into the requested currency during `withdrawTo` (exactOut preferred).
-    struct VWithdrawSwap {
-        PoolId poolId; // configured pool to swap in (key from `pools`)
-        bool zeroForOne;
-        int256 amountSpecified;
-        uint160 sqrtPriceLimitX96;
-    }
-
-    /// @notice Deliver `amount` of `requestedCurrency` straight to `recipient` via the v4-native
-    /// `take`, without it landing on the manager's or owner's ERC-20 balance. Pull the named positions
-    /// (by salt), convert freed legs via `swaps`, then take the requested amount to `recipient`.
-    struct VWithdrawToParams {
-        address recipient;
-        Currency requestedCurrency;
-        uint256 amount;
-        VWithdrawStep[] pulls;
-        VWithdrawSwap[] swaps;
     }
 
     /// @notice The pre-swap delivered less than `minAmountOut` of the output currency.
@@ -182,8 +156,7 @@ contract VolatileLPManager is BaseLPManager {
         if (op == uint8(Op.POKE)) return _handleClaim(payload); // claimFees (with protocol fee)
         if (op == OP_ALLOCATE_V) return _handleAllocateV(payload);
         if (op == OP_RECENTER) return _handleRecenter(payload);
-        if (op == OP_WITHDRAW_TO_V) return _handleWithdrawToV(payload);
-        return super._dispatchExtraOp(op, payload);
+        return super._dispatchExtraOp(op, payload); // withdraw (op 5) handled by the base
     }
 
     // ────────── claimFees ──────────
@@ -209,66 +182,6 @@ contract VolatileLPManager is BaseLPManager {
         _settleCurrency(r.key.currency1);
         emit FeesCollected(r.salt, _pos(fees.amount0()), _pos(fees.amount1()));
         return "";
-    }
-
-    // ────────── withdrawTo (indirect drain) ──────────
-
-    /// @notice Deliver `p.amount` of `p.requestedCurrency` straight to `p.recipient` via the v4-native
-    /// `take` (never landing on the manager/owner balance): pull the named positions by salt, convert
-    /// freed legs via `p.swaps`, then take the requested amount. Owner-only — the drain primitive.
-    /// @param p Withdraw plan: recipient, requested currency + amount, salt-keyed pulls, conversion swaps.
-    function withdrawTo(VWithdrawToParams calldata p) external onlyOwnerNFT nonReentrant {
-        if (p.recipient == address(0)) revert RecipientZero();
-        if (!isManagedStable[p.requestedCurrency]) revert UnmanagedStable(p.requestedCurrency);
-        if (p.amount == 0) revert ZeroAmount();
-        for (uint256 i = 0; i < p.pulls.length; ++i) {
-            uint128 have = _positions[p.pulls[i].salt].liquidity;
-            if (have == 0) revert UnknownPosition(p.pulls[i].salt);
-            if (p.pulls[i].liquidityToPull > have) revert DeltaExceedsLiquidity(p.pulls[i].liquidityToPull, have);
-        }
-        POOL_MANAGER.unlock(abi.encode(OP_WITHDRAW_TO_V, abi.encode(p)));
-        emit IERC4906.MetadataUpdate(TOKEN_ID);
-    }
-
-    function _handleWithdrawToV(bytes memory payload) internal returns (bytes memory) {
-        VWithdrawToParams memory p = abi.decode(payload, (VWithdrawToParams));
-
-        for (uint256 i = 0; i < p.pulls.length; ++i) {
-            _pullLiquidityV(p.pulls[i].salt, p.pulls[i].liquidityToPull);
-        }
-        for (uint256 i = 0; i < p.swaps.length; ++i) {
-            VWithdrawSwap memory w = p.swaps[i];
-            _swap(pools[_indexOf(w.poolId)].key, w.zeroForOne, w.amountSpecified, w.sqrtPriceLimitX96);
-        }
-
-        int256 got = POOL_MANAGER.currencyDelta(address(this), p.requestedCurrency);
-        if (got < int256(p.amount)) revert AmountNotDelivered(got > 0 ? uint256(got) : 0, p.amount);
-
-        _take(p.requestedCurrency, p.recipient, p.amount);
-        _settleManaged();
-        emit WithdrawnTo(p.recipient, p.requestedCurrency, p.amount);
-        return "";
-    }
-
-    /// @dev Pull `liq` from the position keyed `salt` (at its stored range), skim fees, decrement or
-    /// remove the registry entry. The pool key is reconstructed from the stored `poolId`.
-    function _pullLiquidityV(bytes32 salt, uint128 liq) internal {
-        if (liq == 0) return;
-        StoredPosition memory pos = _positions[salt];
-        PoolKey memory key = pools[_indexOf(pos.poolId)].key;
-        (, BalanceDelta fees) = POOL_MANAGER.modifyLiquidity(
-            key,
-            ModifyLiquidityParams({
-                tickLower: pos.tickLower, tickUpper: pos.tickUpper, liquidityDelta: -int256(uint256(liq)), salt: salt
-            }),
-            ""
-        );
-        _skimFees(key, fees);
-        _positions[salt].liquidity -= liq;
-        if (_positions[salt].liquidity == 0) {
-            _removeSalt(salt);
-            delete _positions[salt];
-        }
     }
 
     // ────────── allocate ──────────

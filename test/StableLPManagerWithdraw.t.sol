@@ -25,9 +25,8 @@ contract StableLPManagerWithdrawTest is StableLPTestBase {
         uint256 ownerUSDCBefore = _bal(USDC, owner);
 
         BaseLPManager.WithdrawStep[] memory pulls = new BaseLPManager.WithdrawStep[](1);
-        pulls[0] = BaseLPManager.WithdrawStep({
-            poolId: poolKeys[1].toId(), liquidityToPull: mgr.positionOf(_saltFor(1)).liquidity
-        });
+        pulls[0] =
+            BaseLPManager.WithdrawStep({salt: _saltFor(1), liquidityToPull: mgr.positionOf(_saltFor(1)).liquidity});
 
         BaseLPManager.WithdrawSwap[] memory swaps = new BaseLPManager.WithdrawSwap[](1);
         swaps[0] = _exactOut(0, USDC, amount); // produce exactly `amount` USDC in the USDC/USDT pool
@@ -35,12 +34,7 @@ contract StableLPManagerWithdrawTest is StableLPTestBase {
         vm.prank(owner);
         mgr.withdrawTo(
             BaseLPManager.WithdrawToParams({
-                recipient: recipient,
-                requestedStable: USDC,
-                amount: amount,
-                pulls: pulls,
-                swaps: swaps,
-                reinvestRemainder: false
+                recipient: recipient, requestedCurrency: USDC, amount: amount, pulls: pulls, swaps: swaps
             })
         );
 
@@ -57,7 +51,7 @@ contract StableLPManagerWithdrawTest is StableLPTestBase {
         BaseLPManager.WithdrawSwap[] memory swaps = new BaseLPManager.WithdrawSwap[](0);
         vm.prank(owner);
         vm.expectRevert(abi.encodeWithSelector(BaseLPManager.UnmanagedStable.selector, rogue));
-        mgr.withdrawTo(BaseLPManager.WithdrawToParams(recipient, rogue, 1e18, pulls, swaps, false));
+        mgr.withdrawTo(BaseLPManager.WithdrawToParams(recipient, rogue, 1e18, pulls, swaps));
     }
 
     function test_withdrawTo_recipientZero_reverts() public {
@@ -65,7 +59,7 @@ contract StableLPManagerWithdrawTest is StableLPTestBase {
         BaseLPManager.WithdrawSwap[] memory swaps = new BaseLPManager.WithdrawSwap[](0);
         vm.prank(owner);
         vm.expectRevert(BaseLPManager.RecipientZero.selector);
-        mgr.withdrawTo(BaseLPManager.WithdrawToParams(address(0), USDC, 1e18, pulls, swaps, false));
+        mgr.withdrawTo(BaseLPManager.WithdrawToParams(address(0), USDC, 1e18, pulls, swaps));
     }
 
     function test_withdrawTo_byOperator_reverts() public {
@@ -76,20 +70,19 @@ contract StableLPManagerWithdrawTest is StableLPTestBase {
         BaseLPManager.WithdrawSwap[] memory swaps = new BaseLPManager.WithdrawSwap[](0);
         vm.prank(bot);
         vm.expectRevert(SingletonNFTOwned.NotOwnerNFT.selector);
-        mgr.withdrawTo(BaseLPManager.WithdrawToParams(recipient, USDC, 1e18, pulls, swaps, false));
+        mgr.withdrawTo(BaseLPManager.WithdrawToParams(recipient, USDC, 1e18, pulls, swaps));
     }
 
     function test_withdrawTo_amountNotDelivered_reverts() public {
         uint256 amount = 1e18;
         BaseLPManager.WithdrawStep[] memory pulls = new BaseLPManager.WithdrawStep[](1);
         // Pull DAI/USDT but request USDC with no swaps ⇒ zero USDC credit ⇒ revert.
-        pulls[0] = BaseLPManager.WithdrawStep({
-            poolId: poolKeys[1].toId(), liquidityToPull: mgr.positionOf(_saltFor(1)).liquidity
-        });
+        pulls[0] =
+            BaseLPManager.WithdrawStep({salt: _saltFor(1), liquidityToPull: mgr.positionOf(_saltFor(1)).liquidity});
         BaseLPManager.WithdrawSwap[] memory swaps = new BaseLPManager.WithdrawSwap[](0);
 
         vm.prank(owner);
         vm.expectRevert(abi.encodeWithSelector(BaseLPManager.AmountNotDelivered.selector, uint256(0), amount));
-        mgr.withdrawTo(BaseLPManager.WithdrawToParams(recipient, USDC, amount, pulls, swaps, false));
+        mgr.withdrawTo(BaseLPManager.WithdrawToParams(recipient, USDC, amount, pulls, swaps));
     }
 }
