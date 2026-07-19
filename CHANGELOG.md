@@ -26,6 +26,10 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **VolatileLPManager Base-fork gas benchmark** (task_037) — `test/GasCompareVolatile.fork.t.sol` measures
+  gas on every VolatileLPManager op against the live Base v4 PoolManager and compares `recenter` (one call)
+  with the equivalent manual rebalance via the Uniswap v4 PositionManager (decrease+swap+mint). Env-gated by
+  `BASE_RPC`; validated live: `recenter` ≈46% cheaper than the manual path.
 - **`LPManagerFactory.createManagerNondeterministic`** (task_033) — create a manager at a non-deterministic
   (CREATE) address when the counterfactual-funding flow isn't needed; same guards as `createManager`.
 - **Native funding on manager creation** (task_033) — `createManager` / `createManagerNondeterministic` are
