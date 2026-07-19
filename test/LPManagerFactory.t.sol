@@ -25,8 +25,10 @@ contract LPManagerFactoryTest is StableLPTestBase {
     }
 
     function test_factory_predictAddress_matchesDeployed() public {
-        // owner already consumed nonce 0 in setUp; predict the next manager (nonce 1).
-        address predicted = factory.predictManagerAddress(address(impl), owner, 1);
+        // owner already consumed nonce 0 in setUp; predict the next manager (nonce 1). The salt binds
+        // keccak256(initData), so predict must use the SAME calldata the deployment will use.
+        bytes memory initData = abi.encodeCall(StableLPManager.initialize, (_initParams(owner)));
+        address predicted = factory.predictManagerAddress(address(impl), owner, 1, initData);
         address deployed = address(FactoryHelper.cloneStable(factory, address(impl), _initParams(owner)));
         assertEq(deployed, predicted, "deterministic address matches");
     }
@@ -45,9 +47,10 @@ contract LPManagerFactoryTest is StableLPTestBase {
 
     function test_factory_sameNonce_differentImpl_distinctAddresses() public {
         VolatileLPManager volImpl = new VolatileLPManager(IPoolManager(address(poolManager)), treasury);
-        // impl is embedded in the EIP-1167 initcode ⇒ same (owner,nonce), different impl ⇒ different address.
-        address a = factory.predictManagerAddress(address(impl), owner, 7);
-        address b = factory.predictManagerAddress(address(volImpl), owner, 7);
+        // impl is embedded in the EIP-1167 initcode ⇒ same (owner,nonce,initData), different impl ⇒ different address.
+        bytes memory initData = abi.encodeCall(StableLPManager.initialize, (_initParams(owner)));
+        address a = factory.predictManagerAddress(address(impl), owner, 7, initData);
+        address b = factory.predictManagerAddress(address(volImpl), owner, 7, initData);
         assertTrue(a != b, "stable and volatile clones never collide");
     }
 

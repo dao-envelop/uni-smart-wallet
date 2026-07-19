@@ -7,6 +7,7 @@ pragma solidity ^0.8.20;
 import {Clones} from "@openzeppelin/contracts/proxy/Clones.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
+import {Address} from "@openzeppelin/contracts/utils/Address.sol";
 
 /// @title LPManagerFactory
 /// @notice Universal factory for the NFT-owned LP managers built on `BaseLPManager`
@@ -49,8 +50,13 @@ contract LPManagerFactory is Ownable {
     /// @param manager The deployed clone address.
     /// @param implementation The implementation cloned.
     /// @param owner The manager owner (singleton NFT holder).
-    /// @param nonce The per-owner deployment index used in the CREATE2 salt.
+    /// @param nonce The per-owner deployment index used in the CREATE2 salt, or `type(uint256).max` for a
+    /// non-deterministic ({createManagerNondeterministic}) deployment where no nonce/salt applies.
     event ManagerCreated(address indexed manager, address indexed implementation, address indexed owner, uint256 nonce);
+    /// @notice Emitted when a creation call forwards native value to the new manager.
+    /// @param manager The funded manager clone.
+    /// @param value The amount of native token forwarded.
+    event ManagerFunded(address indexed manager, uint256 value);
 
     error ZeroImplementation();
     error NotImplementation(address implementation);
@@ -78,8 +84,12 @@ contract LPManagerFactory is Ownable {
         emit ImplementationSet(implementation, allowed);
     }
 
-    /// @notice Clone `implementation` for `expectedOwner` and initialize it atomically with `initData`.
-    /// The singleton NFT is minted to `expectedOwner` inside `initialize`; this factory verifies it.
+    /// @notice Clone `implementation` for `expectedOwner` at a deterministic (CREATE2) address and
+    /// initialize it atomically with `initData`. The singleton NFT is minted to `expectedOwner` inside
+    /// `initialize`; this factory verifies it. Any native `msg.value` is forwarded to the new manager.
+    /// @dev The CREATE2 salt binds `keccak256(initData)`, so a front-runner cannot deploy a DIFFERENT
+    /// config at a caller's predicted (pre-funded) address — a substituted `initData` yields a different
+    /// address. Predict the address with {predictManagerAddress} using the SAME `initData`.
     /// @param implementation The allowlisted manager implementation to clone.
     /// @param expectedOwner The intended manager owner (receives the singleton NFT). Must match what
     /// `initData` initializes; a mismatch reverts `OwnerMismatch`.
@@ -87,15 +97,50 @@ contract LPManagerFactory is Ownable {
     /// @return manager The deployed, initialized clone address.
     function createManager(address implementation, address expectedOwner, bytes calldata initData)
         external
+        payable
         returns (address manager)
     {
         if (!isImplementation[implementation]) revert NotImplementation(implementation);
         if (expectedOwner == address(0)) revert ZeroOwner();
 
         uint256 n = nonce[expectedOwner]++;
-        bytes32 salt = keccak256(abi.encode(expectedOwner, implementation, n));
+        bytes32 salt = keccak256(abi.encode(expectedOwner, implementation, n, keccak256(initData)));
         manager = implementation.cloneDeterministic(salt);
 
+        _initAndFund(manager, implementation, expectedOwner, initData, n);
+    }
+
+    /// @notice Like {createManager} but at a NON-deterministic (CREATE) address. Because the address is
+    /// not caller-predictable, there is no pre-funded address for a front-runner to substitute config at —
+    /// use this when the counterfactual-funding flow isn't needed. Does not consume the per-owner `nonce`.
+    /// Any native `msg.value` is forwarded to the new manager.
+    /// @param implementation The allowlisted manager implementation to clone.
+    /// @param expectedOwner The intended manager owner (receives the singleton NFT).
+    /// @param initData ABI-encoded product-specific `initialize(InitParams)` call.
+    /// @return manager The deployed, initialized clone address.
+    function createManagerNondeterministic(address implementation, address expectedOwner, bytes calldata initData)
+        external
+        payable
+        returns (address manager)
+    {
+        if (!isImplementation[implementation]) revert NotImplementation(implementation);
+        if (expectedOwner == address(0)) revert ZeroOwner();
+
+        manager = implementation.clone();
+
+        _initAndFund(manager, implementation, expectedOwner, initData, type(uint256).max);
+    }
+
+    /// @dev Atomically initialize a freshly-cloned `manager` with `initData`, verify the singleton NFT
+    /// landed on `expectedOwner`, forward any `msg.value`, and emit. Shared by both create entry points.
+    /// @param nonceOrSentinel The per-owner nonce used in the salt, or `type(uint256).max` (non-deterministic).
+    function _initAndFund(
+        address manager,
+        address implementation,
+        address expectedOwner,
+        bytes calldata initData,
+        uint256 nonceOrSentinel
+    ) internal {
         (bool ok, bytes memory ret) = manager.call(initData);
         if (!ok) {
             // Bubble the product's own revert (e.g. `HookNotAllowed`, `NoPools`) for a transparent
@@ -108,23 +153,38 @@ contract LPManagerFactory is Ownable {
         }
 
         // Post-init guard: a successful-but-non-initializing call would leave a hijackable clone at a
-        // known deterministic address, and a wrong-owner initData must not pass silently.
+        // known address, and a wrong-owner initData must not pass silently.
         address actual = IERC721(manager).ownerOf(TOKEN_ID);
         if (actual != expectedOwner) revert OwnerMismatch(expectedOwner, actual);
 
-        emit ManagerCreated(manager, implementation, expectedOwner, n);
+        // Forward any native value to the (validated) manager's `receive()`. Atomic: a failed send reverts
+        // the whole creation, so no ETH is ever stranded.
+        if (msg.value > 0) {
+            Address.sendValue(payable(manager), msg.value);
+            emit ManagerFunded(manager, msg.value);
+        }
+
+        emit ManagerCreated(manager, implementation, expectedOwner, nonceOrSentinel);
     }
 
-    /// @notice The address `createManager` will produce for `(implementation, owner_, nonce_)`.
+    /// @notice The address `createManager` will produce for `(implementation, owner_, nonce_, initData)`.
+    /// @dev Must be called with the SAME `initData` that will be passed to `createManager`, since the salt
+    /// binds `keccak256(initData)`. Note the per-owner `nonce` is still advanceable by anyone (a valid
+    /// `createManager` for `owner_` bumps it), which shifts this predicted address; to fund a new manager
+    /// atomically without relying on counterfactual pre-funding, prefer `createManager{value: …}` (or
+    /// {createManagerNondeterministic}), which forward native value to the manager on creation.
     /// @param implementation The implementation to clone (address is part of the EIP-1167 initcode).
     /// @param owner_ The prospective manager owner.
     /// @param nonce_ The deployment index to predict for (current value is in `nonce(owner_)`).
+    /// @param initData The exact `initialize(InitParams)` calldata the deployment will use.
     /// @return The deterministic CREATE2 clone address.
-    function predictManagerAddress(address implementation, address owner_, uint256 nonce_)
+    function predictManagerAddress(address implementation, address owner_, uint256 nonce_, bytes calldata initData)
         external
         view
         returns (address)
     {
-        return implementation.predictDeterministicAddress(keccak256(abi.encode(owner_, implementation, nonce_)));
+        return implementation.predictDeterministicAddress(
+            keccak256(abi.encode(owner_, implementation, nonce_, keccak256(initData)))
+        );
     }
 }
