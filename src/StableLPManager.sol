@@ -210,6 +210,7 @@ contract StableLPManager is BaseLPManager {
 
         L = PositionMath.liquidityFromAmounts(sqrtP, tickLower, tickUpper, amount0, amount1);
         if (L < minLiq) revert MinLiquidityNotMet(L, minLiq);
+        if (L == 0) revert ZeroLiquidity(); // reject no-op adds (would register a ghost salt)
 
         (, BalanceDelta fees) = POOL_MANAGER.modifyLiquidity(
             key,

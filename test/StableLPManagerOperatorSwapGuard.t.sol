@@ -9,6 +9,9 @@ import {MockERC20, MockPriceOracle} from "./helpers/Mocks.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
+import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
+import {PoolSwapTest} from "@uniswap/v4-core/src/test/PoolSwapTest.sol";
 
 /// @notice Audit M-VOL-2 remediation for StableLPManager: an operator-triggered swap (allocate pre-swap /
 /// reinvest swap) is allowed only when the price oracle vouches for it (fail-closed); the NFT owner keeps
@@ -17,17 +20,50 @@ import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 /// guard applies uniformly.
 contract StableLPManagerOperatorSwapGuardTest is StableLPTestBase {
     MockPriceOracle internal oracle;
+    PoolSwapTest internal swapRouter;
 
     uint8 internal constant P = 0; // pool under test
 
     function setUp() public override {
         super.setUp();
         oracle = new MockPriceOracle();
+        swapRouter = new PoolSwapTest(IPoolManager(address(poolManager)));
         // Extra idle USDT for reinvest/allocate swaps; open a position per pool as owner (owner bypasses).
         MockERC20(Currency.unwrap(USDT)).mint(address(mgr), 3 * FUND);
         vm.startPrank(owner);
         mgr.allocate(_allocateParams(FUND));
         mgr.setOperator(bot, true);
+        vm.stopPrank();
+    }
+
+    /// @dev Trade both directions through pool P so the manager's in-range [-60,60] position accrues fees
+    /// on BOTH currencies (so a later `reinvest` has something to compound ⇒ L > 0).
+    function _accrueFees() internal {
+        address trader = address(0x7EA4E5);
+        MockERC20(Currency.unwrap(USDT)).mint(trader, 1_000e18);
+        MockERC20(Currency.unwrap(pairOf[P])).mint(trader, 1_000e18);
+        PoolSwapTest.TestSettings memory ts = PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false});
+        vm.startPrank(trader);
+        MockERC20(Currency.unwrap(USDT)).approve(address(swapRouter), type(uint256).max);
+        MockERC20(Currency.unwrap(pairOf[P])).approve(address(swapRouter), type(uint256).max);
+        for (uint256 i = 0; i < 3; ++i) {
+            swapRouter.swap(
+                poolKeys[P],
+                SwapParams({
+                    zeroForOne: true, amountSpecified: -100e18, sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
+                }),
+                ts,
+                ""
+            );
+            swapRouter.swap(
+                poolKeys[P],
+                SwapParams({
+                    zeroForOne: false, amountSpecified: -100e18, sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
+                }),
+                ts,
+                ""
+            );
+        }
         vm.stopPrank();
     }
 
@@ -98,11 +134,17 @@ contract StableLPManagerOperatorSwapGuardTest is StableLPTestBase {
     }
 
     function test_operatorReinvestSwap_inBounds_succeeds() public {
+        _accrueFees(); // real two-sided fees to compound (else reinvest is a no-op ⇒ ZeroLiquidity)
         vm.prank(owner);
         mgr.setPriceOracle(address(oracle));
         oracle.setMode(MockPriceOracle.Mode.Pass);
+
+        uint128 before = mgr.positionOf(_saltFor(P)).liquidity;
+        BaseLPManager.AllocLeg memory leg = _reinvestLeg();
+        leg.swapAmountIn = 1e6; // tiny balancing swap, far below the accrued fees (keeps both sides positive)
         vm.prank(bot);
-        mgr.reinvest(_reinvestLeg()); // vouched ⇒ allowed
+        mgr.reinvest(leg); // vouched ⇒ allowed; compounds fees ⇒ L > 0
+        assertGt(mgr.positionOf(_saltFor(P)).liquidity, before, "reinvest compounded fees under a vouching oracle");
     }
 
     // ────────── owner: full freedom ──────────
