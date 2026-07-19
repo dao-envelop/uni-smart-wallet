@@ -49,6 +49,24 @@ contract StableLPManagerAllocateTest is StableLPTestBase {
         mgr.allocate(_allocateParams(FUND));
     }
 
+    function test_allocate_zeroLiquidity_reverts() public {
+        // Zero desired amounts + minLiquidity 0 ⇒ L == 0. Rejected (audit L-REG-1: no ghost salt).
+        BaseLPManager.AllocLeg[] memory legs = new BaseLPManager.AllocLeg[](1);
+        legs[0] = BaseLPManager.AllocLeg({
+            poolId: poolKeys[0].toId(),
+            zeroForOne: false,
+            swapAmountIn: 0,
+            swapPriceLimit: 0,
+            amount0Desired: 0,
+            amount1Desired: 0,
+            minLiquidity: 0
+        });
+        vm.prank(owner);
+        vm.expectRevert(V4PositionManager.ZeroLiquidity.selector);
+        mgr.allocate(legs);
+        assertEq(mgr.openPositionCount(), 0, "no ghost position registered");
+    }
+
     function test_allocate_noLegs_reverts() public {
         BaseLPManager.AllocLeg[] memory legs = new BaseLPManager.AllocLeg[](0);
         vm.prank(owner);

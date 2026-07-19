@@ -20,6 +20,13 @@ All notable changes to this project are documented here. The format is based on
   both products. `IPriceOracle.check` now returns `bool enforced` (closing the prior fail-open); added
   `src/oracle/ChainlinkPriceOracle.sol` reference implementation.
 
+### Fixed
+
+- **Reject zero-liquidity adds** — audit `2026-07-18` L-REG-1 (task_034). `allocate`/`reinvest`/`recenter`
+  now revert `ZeroLiquidity` when the computed liquidity is `0` (previously, with `minLiquidity == 0`, a
+  no-op add slipped through and a fresh salt registered a zero-liquidity "ghost" in `openSalts`). Guard
+  added in the shared `_addLiquidity` / `_addLiquidityAt` helpers.
+
 ## [1.0.0] - 2026-06-29
 
 First public release of **Envelop StableLP** — an NFT-owned, factory-cloned Uniswap v4 stable-LP manager.

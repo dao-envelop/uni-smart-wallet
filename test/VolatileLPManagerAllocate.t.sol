@@ -136,6 +136,14 @@ contract VolatileLPManagerAllocateTest is Test {
         assertEq(mgr.positionOf(bytes32(uint256(2))).tickLower, int24(-120), "second range");
     }
 
+    function test_allocate_zeroLiquidity_reverts() public {
+        // Zero desired amounts + minLiquidity 0 ⇒ L == 0. Rejected (audit L-REG-1: no ghost salt).
+        vm.prank(owner);
+        vm.expectRevert(V4PositionManager.ZeroLiquidity.selector);
+        mgr.allocate(_one(_leg(bytes32(uint256(1)), -60, 60, 0)));
+        assertEq(mgr.openPositionCount(), 0, "no ghost position registered");
+    }
+
     function test_allocate_minLiquidityNotMet_reverts() public {
         // minLiquidity floored at uint128.max is far above the L a 100e18-sized add yields ⇒ revert.
         // (There is no amount*Max cap: L is sized from desired amounts, so owed ≤ desired by
