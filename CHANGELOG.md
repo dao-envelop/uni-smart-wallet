@@ -8,14 +8,17 @@ All notable changes to this project are documented here. The format is based on
 
 ### Security
 
-- **Operator swap safety (`VolatileLPManager`)** — audit `2026-07-18` H-VOL-1 / M-VOL-2 (task_031). Any
-  **operator-triggered** swap (allocate pre-swap / recenter rebalance) is now gated by the `priceOracle`
-  and **fail-closed**: it reverts unless a configured oracle vouches for the realized price
+- **Operator swap safety** — audit `2026-07-18` H-VOL-1 / M-VOL-2 (task_031 + task_032). Any
+  **operator-triggered** swap in either product — `VolatileLPManager` (allocate pre-swap / recenter
+  rebalance) and `StableLPManager` (allocate pre-swap / reinvest swap) — is now gated by the
+  `priceOracle` and **fail-closed**: it reverts unless a configured oracle vouches for the realized price
   (`OperatorSwapGuardRequired` when unset, `OperatorSwapUnverified` when the oracle has no fresh
   reference). This closes the drain where a compromised operator freed a position's principal via
-  `recenter` and routed it through a self-parameterized adverse swap. The **NFT owner keeps full freedom**
-  (owner swaps bypass the guard). `IPriceOracle.check` now returns `bool enforced` (closing the prior
-  fail-open); added `src/oracle/ChainlinkPriceOracle.sol` reference implementation.
+  `VolatileLPManager.recenter` and routed it through a self-parameterized adverse swap, and the
+  idle+fees bleed via the Stable pre-swaps. The **NFT owner keeps full freedom** (owner swaps bypass the
+  guard). The guard (`priceOracle` / `setPriceOracle` / `_guardSwap`) lives in `BaseLPManager`, shared by
+  both products. `IPriceOracle.check` now returns `bool enforced` (closing the prior fail-open); added
+  `src/oracle/ChainlinkPriceOracle.sol` reference implementation.
 
 ## [1.0.0] - 2026-06-29
 

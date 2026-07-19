@@ -15,19 +15,20 @@ import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {PoolSwapTest} from "@uniswap/v4-core/src/test/PoolSwapTest.sol";
 
-/// @notice PoC for audit finding **H-1**: the pre-swap in `allocate` / `reinvest` is protected ONLY by
-/// the operator-supplied `sqrtPriceLimitX96`. Because `allocate`/`reinvest` are `onlyAuthorized`
-/// (operator OR owner), a malicious / compromised operator can pass a maximally-wide price limit and
-/// route the manager's capital through an adverse in-pool swap that a confederate sandwiches —
-/// economically extracting value despite the "operators cannot move capital out" invariant.
+/// @notice PoC for audit finding **H-1** (pre-swap in `allocate`/`reinvest` was protected ONLY by the
+/// operator-supplied `sqrtPriceLimitX96`) — and its remediation. Because `allocate`/`reinvest` are
+/// `onlyAuthorized`, a compromised operator could once route the manager's capital through an adverse
+/// in-pool swap that a confederate sandwiches, extracting value. The task_031/032 fix makes an
+/// operator-triggered swap fail-closed on the price oracle, so the operator can no longer self-authorize
+/// the adverse swap; the owner keeps full freedom.
 ///
-/// The three tests together form the proof:
+/// The tests together form the proof:
 ///  1. `test_H1_baseline_pureSandwich_attackerLoses` — a front-run/back-run round trip on a STATIC pool
-///     loses money (pays the pool fee twice). So any attacker profit below must come from the victim.
-///  2. `test_H1_operatorWideLimitSwap_extractsValueToAttacker` — with the operator's unprotected swap
-///     in the middle, the SAME sandwich now turns a profit, paid out of the manager's bad execution.
-///  3. `test_H1_tightLimit_wouldHaveReverted` — a tight `swapPriceLimit` reverts the adverse swap, i.e.
-///     the protection EXISTS but is operator-chosen; the contract does not enforce it.
+///     loses money (pays the pool fee twice). So any attacker profit would have to come from the victim.
+///  2. `test_H1_operatorWideLimitSwap_nowBlocked` — the operator's wide-limit swap is now rejected
+///     (`OperatorSwapGuardRequired`, no oracle configured), so there is no victim swap to sandwich.
+///  3. `test_H1_tightLimit_wouldHaveReverted` — a tight `swapPriceLimit` also reverts the adverse swap
+///     (the pre-existing partial-fill / price-limit guard), independent of the new oracle gate.
 contract StableLPManagerH1OperatorExtractionPoC is StableLPTestBase {
     using StateLibrary for IPoolManager;
 
@@ -133,14 +134,16 @@ contract StableLPManagerH1OperatorExtractionPoC is StableLPTestBase {
         assertLt(pnl, int256(0), "pure round-trip must lose money on a static pool");
     }
 
-    /// The vulnerability: the operator's wide-limit swap converts that loss into a profit for the
-    /// attacker — value extracted from the manager, despite operators being unable to call withdrawTo.
-    function test_H1_operatorWideLimitSwap_extractsValueToAttacker() public {
-        int256 pnl = _runSandwich(true);
-        emit log_named_int("attacker PnL (stable units)", pnl);
-        assertGt(pnl, int256(0), "attacker profited");
-        // Material, not dust: > 1000 tokens (~$1000) siphoned out of the manager.
-        assertGt(pnl, int256(1_000e18), "extraction is material");
+    /// Pre-fix this was the vulnerability: the operator's wide-limit swap converted the sandwich into a
+    /// profit paid out of the manager. After the task_031/032 fix, an operator-triggered swap is
+    /// fail-closed on the price oracle — with none configured the manager's `allocate` reverts
+    /// `OperatorSwapGuardRequired`, so there is no victim swap to sandwich and the extraction is
+    /// impossible. (The owner, who bypasses the guard, retains full freedom.)
+    function test_H1_operatorWideLimitSwap_nowBlocked() public {
+        _attackerSwapExactIn(usdtIsZero, FRONT_RUN); // attacker still skews the pool
+        vm.prank(bot);
+        vm.expectRevert(BaseLPManager.OperatorSwapGuardRequired.selector);
+        mgr.allocate(_oneLeg(_wideLimitLeg(_wideLimit())));
     }
 
     /// The protection exists but is operator-chosen: a tight price limit reverts the adverse swap

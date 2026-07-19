@@ -14,7 +14,6 @@ import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.so
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {TransientStateLibrary} from "@uniswap/v4-core/src/libraries/TransientStateLibrary.sol";
 import {PositionMath} from "./lib/PositionMath.sol";
-import {IPriceOracle} from "./interfaces/IPriceOracle.sol";
 import {BaseLPManager} from "./BaseLPManager.sol";
 
 /// @title VolatileLPManager
@@ -34,12 +33,6 @@ contract VolatileLPManager is BaseLPManager {
     uint8 internal constant OP_ALLOCATE_V = 7;
     uint8 internal constant OP_RECENTER = 8;
 
-    /// @notice External price guard for **operator-triggered** on-chain swaps (allocate pre-swap /
-    /// recenter rebalance). Owner swaps are never gated by it. Zero ⇒ operators cannot swap at all
-    /// (fail-closed); when set, an operator swap is allowed only if the oracle vouches for its price (see
-    /// {_guardSwap}). Owner-settable via {setPriceOracle}.
-    address public priceOracle;
-
     /// @notice Init parameters for a volatile manager clone — pools are keys only (ranges are per-call,
     /// so there is no pool-level range to configure).
     struct InitParams {
@@ -48,9 +41,6 @@ contract VolatileLPManager is BaseLPManager {
         address descriptor; // default tokenURI renderer; zero ⇒ none (owner sets later)
         PoolKey[] pools; // 1..MAX_POOLS hookless pools (identity only)
     }
-
-    /// @notice Emitted when the price oracle is (re)set.
-    event PriceOracleSet(address indexed oracle);
 
     /// @notice One volatile allocation: pick a configured pool + a caller-chosen `salt`, a per-call
     /// range, an optional balancing pre-swap (bounded by `minAmountOut`), and an add sized from desired
@@ -89,10 +79,6 @@ contract VolatileLPManager is BaseLPManager {
     error SwapMinOut(PoolId poolId);
     /// @notice A top-up targeted an existing `salt` with a different pool or range than it was opened at.
     error RangeMismatch(bytes32 salt);
-    /// @notice An operator-triggered swap ran but no price oracle is configured to vouch for it.
-    error OperatorSwapGuardRequired();
-    /// @notice An operator-triggered swap ran but the oracle had no fresh reference to enforce a bound.
-    error OperatorSwapUnverified(PoolId poolId);
 
     /// @notice Emitted when a position is moved to a new range.
     /// @param salt The position key.
@@ -137,42 +123,6 @@ contract VolatileLPManager is BaseLPManager {
 
     function _defaultName() internal pure override returns (bytes32) {
         return bytes32("Envelop Volatile LP Manager");
-    }
-
-    // ────────── Price oracle config ──────────
-
-    /// @notice Set (or clear, with the zero address) the external price guard. Owner-only.
-    /// @dev The oracle gates **operator** swaps only (see {_guardSwap}); clearing it (zero) does not
-    /// weaken the owner (who always has full freedom) but disables operator-triggered swaps entirely.
-    /// @param oracle The {IPriceOracle} to enforce on operator swaps; zero ⇒ operators cannot swap.
-    function setPriceOracle(address oracle) external onlyOwnerNFT {
-        priceOracle = oracle;
-        emit PriceOracleSet(oracle);
-    }
-
-    /// @dev Whether the current external caller is the NFT owner (vs a delegated operator). Computed at
-    /// the external entry point and threaded into the unlock payload, since inside `unlockCallback`
-    /// `msg.sender` is the PoolManager.
-    function _isOwnerCall() internal view returns (bool) {
-        return ownerOf(TOKEN_ID) == msg.sender;
-    }
-
-    /// @dev Economic-safety guard for a just-executed swap, asymmetric by caller:
-    /// - **owner** (`byOwner == true`): full freedom — no bound (the owner accepts their own slippage).
-    /// - **operator**: the swap must be vouched for by a trusted price oracle. A missing oracle
-    ///   (`OperatorSwapGuardRequired`) or a stale/absent reference (`check` returns `false` ⇒
-    ///   `OperatorSwapUnverified`) is **rejected** (fail-closed); an out-of-bounds price reverts inside
-    ///   the oracle. This is what confines an operator to economically-safe swap parameters: they cannot
-    ///   self-authorize an adverse (sandwichable) swap the way operator-supplied
-    ///   `minAmountOut`/`swapPriceLimit`/`minLiquidity` alone allowed.
-    function _guardSwap(bool byOwner, PoolKey memory key, bool zeroForOne, uint256 amountIn, uint256 amountOut)
-        internal
-        view
-    {
-        if (byOwner) return; // owner: full freedom
-        address o = priceOracle;
-        if (o == address(0)) revert OperatorSwapGuardRequired();
-        if (!IPriceOracle(o).check(key, zeroForOne, amountIn, amountOut)) revert OperatorSwapUnverified(key.toId());
     }
 
     // ────────── Unlock dispatch (this product's ops) ──────────
