@@ -19,6 +19,18 @@ All notable changes to this project are documented here. The format is based on
   guard). The guard (`priceOracle` / `setPriceOracle` / `_guardSwap`) lives in `BaseLPManager`, shared by
   both products. `IPriceOracle.check` now returns `bool enforced` (closing the prior fail-open); added
   `src/oracle/ChainlinkPriceOracle.sol` reference implementation.
+- **Factory clone-address binding (`LPManagerFactory`)** — audit `2026-07-18` L-FAC-1 (task_033). The
+  CREATE2 salt now binds `keccak256(initData)`, so a front-runner can no longer deploy a different pool
+  config at a caller's predicted, pre-funded address (`predictManagerAddress` gains an `initData`
+  parameter). Counterfactual funding is now safe by construction.
+
+### Added
+
+- **`LPManagerFactory.createManagerNondeterministic`** (task_033) — create a manager at a non-deterministic
+  (CREATE) address when the counterfactual-funding flow isn't needed; same guards as `createManager`.
+- **Native funding on manager creation** (task_033) — `createManager` / `createManagerNondeterministic` are
+  now `payable` and forward any `msg.value` to the new manager (`ManagerFunded` event); atomic, so a
+  reverted creation returns the ETH.
 
 ## [1.0.0] - 2026-06-29
 
