@@ -139,7 +139,7 @@ contract VolatileLPManager is BaseLPManager {
     /// @notice Harvest accrued fees on `salt` to the manager (no principal change); the protocol fee
     /// is skimmed first. Owner-or-operator.
     /// @param salt The position key.
-    function claimFees(bytes32 salt) external onlyAuthorized nonReentrant {
+    function claimFees(bytes32 salt) external onlyAuthorized nonReentrant fixEtherBalance {
         _pokeFromConfig(salt); // reverts UnknownPosition if not open
         emit IERC4906.MetadataUpdate(TOKEN_ID);
     }
@@ -165,7 +165,7 @@ contract VolatileLPManager is BaseLPManager {
     /// Owner-or-operator (off-chain sizing). Draws from whatever managed currencies sit on the
     /// manager's balance; residuals net back via `_settleManaged`.
     /// @param legs Per-position actions (pool, salt, range, optional pre-swap, desired amounts, caps).
-    function allocate(VolatileAllocLeg[] calldata legs) external onlyAuthorized nonReentrant {
+    function allocate(VolatileAllocLeg[] calldata legs) external onlyAuthorized nonReentrant fixEtherBalance {
         if (legs.length == 0) revert NoLegs();
         for (uint256 i = 0; i < legs.length; ++i) {
             _indexOf(legs[i].poolId); // reverts UnknownPool if not configured
@@ -265,7 +265,7 @@ contract VolatileLPManager is BaseLPManager {
 
     /// @notice Move an open position to a new range in one call. Owner-or-operator.
     /// @param p Recenter plan: salt, new range, optional rebalancing swap, and floors/caps.
-    function recenter(RecenterParams calldata p) external onlyAuthorized nonReentrant {
+    function recenter(RecenterParams calldata p) external onlyAuthorized nonReentrant fixEtherBalance {
         if (_positions[p.salt].liquidity == 0) revert UnknownPosition(p.salt);
         POOL_MANAGER.unlock(abi.encode(OP_RECENTER, abi.encode(_isOwnerCall(), p)));
         emit IERC4906.MetadataUpdate(TOKEN_ID);
