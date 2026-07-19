@@ -34,9 +34,10 @@ contract VolatileLPManager is BaseLPManager {
     uint8 internal constant OP_ALLOCATE_V = 7;
     uint8 internal constant OP_RECENTER = 8;
 
-    /// @notice Optional external price guard for on-chain swaps (allocate pre-swap / recenter
-    /// rebalance). Zero ⇒ no oracle: the operator's `minLiquidity` / `minAmountOut` are the only guard.
-    /// Owner-settable via {setPriceOracle}.
+    /// @notice External price guard for **operator-triggered** on-chain swaps (allocate pre-swap /
+    /// recenter rebalance). Owner swaps are never gated by it. Zero ⇒ operators cannot swap at all
+    /// (fail-closed); when set, an operator swap is allowed only if the oracle vouches for its price (see
+    /// {_guardSwap}). Owner-settable via {setPriceOracle}.
     address public priceOracle;
 
     /// @notice Init parameters for a volatile manager clone — pools are keys only (ranges are per-call,
@@ -88,6 +89,10 @@ contract VolatileLPManager is BaseLPManager {
     error SwapMinOut(PoolId poolId);
     /// @notice A top-up targeted an existing `salt` with a different pool or range than it was opened at.
     error RangeMismatch(bytes32 salt);
+    /// @notice An operator-triggered swap ran but no price oracle is configured to vouch for it.
+    error OperatorSwapGuardRequired();
+    /// @notice An operator-triggered swap ran but the oracle had no fresh reference to enforce a bound.
+    error OperatorSwapUnverified(PoolId poolId);
 
     /// @notice Emitted when a position is moved to a new range.
     /// @param salt The position key.
@@ -137,17 +142,37 @@ contract VolatileLPManager is BaseLPManager {
     // ────────── Price oracle config ──────────
 
     /// @notice Set (or clear, with the zero address) the external price guard. Owner-only.
-    /// @param oracle The {IPriceOracle} to enforce on swaps; zero ⇒ disabled.
+    /// @dev The oracle gates **operator** swaps only (see {_guardSwap}); clearing it (zero) does not
+    /// weaken the owner (who always has full freedom) but disables operator-triggered swaps entirely.
+    /// @param oracle The {IPriceOracle} to enforce on operator swaps; zero ⇒ operators cannot swap.
     function setPriceOracle(address oracle) external onlyOwnerNFT {
         priceOracle = oracle;
         emit PriceOracleSet(oracle);
     }
 
-    /// @dev Enforce the oracle bound on a just-executed swap (no-op when unset). The oracle reverts if
-    /// the realized price is out of bounds; a stale/absent reference is a no-op ⇒ amountMax/minOut hold.
-    function _guardSwap(PoolKey memory key, bool zeroForOne, uint256 amountIn, uint256 amountOut) internal view {
+    /// @dev Whether the current external caller is the NFT owner (vs a delegated operator). Computed at
+    /// the external entry point and threaded into the unlock payload, since inside `unlockCallback`
+    /// `msg.sender` is the PoolManager.
+    function _isOwnerCall() internal view returns (bool) {
+        return ownerOf(TOKEN_ID) == msg.sender;
+    }
+
+    /// @dev Economic-safety guard for a just-executed swap, asymmetric by caller:
+    /// - **owner** (`byOwner == true`): full freedom — no bound (the owner accepts their own slippage).
+    /// - **operator**: the swap must be vouched for by a trusted price oracle. A missing oracle
+    ///   (`OperatorSwapGuardRequired`) or a stale/absent reference (`check` returns `false` ⇒
+    ///   `OperatorSwapUnverified`) is **rejected** (fail-closed); an out-of-bounds price reverts inside
+    ///   the oracle. This is what confines an operator to economically-safe swap parameters: they cannot
+    ///   self-authorize an adverse (sandwichable) swap the way operator-supplied
+    ///   `minAmountOut`/`swapPriceLimit`/`minLiquidity` alone allowed.
+    function _guardSwap(bool byOwner, PoolKey memory key, bool zeroForOne, uint256 amountIn, uint256 amountOut)
+        internal
+        view
+    {
+        if (byOwner) return; // owner: full freedom
         address o = priceOracle;
-        if (o != address(0)) IPriceOracle(o).check(key, zeroForOne, amountIn, amountOut);
+        if (o == address(0)) revert OperatorSwapGuardRequired();
+        if (!IPriceOracle(o).check(key, zeroForOne, amountIn, amountOut)) revert OperatorSwapUnverified(key.toId());
     }
 
     // ────────── Unlock dispatch (this product's ops) ──────────
@@ -195,15 +220,15 @@ contract VolatileLPManager is BaseLPManager {
         for (uint256 i = 0; i < legs.length; ++i) {
             _indexOf(legs[i].poolId); // reverts UnknownPool if not configured
         }
-        POOL_MANAGER.unlock(abi.encode(OP_ALLOCATE_V, abi.encode(legs)));
+        POOL_MANAGER.unlock(abi.encode(OP_ALLOCATE_V, abi.encode(_isOwnerCall(), legs)));
         emit Allocated(legs.length);
         emit IERC4906.MetadataUpdate(TOKEN_ID);
     }
 
     function _handleAllocateV(bytes memory payload) internal returns (bytes memory) {
-        VolatileAllocLeg[] memory legs = abi.decode(payload, (VolatileAllocLeg[]));
+        (bool byOwner, VolatileAllocLeg[] memory legs) = abi.decode(payload, (bool, VolatileAllocLeg[]));
         for (uint256 i = 0; i < legs.length; ++i) {
-            _allocateLegV(legs[i]);
+            _allocateLegV(legs[i], byOwner);
         }
         _settleManaged();
         return "";
@@ -215,7 +240,7 @@ contract VolatileLPManager is BaseLPManager {
     /// `swapPriceLimit` (marginal-price ceiling) and `minAmountOut` (total-output floor) — plus a
     /// full-fill requirement that enforces "swap exactly `swapAmountIn`" (a partial pre-swap would
     /// under-balance the sides before the add).
-    function _allocateLegV(VolatileAllocLeg memory leg) internal {
+    function _allocateLegV(VolatileAllocLeg memory leg, bool byOwner) internal {
         PoolKey memory key = pools[_indexOf(leg.poolId)].key;
         if (leg.swapAmountIn > 0) {
             BalanceDelta sd = _swap(key, leg.zeroForOne, -int256(leg.swapAmountIn), leg.swapPriceLimit);
@@ -224,7 +249,7 @@ contract VolatileLPManager is BaseLPManager {
             if (uint256(uint128(-inDelta)) < leg.swapAmountIn) revert SwapSlippage(leg.poolId);
             int128 outDelta = leg.zeroForOne ? sd.amount1() : sd.amount0();
             if (uint256(uint128(outDelta)) < leg.minAmountOut) revert SwapMinOut(leg.poolId);
-            _guardSwap(key, leg.zeroForOne, uint256(uint128(-inDelta)), uint256(uint128(outDelta)));
+            _guardSwap(byOwner, key, leg.zeroForOne, uint256(uint128(-inDelta)), uint256(uint128(outDelta)));
         }
         _addLiquidityV(leg, key);
     }
@@ -291,12 +316,12 @@ contract VolatileLPManager is BaseLPManager {
     /// @param p Recenter plan: salt, new range, optional rebalancing swap, and floors/caps.
     function recenter(RecenterParams calldata p) external onlyAuthorized nonReentrant {
         if (_positions[p.salt].liquidity == 0) revert UnknownPosition(p.salt);
-        POOL_MANAGER.unlock(abi.encode(OP_RECENTER, abi.encode(p)));
+        POOL_MANAGER.unlock(abi.encode(OP_RECENTER, abi.encode(_isOwnerCall(), p)));
         emit IERC4906.MetadataUpdate(TOKEN_ID);
     }
 
     function _handleRecenter(bytes memory payload) internal returns (bytes memory) {
-        RecenterParams memory p = abi.decode(payload, (RecenterParams));
+        (bool byOwner, RecenterParams memory p) = abi.decode(payload, (bool, RecenterParams));
         StoredPosition memory pos = _positions[p.salt];
         PoolKey memory key = pools[_indexOf(pos.poolId)].key;
 
@@ -316,7 +341,7 @@ contract VolatileLPManager is BaseLPManager {
         }
 
         // 2. Optional rebalancing swap toward the new range.
-        if (p.swapAmountIn > 0) _rebalanceSwap(key, p);
+        if (p.swapAmountIn > 0) _rebalanceSwap(key, p, byOwner);
 
         // 3. Re-add at the new range, sized from the freed (positive) deltas.
         uint128 L = _addLiquidityAt(
@@ -343,14 +368,15 @@ contract VolatileLPManager is BaseLPManager {
         return "";
     }
 
-    /// @dev The rebalancing swap for recenter: exactIn, partial-fill guard + `minAmountOut` floor.
-    function _rebalanceSwap(PoolKey memory key, RecenterParams memory p) internal {
+    /// @dev The rebalancing swap for recenter: exactIn, partial-fill guard + `minAmountOut` floor, plus
+    /// the caller-asymmetric oracle guard (owner: free; operator: oracle-vouched only).
+    function _rebalanceSwap(PoolKey memory key, RecenterParams memory p, bool byOwner) internal {
         BalanceDelta sd = _swap(key, p.zeroForOne, -int256(p.swapAmountIn), p.swapPriceLimit);
         int128 inDelta = p.zeroForOne ? sd.amount0() : sd.amount1();
         if (uint256(uint128(-inDelta)) < p.swapAmountIn) revert SwapSlippage(key.toId());
         int128 outDelta = p.zeroForOne ? sd.amount1() : sd.amount0();
         if (uint256(uint128(outDelta)) < p.minAmountOut) revert SwapMinOut(key.toId());
-        _guardSwap(key, p.zeroForOne, uint256(uint128(-inDelta)), uint256(uint128(outDelta)));
+        _guardSwap(byOwner, key, p.zeroForOne, uint256(uint128(-inDelta)), uint256(uint128(outDelta)));
     }
 
     /// @dev The manager's positive credit of `c` in the active unlock (0 if it owes or is flat).

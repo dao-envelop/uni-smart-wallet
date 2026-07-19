@@ -2,6 +2,8 @@
 pragma solidity ^0.8.26;
 
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {IPriceOracle} from "../../src/interfaces/IPriceOracle.sol";
 
 /// @notice Minimal ERC-20 with public mint, for tests that need a token balance.
 contract MockERC20 is ERC20 {
@@ -49,5 +51,31 @@ contract MockFeeOnTransferERC20 is ERC20 {
 contract Echo {
     function ping(bytes calldata data) external pure returns (bytes calldata) {
         return data;
+    }
+}
+
+/// @notice Configurable {IPriceOracle} for the operator-swap-guard tests.
+/// - `NotEnforced` ⇒ `check` returns false (no fresh reference): operator swaps are rejected
+///   (`OperatorSwapUnverified`), owner swaps still pass.
+/// - `Pass` ⇒ `check` returns true (in-bounds reference): operator swaps are allowed.
+/// - `Revert` ⇒ `check` reverts (out-of-bounds price), like a real oracle rejecting an adverse swap.
+contract MockPriceOracle is IPriceOracle {
+    enum Mode {
+        NotEnforced,
+        Pass,
+        Revert
+    }
+
+    Mode public mode;
+
+    error MockPriceOutOfBounds();
+
+    function setMode(Mode m) external {
+        mode = m;
+    }
+
+    function check(PoolKey calldata, bool, uint256, uint256) external view returns (bool) {
+        if (mode == Mode.Revert) revert MockPriceOutOfBounds();
+        return mode == Mode.Pass;
     }
 }

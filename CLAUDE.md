@@ -73,7 +73,8 @@ The repo implements **NFT-owned Uniswap V4 LP managers** that interact with the 
 - **`VolatileLPManager`** (`src/VolatileLPManager.sol`) — arbitrary/volatile pairs. **`salt ≠ poolId`**:
   a pool holds **many positions** (each a caller-chosen salt) at **per-call ranges**; the position
   records its `poolId`. Adds `minAmountOut` on the balancing pre-swap, `recenter` (single-call
-  remove→swap→re-add), and an optional external `IPriceOracle` guard (`setPriceOracle`). Like Stable,
+  remove→swap→re-add), and an external `IPriceOracle` guard (`setPriceOracle`) that gates **operator**
+  swaps fail-closed (owner swaps bypass; see Authorization model). Like Stable,
   the add is sized from desired amounts with a `minLiquidity` floor — no `amount*Max` (owed ≤ desired
   by construction). `InitParams.pools` is `PoolKey[]` (keys only — ranges are per-call). No factory yet.
 
@@ -82,7 +83,13 @@ The repo implements **NFT-owned Uniswap V4 LP managers** that interact with the 
 `onlyOwnerNFT` gates capital-draining entry points (`withdrawTo`, `executeEncodedTxBatch`, `setOperator`,
 `setPositionDescriptor`, `setPriceOracle`). `onlyAuthorized` (owner-or-operator) gates the position ops
 (`allocate`/`allocateFrom`/`reinvest`/`claimFees`; volatile `recenter`) so an operator bot can act fast
-without owner signing every TX. Operators can never move capital out.
+without owner signing every TX. Operators cannot withdraw (no `withdrawTo`/escape hatch). They also cannot
+bleed value through an adverse swap: in `VolatileLPManager`, any **operator-triggered** swap
+(allocate pre-swap / recenter rebalance) is gated by the `priceOracle` and **fail-closed** — it reverts
+unless the oracle vouches for the realized price (audit `2026-07-18` H-VOL-1, task_031). The **NFT owner
+keeps full freedom** — owner swaps bypass the oracle. (`StableLPManager`'s operator pre-swaps are not yet
+oracle-gated — tracked separately; Stable has no operator-callable principal-removal path, so the exposure
+there is idle+fees, not principal.)
 
 ### Hook policy
 
