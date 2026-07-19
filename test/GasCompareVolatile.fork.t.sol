@@ -8,6 +8,7 @@ import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
+import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {PoolSwapTest} from "@uniswap/v4-core/src/test/PoolSwapTest.sol";
@@ -18,14 +19,25 @@ import {Actions} from "@uniswap/v4-periphery/src/libraries/Actions.sol";
 import {Planner, Plan} from "@uniswap/v4-periphery/test/shared/Planner.sol";
 import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol";
 
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+
 import {VolatileLPManager} from "../src/VolatileLPManager.sol";
 import {BaseLPManager} from "../src/BaseLPManager.sol";
 import {LPManagerFactory} from "../src/LPManagerFactory.sol";
+import {ChainlinkPriceOracle} from "../src/oracle/ChainlinkPriceOracle.sol";
 import {FactoryHelper} from "./helpers/FactoryHelper.sol";
 
 interface IERC20Min {
     function balanceOf(address) external view returns (uint256);
     function approve(address, uint256) external returns (bool);
+}
+
+/// @dev Minimal Chainlink surface for reading the reference price in `setUp`.
+interface IAggV3 {
+    function latestRoundData()
+        external
+        view
+        returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound);
 }
 
 /// @notice Base-fork gas benchmark for `VolatileLPManager`: measures gas on every op (allocate,
@@ -51,10 +63,13 @@ contract GasCompareVolatileForkTest is Test {
     address internal constant WETH = 0x4200000000000000000000000000000000000006; // 18dp, currency0
     address internal constant USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913; // 6dp, currency1
 
+    // ── Base Chainlink USD reference feeds (8 dp) ──
+    address internal constant ETH_USD_FEED = 0x71041dddad3595F9CEd3DcCFBe3D1F4b0a16Bb70;
+    address internal constant USDC_USD_FEED = 0x458138Fc0D67027E9A6778ef40a6ffC318c69061;
+
     uint24 internal constant FEE = 3000;
     int24 internal constant TS = 60;
     int24 internal constant W = 600; // position half-width (10 * tickSpacing)
-    int24 internal constant INIT_TICK = -196260; // ~ 1 WETH = 3000 USDC (multiple of 60)
 
     PoolKey internal key;
     int24 internal baseTick; // current tick snapped to tickSpacing
@@ -65,6 +80,7 @@ contract GasCompareVolatileForkTest is Test {
 
     address internal owner = makeAddr("vol_owner");
     address internal treasury = makeAddr("vol_treasury");
+    address internal bot = makeAddr("vol_bot");
 
     function setUp() public {
         string memory rpc = vm.envOr("BASE_RPC", string(""));
@@ -85,14 +101,29 @@ contract GasCompareVolatileForkTest is Test {
             hooks: IHooks(address(0))
         });
 
+        // Initialize the pool at the LIVE ETH/USD reference price (not a hard-coded tick) so a swap's
+        // realized price tracks the Chainlink feed the operator oracle checks against — otherwise the
+        // guard's `PriceOutOfBounds` would trip even on the happy path. Owner ops are price-agnostic, so
+        // this is safe for the task_037 owner-driven benchmarks too. If the pool already exists we take
+        // its (arbitraged, ~reference) price as-is.
         (uint160 sp,,,) = POOL_MANAGER.getSlot0(key.toId());
-        if (sp == 0) POOL_MANAGER.initialize(key, TickMath.getSqrtPriceAtTick(INIT_TICK));
+        if (sp == 0) POOL_MANAGER.initialize(key, _oracleSqrtPriceX96());
         (, int24 tick,,) = POOL_MANAGER.getSlot0(key.toId());
         baseTick = (tick / TS) * TS; // snap to tickSpacing
 
         swapRouter = new PoolSwapTest(POOL_MANAGER);
         lpRouter = new PoolModifyLiquidityTest(POOL_MANAGER);
         _seedBackgroundLiquidity();
+    }
+
+    /// @dev sqrtPriceX96 for the WETH(0,18dp)/USDC(1,6dp) pool at the live ETH/USD feed price.
+    /// price_raw = amount1/amount0 = usd * 1e6 / 1e18 = answer / 1e20  (answer is USD * 1e8);
+    /// sqrtPriceX96 = sqrt(price_raw) << 96 = sqrt(price_raw * 2^192).
+    function _oracleSqrtPriceX96() internal view returns (uint160) {
+        (, int256 answer,,,) = IAggV3(ETH_USD_FEED).latestRoundData();
+        require(answer > 0, "bad ETH/USD");
+        uint256 ratioX192 = FullMath.mulDiv(uint256(answer), uint256(1) << 192, 1e20);
+        return uint160(Math.sqrt(ratioX192));
     }
 
     // ────────── shared fixtures ──────────
@@ -331,6 +362,119 @@ contract GasCompareVolatileForkTest is Test {
         _mint(posm, lo2, hi2, L2, eoa);
         vm.stopPrank();
         gManual = g - gasleft();
+    }
+
+    // ────────── operator path gated by a real Chainlink oracle ──────────
+
+    /// @dev A fresh manager with one allocated position at `salt` (owner-driven), funded for a recenter.
+    function _freshManagerWithPosition(bytes32 salt) internal returns (VolatileLPManager mgr) {
+        VolatileLPManager impl = new VolatileLPManager(POOL_MANAGER, treasury);
+        LPManagerFactory factory = FactoryHelper.single(address(this), address(impl));
+        mgr = FactoryHelper.cloneVolatile(factory, address(impl), _initParams());
+        deal(WETH, address(mgr), 10e18);
+        deal(USDC, address(mgr), 30_000e6);
+        vm.prank(owner);
+        mgr.allocate(_allocLeg(salt));
+    }
+
+    /// @dev A recenter to a shifted range with a small (fee-dominated) WETH->USDC rebalancing swap.
+    function _recenterParams(bytes32 salt) internal view returns (VolatileLPManager.RecenterParams memory) {
+        return VolatileLPManager.RecenterParams({
+            salt: salt,
+            newTickLower: baseTick,
+            newTickUpper: baseTick + 2 * W,
+            zeroForOne: true,
+            swapAmountIn: 0.1e18,
+            swapPriceLimit: TickMath.MIN_SQRT_PRICE + 1,
+            minAmountOut: 0,
+            minLiquidity: 0
+        });
+    }
+
+    /// @dev Deploy the real {ChainlinkPriceOracle} wired to the live Base ETH/USD + USDC/USD feeds. A
+    /// large heartbeat keeps the fork-block answers "fresh" so `check` returns `enforced = true`.
+    function _chainlinkOracle(uint16 maxDevBps) internal returns (ChainlinkPriceOracle oracle) {
+        oracle = new ChainlinkPriceOracle(address(this), maxDevBps);
+        oracle.setFeed(Currency.wrap(WETH), ETH_USD_FEED, 365 days, 18);
+        oracle.setFeed(Currency.wrap(USDC), USDC_USD_FEED, 365 days, 6);
+    }
+
+    /// @notice Operator recenter fail-closed behind the real Chainlink oracle (the H-VOL-1 path). Happy
+    /// path: a small swap's realized price is within tolerance of the ETH/USD reference, so the oracle
+    /// vouches. Logs the oracle overhead vs the owner (bypassed) recenter.
+    function test_operator_withChainlinkOracle_gas() public {
+        if (!forkActive) return;
+
+        VolatileLPManager impl = new VolatileLPManager(POOL_MANAGER, treasury);
+        LPManagerFactory factory = FactoryHelper.single(address(this), address(impl));
+        VolatileLPManager mgr = FactoryHelper.cloneVolatile(factory, address(impl), _initParams());
+        deal(WETH, address(mgr), 10e18);
+        deal(USDC, address(mgr), 30_000e6);
+
+        bytes32 sOwner = bytes32(uint256(1));
+        bytes32 sBot = bytes32(uint256(2));
+        vm.startPrank(owner);
+        mgr.allocate(_allocLeg(sOwner));
+        mgr.allocate(_allocLeg(sBot));
+        vm.stopPrank();
+
+        // Baseline: owner recenter (oracle bypassed — full freedom).
+        vm.prank(owner);
+        uint256 g = gasleft();
+        mgr.recenter(_recenterParams(sOwner));
+        uint256 gOwner = g - gasleft();
+
+        // Wire the real Chainlink oracle (5% tolerance) + an operator bot.
+        ChainlinkPriceOracle oracle = _chainlinkOracle(500);
+        vm.startPrank(owner);
+        mgr.setPriceOracle(address(oracle));
+        mgr.setOperator(bot, true);
+        vm.stopPrank();
+
+        // Operator recenter: small swap, realized price ~= reference (fee only) -> oracle vouches.
+        vm.prank(bot);
+        g = gasleft();
+        mgr.recenter(_recenterParams(sBot));
+        uint256 gOperator = g - gasleft();
+
+        assertGt(mgr.positionOf(sOwner).liquidity, 0, "owner recenter");
+        assertGt(mgr.positionOf(sBot).liquidity, 0, "operator recenter");
+
+        console2.log("== operator + Chainlink oracle recenter (Base fork) ==");
+        console2.log("  owner recenter (oracle bypassed)   ", gOwner);
+        console2.log("  operator recenter (oracle-gated)   ", gOperator);
+        console2.log("  oracle overhead                    ", gOperator > gOwner ? gOperator - gOwner : 0);
+    }
+
+    /// @notice With no oracle set, an operator swap is fail-closed (`OperatorSwapGuardRequired`).
+    function test_operator_swap_withoutOracle_reverts() public {
+        if (!forkActive) return;
+        bytes32 s = bytes32(uint256(1));
+        VolatileLPManager mgr = _freshManagerWithPosition(s);
+        vm.prank(owner);
+        mgr.setOperator(bot, true);
+        // priceOracle unset -> operator cannot self-authorize a swap.
+        vm.prank(bot);
+        vm.expectRevert(BaseLPManager.OperatorSwapGuardRequired.selector);
+        mgr.recenter(_recenterParams(s));
+    }
+
+    /// @notice An operator swap whose realized price deviates beyond tolerance reverts `PriceOutOfBounds`.
+    /// A tight (10 bps) tolerance makes this deterministic on a fork: the 0.3% pool fee alone pushes the
+    /// realized output below the reference-implied bound, standing in for an adverse (sandwichable) swap.
+    function test_operator_swap_outOfBounds_reverts() public {
+        if (!forkActive) return;
+        bytes32 s = bytes32(uint256(1));
+        VolatileLPManager mgr = _freshManagerWithPosition(s);
+        ChainlinkPriceOracle oracle = _chainlinkOracle(10); // 0.10% tolerance
+        vm.startPrank(owner);
+        mgr.setPriceOracle(address(oracle));
+        mgr.setOperator(bot, true);
+        vm.stopPrank();
+        vm.prank(bot);
+        // `PriceOutOfBounds` carries (amountOut, minOut) args — match on the selector only.
+        vm.expectPartialRevert(ChainlinkPriceOracle.PriceOutOfBounds.selector);
+        mgr.recenter(_recenterParams(s));
     }
 
     // ────────── PositionManager / swap helpers ──────────
