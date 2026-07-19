@@ -18,6 +18,7 @@ import {TransientStateLibrary} from "@uniswap/v4-core/src/libraries/TransientSta
 import {SingletonNFTOwned} from "./abstract/SingletonNFTOwned.sol";
 import {V4PositionManager} from "./abstract/V4PositionManager.sol";
 import {IWalletDescriptor} from "./interfaces/IWalletDescriptor.sol";
+import {IPriceOracle} from "./interfaces/IPriceOracle.sol";
 
 /// @title BaseLPManager
 /// @notice Shared abstract core for the clone-deployed, NFT-owned LP managers. Holds the configured
@@ -126,6 +127,12 @@ abstract contract BaseLPManager is SingletonNFTOwned, V4PositionManager {
     /// @notice External on-chain metadata renderer for `tokenURI`. Zero ⇒ `tokenURI` returns "".
     address public positionDescriptor;
 
+    /// @notice External price guard for **operator-triggered** on-chain swaps (both products). Owner
+    /// swaps are never gated by it. Zero ⇒ operators cannot swap at all (fail-closed); when set, an
+    /// operator swap is allowed only if the oracle vouches for its realized price (see {_guardSwap}).
+    /// Owner-settable via {setPriceOracle}.
+    address public priceOracle;
+
     /// @notice Protocol fee recipient. Immutable — set by the protocol at implementation deploy and
     /// shared by every clone; NOT owner-settable, so the fee can't be redirected away from the protocol.
     address public immutable PROTOCOL_TREASURY;
@@ -165,6 +172,9 @@ abstract contract BaseLPManager is SingletonNFTOwned, V4PositionManager {
     /// @param currency The skimmed currency.
     /// @param amount The protocol-fee amount skimmed.
     event ProtocolFeeTaken(Currency indexed currency, uint256 amount);
+    /// @notice Emitted when the operator-swap price oracle is (re)set.
+    /// @param oracle The new {IPriceOracle} address (zero ⇒ operators cannot swap).
+    event PriceOracleSet(address indexed oracle);
 
     // ────────── Errors ──────────
 
@@ -184,6 +194,10 @@ abstract contract BaseLPManager is SingletonNFTOwned, V4PositionManager {
     error UnexpectedStableSpend(Currency c);
     error ZeroAmount();
     error ArrayLengthMismatch();
+    /// @notice An operator-triggered swap ran but no price oracle is configured to vouch for it.
+    error OperatorSwapGuardRequired();
+    /// @notice An operator-triggered swap ran but the oracle had no fresh reference to enforce a bound.
+    error OperatorSwapUnverified(PoolId poolId);
 
     /// @notice Deploy the implementation: set the shared immutables and lock the impl from being
     /// initialized. Clones (the actual managers) are created by a factory, not this constructor.
@@ -272,6 +286,40 @@ abstract contract BaseLPManager is SingletonNFTOwned, V4PositionManager {
     function setPositionDescriptor(address descriptor) external onlyOwnerNFT {
         positionDescriptor = descriptor;
         emit IERC4906.MetadataUpdate(TOKEN_ID);
+    }
+
+    /// @notice Set (or clear, with the zero address) the operator-swap price guard. Owner-only.
+    /// @dev The oracle gates **operator** swaps only (see {_guardSwap}); clearing it (zero) does not
+    /// weaken the owner (who always has full freedom) but disables operator-triggered swaps entirely.
+    /// @param oracle The {IPriceOracle} to enforce on operator swaps; zero ⇒ operators cannot swap.
+    function setPriceOracle(address oracle) external onlyOwnerNFT {
+        priceOracle = oracle;
+        emit PriceOracleSet(oracle);
+    }
+
+    /// @dev Whether the current external caller is the NFT owner (vs a delegated operator). Computed at
+    /// the external entry point and threaded into the unlock payload, since inside `unlockCallback`
+    /// `msg.sender` is the PoolManager.
+    function _isOwnerCall() internal view returns (bool) {
+        return ownerOf(TOKEN_ID) == msg.sender;
+    }
+
+    /// @dev Economic-safety guard for a just-executed swap, asymmetric by caller:
+    /// - **owner** (`byOwner == true`): full freedom — no bound (the owner accepts their own slippage).
+    /// - **operator**: the swap must be vouched for by a trusted price oracle. A missing oracle
+    ///   (`OperatorSwapGuardRequired`) or a stale/absent reference (`check` returns `false` ⇒
+    ///   `OperatorSwapUnverified`) is **rejected** (fail-closed); an out-of-bounds price reverts inside
+    ///   the oracle. This confines an operator to economically-safe swaps: it cannot self-authorize an
+    ///   adverse (sandwichable) swap the way operator-supplied slippage params alone allowed. Shared by
+    ///   both products (Stable `allocate`/`reinvest` pre-swaps, Volatile `allocate`/`recenter`).
+    function _guardSwap(bool byOwner, PoolKey memory key, bool zeroForOne, uint256 amountIn, uint256 amountOut)
+        internal
+        view
+    {
+        if (byOwner) return; // owner: full freedom
+        address o = priceOracle;
+        if (o == address(0)) revert OperatorSwapGuardRequired();
+        if (!IPriceOracle(o).check(key, zeroForOne, amountIn, amountOut)) revert OperatorSwapUnverified(key.toId());
     }
 
     /// @notice On-chain metadata for the singleton ownership token. Delegates to the configured

@@ -84,12 +84,12 @@ The repo implements **NFT-owned Uniswap V4 LP managers** that interact with the 
 `setPositionDescriptor`, `setPriceOracle`). `onlyAuthorized` (owner-or-operator) gates the position ops
 (`allocate`/`allocateFrom`/`reinvest`/`claimFees`; volatile `recenter`) so an operator bot can act fast
 without owner signing every TX. Operators cannot withdraw (no `withdrawTo`/escape hatch). They also cannot
-bleed value through an adverse swap: in `VolatileLPManager`, any **operator-triggered** swap
-(allocate pre-swap / recenter rebalance) is gated by the `priceOracle` and **fail-closed** — it reverts
-unless the oracle vouches for the realized price (audit `2026-07-18` H-VOL-1, task_031). The **NFT owner
-keeps full freedom** — owner swaps bypass the oracle. (`StableLPManager`'s operator pre-swaps are not yet
-oracle-gated — tracked separately; Stable has no operator-callable principal-removal path, so the exposure
-there is idle+fees, not principal.)
+bleed value through an adverse swap: any **operator-triggered** swap in either product (Stable
+`allocate`/`reinvest` pre-swaps, Volatile `allocate`/`recenter`) is gated by the shared `priceOracle`
+(in `BaseLPManager`) and **fail-closed** — it reverts unless the oracle vouches for the realized price
+(audit `2026-07-18` H-VOL-1 / M-VOL-2, task_031 + task_032). The **NFT owner keeps full freedom** — owner
+swaps bypass the oracle. (Stable has no operator-callable principal-removal path, so its operator exposure
+was idle+fees, not principal; Volatile's `recenter` frees principal, hence the HIGH there.)
 
 ### Hook policy
 

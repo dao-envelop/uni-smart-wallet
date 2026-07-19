@@ -7,6 +7,7 @@ import {StableLPManager} from "../src/StableLPManager.sol";
 import {BaseLPManager} from "../src/BaseLPManager.sol";
 import {SingletonNFTOwned} from "../src/abstract/SingletonNFTOwned.sol";
 import {V4PositionManager} from "../src/abstract/V4PositionManager.sol";
+import {MockPriceOracle} from "./helpers/Mocks.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 
@@ -29,8 +30,13 @@ contract StableLPManagerAllocateTest is StableLPTestBase {
     }
 
     function test_allocate_byOperator_succeeds() public {
-        vm.prank(owner);
+        // Operator allocate with pre-swaps requires a vouching price oracle (audit M-VOL-2 fix); wire one.
+        MockPriceOracle oracle = new MockPriceOracle();
+        oracle.setMode(MockPriceOracle.Mode.Pass);
+        vm.startPrank(owner);
         mgr.setOperator(bot, true);
+        mgr.setPriceOracle(address(oracle));
+        vm.stopPrank();
 
         vm.prank(bot);
         mgr.allocate(_allocateParams(FUND));

@@ -140,7 +140,7 @@ contract VolatileLPManagerOperatorSwapGuardTest is Test {
 
     function test_operatorRecenterSwap_noOracle_reverts() public {
         vm.prank(bot);
-        vm.expectRevert(VolatileLPManager.OperatorSwapGuardRequired.selector);
+        vm.expectRevert(BaseLPManager.OperatorSwapGuardRequired.selector);
         mgr.recenter(_drainRecenter());
     }
 
@@ -148,7 +148,7 @@ contract VolatileLPManagerOperatorSwapGuardTest is Test {
         vm.prank(owner);
         mgr.setPriceOracle(address(oracle)); // default mode: NotEnforced (no fresh reference)
         vm.prank(bot);
-        vm.expectRevert(abi.encodeWithSelector(VolatileLPManager.OperatorSwapUnverified.selector, poolId));
+        vm.expectRevert(abi.encodeWithSelector(BaseLPManager.OperatorSwapUnverified.selector, poolId));
         mgr.recenter(_drainRecenter());
     }
 
@@ -176,7 +176,7 @@ contract VolatileLPManagerOperatorSwapGuardTest is Test {
         l.swapAmountIn = 5e18;
         l.swapPriceLimit = TickMath.MIN_SQRT_PRICE + 1;
         vm.prank(bot);
-        vm.expectRevert(VolatileLPManager.OperatorSwapGuardRequired.selector);
+        vm.expectRevert(BaseLPManager.OperatorSwapGuardRequired.selector);
         mgr.allocate(_one(l));
     }
 
