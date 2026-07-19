@@ -53,6 +53,15 @@ contract LPManagerFactoryCreateTest is StableLPTestBase {
         assertEq(deployed, predicted, "deploy matches the initData-bound prediction");
     }
 
+    // ────────── EnvelopV2Deployment event (oracle type queried from the manager) ──────────
+
+    function test_emitsEnvelopV2Deployment_withQueriedOracleType() public {
+        // Topic1 (proxy) unchecked; assert implementation topic + the data (Stable ORACLE_TYPE == 3000).
+        vm.expectEmit(false, true, false, true, address(factory));
+        emit LPManagerFactory.EnvelopV2Deployment(address(0), address(impl), 3000);
+        factory.createManager(address(impl), alice, _init(alice));
+    }
+
     // ────────── non-deterministic create ──────────
 
     function test_nondeterministic_mintsToOwner_distinctAddress() public {

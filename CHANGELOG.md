@@ -32,6 +32,15 @@ All notable changes to this project are documented here. The format is based on
   now `payable` and forward any `msg.value` to the new manager (`ManagerFunded` event); atomic, so a
   reverted creation returns the ETH.
 
+### Changed
+
+- **Factory queries the manager instead of hard-coding; Envelop deployment event** (task_035). The
+  `LPManagerFactory` post-init owner check now reads the singleton token id from the manager
+  (`m.ownerOf(m.TOKEN_ID())`) rather than a local `TOKEN_ID` constant, and the deployment event is now
+  **`EnvelopV2Deployment(address indexed proxy, address indexed implementation, uint256 envelopOracleType)`**
+  (replacing `ManagerCreated`), with `envelopOracleType` queried from the manager's `ORACLE_TYPE()`.
+  **Breaking:** indexers keying on `ManagerCreated` must switch to `EnvelopV2Deployment`.
+
 ### Fixed
 
 - **Reject zero-liquidity adds** — audit `2026-07-18` L-REG-1 (task_034). `allocate`/`reinvest`/`recenter`

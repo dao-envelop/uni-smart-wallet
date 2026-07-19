@@ -6,8 +6,15 @@ pragma solidity ^0.8.20;
 
 import {Clones} from "@openzeppelin/contracts/proxy/Clones.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
-import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import {Address} from "@openzeppelin/contracts/utils/Address.sol";
+
+/// @dev Minimal view surface of a `BaseLPManager` clone that the factory queries post-init (instead of
+/// hard-coding the singleton token id / oracle type): the manager is the single source of truth.
+interface IEnvelopManager {
+    function TOKEN_ID() external view returns (uint256);
+    function ownerOf(uint256 tokenId) external view returns (address);
+    function ORACLE_TYPE() external view returns (uint256);
+}
 
 /// @title LPManagerFactory
 /// @notice Universal factory for the NFT-owned LP managers built on `BaseLPManager`
@@ -31,10 +38,6 @@ import {Address} from "@openzeppelin/contracts/utils/Address.sol";
 contract LPManagerFactory is Ownable {
     using Clones for address;
 
-    /// @dev The singleton ownership token id minted by every manager (mirrors
-    /// `SingletonNFTOwned.TOKEN_ID = 1`); used for the post-init owner check.
-    uint256 private constant TOKEN_ID = 1;
-
     /// @notice Whether an implementation is blessed for cloning (owner-curated).
     mapping(address => bool) public isImplementation;
 
@@ -46,13 +49,11 @@ contract LPManagerFactory is Ownable {
     /// @param allowed True if now clonable, false if revoked.
     event ImplementationSet(address indexed implementation, bool allowed);
 
-    /// @notice Emitted when a new manager clone is created and initialized.
-    /// @param manager The deployed clone address.
+    /// @notice Emitted when a new manager clone is created and initialized (Envelop-ecosystem indexing).
+    /// @param proxy The deployed clone (EIP-1167 proxy) address.
     /// @param implementation The implementation cloned.
-    /// @param owner The manager owner (singleton NFT holder).
-    /// @param nonce The per-owner deployment index used in the CREATE2 salt, or `type(uint256).max` for a
-    /// non-deterministic ({createManagerNondeterministic}) deployment where no nonce/salt applies.
-    event ManagerCreated(address indexed manager, address indexed implementation, address indexed owner, uint256 nonce);
+    /// @param envelopOracleType The manager's Envelop oracle type tag (queried from `ORACLE_TYPE()`).
+    event EnvelopV2Deployment(address indexed proxy, address indexed implementation, uint256 envelopOracleType);
     /// @notice Emitted when a creation call forwards native value to the new manager.
     /// @param manager The funded manager clone.
     /// @param value The amount of native token forwarded.
@@ -107,7 +108,7 @@ contract LPManagerFactory is Ownable {
         bytes32 salt = keccak256(abi.encode(expectedOwner, implementation, n, keccak256(initData)));
         manager = implementation.cloneDeterministic(salt);
 
-        _initAndFund(manager, implementation, expectedOwner, initData, n);
+        _initAndFund(manager, implementation, expectedOwner, initData);
     }
 
     /// @notice Like {createManager} but at a NON-deterministic (CREATE) address. Because the address is
@@ -128,19 +129,16 @@ contract LPManagerFactory is Ownable {
 
         manager = implementation.clone();
 
-        _initAndFund(manager, implementation, expectedOwner, initData, type(uint256).max);
+        _initAndFund(manager, implementation, expectedOwner, initData);
     }
 
     /// @dev Atomically initialize a freshly-cloned `manager` with `initData`, verify the singleton NFT
     /// landed on `expectedOwner`, forward any `msg.value`, and emit. Shared by both create entry points.
-    /// @param nonceOrSentinel The per-owner nonce used in the salt, or `type(uint256).max` (non-deterministic).
-    function _initAndFund(
-        address manager,
-        address implementation,
-        address expectedOwner,
-        bytes calldata initData,
-        uint256 nonceOrSentinel
-    ) internal {
+    /// The singleton token id and oracle type are queried from the manager (the source of truth), not
+    /// hard-coded here.
+    function _initAndFund(address manager, address implementation, address expectedOwner, bytes calldata initData)
+        internal
+    {
         (bool ok, bytes memory ret) = manager.call(initData);
         if (!ok) {
             // Bubble the product's own revert (e.g. `HookNotAllowed`, `NoPools`) for a transparent
@@ -152,9 +150,11 @@ contract LPManagerFactory is Ownable {
             }
         }
 
-        // Post-init guard: a successful-but-non-initializing call would leave a hijackable clone at a
-        // known address, and a wrong-owner initData must not pass silently.
-        address actual = IERC721(manager).ownerOf(TOKEN_ID);
+        // Post-init guard: query the manager for its singleton token id and verify ownership landed on
+        // `expectedOwner`. A successful-but-non-initializing call (nothing minted) makes `ownerOf` revert;
+        // a wrong-owner initData reverts `OwnerMismatch`.
+        IEnvelopManager m = IEnvelopManager(manager);
+        address actual = m.ownerOf(m.TOKEN_ID());
         if (actual != expectedOwner) revert OwnerMismatch(expectedOwner, actual);
 
         // Forward any native value to the (validated) manager's `receive()`. Atomic: a failed send reverts
@@ -164,7 +164,7 @@ contract LPManagerFactory is Ownable {
             emit ManagerFunded(manager, msg.value);
         }
 
-        emit ManagerCreated(manager, implementation, expectedOwner, nonceOrSentinel);
+        emit EnvelopV2Deployment(manager, implementation, m.ORACLE_TYPE());
     }
 
     /// @notice The address `createManager` will produce for `(implementation, owner_, nonce_, initData)`.
