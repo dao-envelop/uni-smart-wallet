@@ -34,6 +34,11 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
+- **Envelop-protocol-v2 event-model compatibility** (task_036). `EnvelopV2OracleType` is now emitted in the
+  implementation **constructor** (per-impl declaration, like envelop's `WNFTV2Envelop721`) instead of per-clone
+  in `initialize`. Added the `SmartWallet` ether-tracking events — `EtherReceived` (in `receive()`) and
+  `EtherBalanceChanged` (via a `fixEtherBalance` modifier on every value-moving op: `withdrawTo`,
+  `executeEncodedTxBatch`, and the Stable/Volatile allocate/reinvest/recenter/claimFees paths).
 - **Factory queries the manager instead of hard-coding; Envelop deployment event** (task_035). The
   `LPManagerFactory` post-init owner check now reads the singleton token id from the manager
   (`m.ownerOf(m.TOKEN_ID())`) rather than a local `TOKEN_ID` constant, and the deployment event is now

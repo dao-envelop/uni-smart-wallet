@@ -112,7 +112,7 @@ contract StableLPManager is BaseLPManager {
     /// @notice Auto mode: deploy liquidity per `legs`, drawing from whatever managed stables sit on
     /// the manager's balance; residuals net back to the manager. Owner-or-operator (off-chain sizing).
     /// @param legs Per-pool actions (optional pre-swap + desired add amounts + slippage floor).
-    function allocate(AllocLeg[] calldata legs) external onlyAuthorized nonReentrant {
+    function allocate(AllocLeg[] calldata legs) external onlyAuthorized nonReentrant fixEtherBalance {
         _validateLegs(legs);
         POOL_MANAGER.unlock(abi.encode(OP_ALLOCATE, abi.encode(_isOwnerCall(), legs)));
         emit Allocated(legs.length);
@@ -130,6 +130,7 @@ contract StableLPManager is BaseLPManager {
         external
         onlyAuthorized
         nonReentrant
+        fixEtherBalance
     {
         if (!isManagedStable[stable]) revert UnmanagedStable(stable);
         if (amount == 0) revert ZeroAmount();
@@ -236,7 +237,7 @@ contract StableLPManager is BaseLPManager {
     /// @notice Collect accrued fees on `salt` to the manager (no principal change). The protocol
     /// fee is skimmed first; the remainder lands on the manager. Owner-or-operator.
     /// @param salt The position key (`== poolId`).
-    function claimFees(bytes32 salt) external onlyAuthorized nonReentrant {
+    function claimFees(bytes32 salt) external onlyAuthorized nonReentrant fixEtherBalance {
         _pokeFromConfig(salt);
         emit IERC4906.MetadataUpdate(TOKEN_ID);
     }
@@ -261,7 +262,7 @@ contract StableLPManager is BaseLPManager {
     /// Owner-or-operator.
     /// @param leg The pool action: which pool (`leg.poolId`), optional balancing pre-swap, and the
     /// `minLiquidity` floor. The add is sized from the realized fee deltas, not `amount{0,1}Desired`.
-    function reinvest(AllocLeg calldata leg) external onlyAuthorized nonReentrant {
+    function reinvest(AllocLeg calldata leg) external onlyAuthorized nonReentrant fixEtherBalance {
         _indexOf(leg.poolId); // reverts UnknownPool if not configured
         POOL_MANAGER.unlock(abi.encode(OP_REINVEST, abi.encode(_isOwnerCall(), leg)));
         emit IERC4906.MetadataUpdate(TOKEN_ID);

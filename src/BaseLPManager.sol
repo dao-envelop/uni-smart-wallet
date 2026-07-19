@@ -210,6 +210,10 @@ abstract contract BaseLPManager is SingletonNFTOwned, V4PositionManager {
         if (treasury_ == address(0)) revert ZeroTreasury();
         PROTOCOL_TREASURY = treasury_;
         _initialized = true;
+        // Envelop oracle-type is a property of the implementation (logic), so it is declared once here at
+        // impl deploy — like envelop's `WNFTV2Envelop721` — not per clone in `initialize`. `ORACLE_TYPE()`
+        // / `_productName()` are `pure` overrides, dispatched to the concrete product from this base ctor.
+        emit EnvelopV2OracleType(ORACLE_TYPE(), _productName());
     }
 
     // ────────── Init scaffolding (used by each product's `initialize`) ──────────
@@ -246,7 +250,6 @@ abstract contract BaseLPManager is SingletonNFTOwned, V4PositionManager {
         if (descriptor_ != address(0)) positionDescriptor = descriptor_;
         _mintSingleton(owner_);
         emit IERC4906.MetadataUpdate(TOKEN_ID);
-        emit EnvelopV2OracleType(ORACLE_TYPE(), _productName());
         emit EnvelopWrappedV2(owner_, TOKEN_ID, 0x0000, "");
         emit Initialized(owner_, address(POOL_MANAGER), poolCount_);
     }
@@ -333,9 +336,44 @@ abstract contract BaseLPManager is SingletonNFTOwned, V4PositionManager {
         return IWalletDescriptor(descriptor).tokenURI(address(this), id);
     }
 
-    /// @notice Accept native transfers (e.g. gas refunds / dust, or the native side of an ETH pool).
-    /// @dev No NFT/ERC1155 custody.
-    receive() external payable {}
+    // ────────── Ether-balance tracking (envelop `SmartWallet` event model) ──────────
+
+    /// @notice Emitted when a value-moving op changes the manager's native balance (envelop-compatible).
+    /// @param balanceBefore Native balance before the op.
+    /// @param balanceAfter Native balance after the op.
+    /// @param txValue The call's `msg.value`.
+    /// @param txSender The external caller.
+    event EtherBalanceChanged(
+        uint256 indexed balanceBefore, uint256 indexed balanceAfter, uint256 indexed txValue, address txSender
+    );
+    /// @notice Emitted when the manager receives native via `receive()` (envelop-compatible).
+    /// @param balance The manager's native balance after receipt.
+    /// @param txValue The received amount (`msg.value`).
+    /// @param txSender The sender of the native transfer.
+    event EtherReceived(uint256 indexed balance, uint256 indexed txValue, address indexed txSender);
+
+    /// @dev Snapshot the native balance around a value-moving op and emit {EtherBalanceChanged} if it moved.
+    modifier fixEtherBalance() {
+        uint256 bb = address(this).balance;
+        _;
+        _fixEtherChanges(bb, address(this).balance);
+    }
+
+    /// @notice Accept native transfers (e.g. gas refunds / dust, the native side of an ETH pool, or the
+    /// factory's creation funding). Emits {EtherReceived}. No NFT/ERC1155 custody.
+    receive() external payable virtual {
+        emit EtherReceived(address(this).balance, msg.value, msg.sender);
+    }
+
+    /// @dev Emit {EtherBalanceChanged} only when the balance actually moved.
+    function _fixEtherChanges(uint256 bb, uint256 ba) internal virtual {
+        if (bb != ba) _emitWrapper(bb, ba);
+    }
+
+    /// @dev Split out so callers need no `payable` modifier (reads `msg.value`/`msg.sender`).
+    function _emitWrapper(uint256 bb, uint256 ba) internal {
+        emit EtherBalanceChanged(bb, ba, msg.value, msg.sender);
+    }
 
     // ────────── Unlock dispatch ──────────
 
@@ -368,7 +406,7 @@ abstract contract BaseLPManager is SingletonNFTOwned, V4PositionManager {
     /// `take` (never landing on the manager's or owner's balance). Pull the named positions (by salt),
     /// convert freed legs via `p.swaps`, then take the requested amount. Owner-only — the drain primitive.
     /// @param p Withdraw plan: recipient, requested currency + amount, salt-keyed pulls, conversion swaps.
-    function withdrawTo(WithdrawToParams calldata p) external onlyOwnerNFT nonReentrant {
+    function withdrawTo(WithdrawToParams calldata p) external onlyOwnerNFT nonReentrant fixEtherBalance {
         if (p.recipient == address(0)) revert RecipientZero();
         if (!isManagedStable[p.requestedCurrency]) revert UnmanagedStable(p.requestedCurrency);
         if (p.amount == 0) revert ZeroAmount();
@@ -479,6 +517,7 @@ abstract contract BaseLPManager is SingletonNFTOwned, V4PositionManager {
     function executeEncodedTxBatch(address[] calldata targets, uint256[] calldata values, bytes[] calldata datas)
         external
         onlyOwnerNFT
+        fixEtherBalance
         returns (bytes[] memory results)
     {
         if (targets.length != values.length || targets.length != datas.length) {
