@@ -158,12 +158,12 @@ contract DeployConfigHarness is DeployStableLP {
         return _readFlags(json, base);
     }
 
-    function readOracleBps(string memory json, string memory base) external view returns (uint16) {
-        return _readOracleBps(json, base);
+    function readOracle(string memory json, string memory base) external view returns (OracleParams memory) {
+        return _readOracle(json, base);
     }
 }
 
-/// @notice JSON parsing of the `deploy` toggle + `oracleMaxDeviationBps`.
+/// @notice JSON parsing of the `deploy` toggle + oracle config.
 contract DeployStableLPConfigTest is Test {
     DeployConfigHarness internal h;
 
@@ -188,9 +188,19 @@ contract DeployStableLPConfigTest is Test {
         assertFalse(f.feeRedeemer || f.factory || f.lens || f.descriptor, "everything else off");
     }
 
-    function test_oracleBps_readAndDefault() public view {
-        assertEq(uint256(h.readOracleBps('{"oracleMaxDeviationBps":250}', "")), 250, "explicit bps");
-        assertEq(uint256(h.readOracleBps("{}", "")), 100, "default 1%");
+    function test_oracle_readAndDefault() public view {
+        DeployStableLP.OracleParams memory o = h.readOracle(
+            '{"oracleMaxDeviationBps":250,"oracleSequencerFeed":"0x00000000000000000000000000000000000000Fe","oracleGracePeriod":1800}',
+            ""
+        );
+        assertEq(uint256(o.maxDeviationBps), 250, "explicit bps");
+        assertEq(o.sequencerFeed, address(0xFE), "explicit sequencer feed");
+        assertEq(uint256(o.gracePeriod), 1800, "explicit grace");
+
+        DeployStableLP.OracleParams memory d = h.readOracle("{}", "");
+        assertEq(uint256(d.maxDeviationBps), 100, "default 1%");
+        assertEq(d.sequencerFeed, address(0), "no sequencer feed by default");
+        assertEq(uint256(d.gracePeriod), 3600, "default grace 1h");
     }
 }
 
@@ -228,10 +238,20 @@ contract DeployStableLPSubsetTest is Test {
 
     function _noExisting() internal pure returns (DeployStableLP.Existing memory e) {}
 
+    function _oracle(uint16 bps) internal pure returns (DeployStableLP.OracleParams memory) {
+        return DeployStableLP.OracleParams({maxDeviationBps: bps, sequencerFeed: address(0), gracePeriod: 3600});
+    }
+
     /// @notice The immediate need: deploy ONLY the oracle + the two manager impls, treasury from fallback.
     function test_oracleAndManagersOnly() public {
         DeployStableLP.Deployment memory d = deployer.deployComponents(
-            pm, admin, _flags(false, true, true, false, false, false, true), treasury, _noExisting(), admin, 250
+            pm,
+            admin,
+            _flags(false, true, true, false, false, false, true),
+            treasury,
+            _noExisting(),
+            admin,
+            _oracle(250)
         );
 
         // Only the requested components exist.
@@ -255,7 +275,13 @@ contract DeployStableLPSubsetTest is Test {
     /// @notice A fresh FeeRedeemer this run overrides any fallback treasury for the impls.
     function test_freshFeeRedeemerOverridesFallbackTreasury() public {
         DeployStableLP.Deployment memory d = deployer.deployComponents(
-            pm, admin, _flags(true, true, false, false, false, false, false), treasury, _noExisting(), admin, 100
+            pm,
+            admin,
+            _flags(true, true, false, false, false, false, false),
+            treasury,
+            _noExisting(),
+            admin,
+            _oracle(100)
         );
         assertEq(d.impl.PROTOCOL_TREASURY(), address(d.feeRedeemer), "treasury == fresh feeRedeemer, not fallback");
     }
@@ -264,7 +290,13 @@ contract DeployStableLPSubsetTest is Test {
     function test_treasuryMissing_reverts() public {
         vm.expectRevert(abi.encodeWithSelector(DeployStableLP.TreasuryMissing.selector, block.chainid));
         deployer.deployComponents(
-            pm, admin, _flags(false, true, false, false, false, false, false), address(0), _noExisting(), admin, 100
+            pm,
+            admin,
+            _flags(false, true, false, false, false, false, false),
+            address(0),
+            _noExisting(),
+            admin,
+            _oracle(100)
         );
     }
 
@@ -276,7 +308,7 @@ contract DeployStableLPSubsetTest is Test {
         e.volatileImpl = makeAddr("existingVolatile");
 
         DeployStableLP.Deployment memory d = deployer.deployComponents(
-            pm, admin, _flags(false, false, false, true, false, false, false), treasury, e, admin, 100
+            pm, admin, _flags(false, false, false, true, false, false, false), treasury, e, admin, _oracle(100)
         );
         assertTrue(d.factory.isImplementation(e.impl), "existing stable allowlisted");
         assertTrue(d.factory.isImplementation(e.volatileImpl), "existing volatile allowlisted");
@@ -294,7 +326,13 @@ contract DeployStableLPSubsetTest is Test {
         e.factory = address(factory);
 
         DeployStableLP.Deployment memory d = deployer.deployComponents(
-            pm, admin, _flags(false, true, true, false, false, false, false), treasury, e, address(deployer), 100
+            pm,
+            admin,
+            _flags(false, true, true, false, false, false, false),
+            treasury,
+            e,
+            address(deployer),
+            _oracle(100)
         );
         assertTrue(factory.isImplementation(address(d.impl)), "fresh stable auto-allowlisted");
         assertTrue(factory.isImplementation(address(d.volatileImpl)), "fresh volatile auto-allowlisted");
@@ -308,7 +346,7 @@ contract DeployStableLPSubsetTest is Test {
         e.factory = address(factory);
 
         DeployStableLP.Deployment memory d = deployer.deployComponents(
-            pm, admin, _flags(false, true, false, false, false, false, false), treasury, e, address(this), 100
+            pm, admin, _flags(false, true, false, false, false, false, false), treasury, e, address(this), _oracle(100)
         );
         assertFalse(factory.isImplementation(address(d.impl)), "not allowlisted (broadcaster != owner)");
     }

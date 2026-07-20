@@ -394,7 +394,7 @@ contract GasCompareVolatileForkTest is Test {
     /// @dev Deploy the real {ChainlinkPriceOracle} wired to the live Base ETH/USD + USDC/USD feeds. A
     /// large heartbeat keeps the fork-block answers "fresh" so `check` returns `enforced = true`.
     function _chainlinkOracle(uint16 maxDevBps) internal returns (ChainlinkPriceOracle oracle) {
-        oracle = new ChainlinkPriceOracle(address(this), maxDevBps);
+        oracle = new ChainlinkPriceOracle(address(this), maxDevBps, address(0), 3600);
         oracle.setFeed(Currency.wrap(WETH), ETH_USD_FEED, 365 days, 18);
         oracle.setFeed(Currency.wrap(USDC), USDC_USD_FEED, 365 days, 6);
     }
