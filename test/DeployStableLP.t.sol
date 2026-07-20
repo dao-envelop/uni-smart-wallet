@@ -8,6 +8,7 @@ import {DeployStableLP} from "../script/DeployStableLP.s.sol";
 import {CreateManager} from "../script/CreateManager.s.sol";
 import {StableLPManager} from "../src/StableLPManager.sol";
 import {BaseLPManager} from "../src/BaseLPManager.sol";
+import {LPManagerFactory} from "../src/LPManagerFactory.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 
 /// Exposes CreateManager's internal config parsing for assertions (rebuilds the Stable InitParams the
@@ -148,5 +149,167 @@ contract DeployStableLPTest is Test {
         );
         vm.expectRevert(abi.encodeWithSelector(CreateManager.NameTooLong.selector, 38));
         h.parse(json);
+    }
+}
+
+/// @dev Exposes the internal config parsing so tests can feed inline JSON without touching chain_params.
+contract DeployConfigHarness is DeployStableLP {
+    function readFlags(string memory json, string memory base) external view returns (Flags memory) {
+        return _readFlags(json, base);
+    }
+
+    function readOracleBps(string memory json, string memory base) external view returns (uint16) {
+        return _readOracleBps(json, base);
+    }
+}
+
+/// @notice JSON parsing of the `deploy` toggle + `oracleMaxDeviationBps`.
+contract DeployStableLPConfigTest is Test {
+    DeployConfigHarness internal h;
+
+    function setUp() public {
+        h = new DeployConfigHarness();
+    }
+
+    /// @notice No `deploy` object ⇒ the legacy full set (oracle off) for backwards compatibility.
+    function test_absentDeploy_defaultsToLegacyFullSet() public view {
+        DeployStableLP.Flags memory f = h.readFlags('{"poolManager":"0x0000000000000000000000000000000000000001"}', "");
+        assertTrue(
+            f.feeRedeemer && f.stableImpl && f.volatileImpl && f.factory && f.lens && f.descriptor, "full set on"
+        );
+        assertFalse(f.oracle, "oracle stays off unless explicitly enabled");
+    }
+
+    /// @notice A `deploy` object enables exactly its true flags; omitted keys default to false.
+    function test_subset_onlyOracleAndManagers() public view {
+        DeployStableLP.Flags memory f =
+            h.readFlags('{"deploy":{"stableImpl":true,"volatileImpl":true,"oracle":true}}', "");
+        assertTrue(f.stableImpl && f.volatileImpl && f.oracle, "requested on");
+        assertFalse(f.feeRedeemer || f.factory || f.lens || f.descriptor, "everything else off");
+    }
+
+    function test_oracleBps_readAndDefault() public view {
+        assertEq(uint256(h.readOracleBps('{"oracleMaxDeviationBps":250}', "")), 250, "explicit bps");
+        assertEq(uint256(h.readOracleBps("{}", "")), 100, "default 1%");
+    }
+}
+
+/// @notice Component-subset deploys via `deployComponents` (the flag-driven path behind `run()`), covering
+/// the "only oracle + managers" case, the treasury fallback, and factory allowlisting.
+contract DeployStableLPSubsetTest is Test {
+    DeployStableLP internal deployer;
+    IPoolManager internal pm = IPoolManager(address(0xBEEF)); // not called by constructors
+    address internal admin = makeAddr("admin");
+    address internal treasury = makeAddr("treasury");
+
+    function setUp() public {
+        deployer = new DeployStableLP();
+    }
+
+    function _flags(
+        bool feeRedeemer,
+        bool stableImpl,
+        bool volatileImpl,
+        bool factory,
+        bool lens,
+        bool descriptor,
+        bool oracle
+    ) internal pure returns (DeployStableLP.Flags memory) {
+        return DeployStableLP.Flags({
+            feeRedeemer: feeRedeemer,
+            stableImpl: stableImpl,
+            volatileImpl: volatileImpl,
+            factory: factory,
+            lens: lens,
+            descriptor: descriptor,
+            oracle: oracle
+        });
+    }
+
+    function _noExisting() internal pure returns (DeployStableLP.Existing memory e) {}
+
+    /// @notice The immediate need: deploy ONLY the oracle + the two manager impls, treasury from fallback.
+    function test_oracleAndManagersOnly() public {
+        DeployStableLP.Deployment memory d = deployer.deployComponents(
+            pm, admin, _flags(false, true, true, false, false, false, true), treasury, _noExisting(), admin, 250
+        );
+
+        // Only the requested components exist.
+        assertEq(address(d.feeRedeemer), address(0), "no feeRedeemer");
+        assertEq(address(d.factory), address(0), "no factory");
+        assertEq(address(d.lens), address(0), "no lens");
+        assertEq(address(d.descriptor), address(0), "no descriptor");
+
+        // Impls built against the fallback treasury.
+        assertTrue(address(d.impl) != address(0), "stable impl");
+        assertTrue(address(d.volatileImpl) != address(0), "volatile impl");
+        assertEq(d.impl.PROTOCOL_TREASURY(), treasury, "stable treasury == fallback");
+        assertEq(d.volatileImpl.PROTOCOL_TREASURY(), treasury, "volatile treasury == fallback");
+
+        // Oracle owned by admin with the configured tolerance.
+        assertTrue(address(d.oracle) != address(0), "oracle");
+        assertEq(d.oracle.owner(), admin, "oracle owner == admin");
+        assertEq(uint256(d.oracle.maxDeviationBps()), 250, "oracle tolerance");
+    }
+
+    /// @notice A fresh FeeRedeemer this run overrides any fallback treasury for the impls.
+    function test_freshFeeRedeemerOverridesFallbackTreasury() public {
+        DeployStableLP.Deployment memory d = deployer.deployComponents(
+            pm, admin, _flags(true, true, false, false, false, false, false), treasury, _noExisting(), admin, 100
+        );
+        assertEq(d.impl.PROTOCOL_TREASURY(), address(d.feeRedeemer), "treasury == fresh feeRedeemer, not fallback");
+    }
+
+    /// @notice Building an impl with neither a fresh nor a fallback treasury must revert.
+    function test_treasuryMissing_reverts() public {
+        vm.expectRevert(abi.encodeWithSelector(DeployStableLP.TreasuryMissing.selector, block.chainid));
+        deployer.deployComponents(
+            pm, admin, _flags(false, true, false, false, false, false, false), address(0), _noExisting(), admin, 100
+        );
+    }
+
+    /// @notice A factory deployed this run allowlists impls carried from the existing deployments file.
+    function test_factoryAllowlistsExistingImpls() public {
+        DeployStableLP.Existing memory e = _noExisting();
+        e.exists = true;
+        e.impl = makeAddr("existingStable");
+        e.volatileImpl = makeAddr("existingVolatile");
+
+        DeployStableLP.Deployment memory d = deployer.deployComponents(
+            pm, admin, _flags(false, false, false, true, false, false, false), treasury, e, admin, 100
+        );
+        assertTrue(d.factory.isImplementation(e.impl), "existing stable allowlisted");
+        assertTrue(d.factory.isImplementation(e.volatileImpl), "existing volatile allowlisted");
+    }
+
+    /// @notice When the factory is NOT redeployed, fresh impls are auto-allowlisted on the existing factory
+    /// the broadcaster owns.
+    function test_autoAllowlistFreshImplsOnExistingFactory() public {
+        // Under `forge script --broadcast` the `setImplementation` tx is sent from the broadcaster EOA;
+        // in this direct unit call the actual caller is the script contract (`deployer`), so the factory
+        // must be owned by `deployer` and the broadcaster arg set to it for the ownership guard to pass.
+        LPManagerFactory factory = new LPManagerFactory(address(deployer), new address[](0));
+        DeployStableLP.Existing memory e = _noExisting();
+        e.exists = true;
+        e.factory = address(factory);
+
+        DeployStableLP.Deployment memory d = deployer.deployComponents(
+            pm, admin, _flags(false, true, true, false, false, false, false), treasury, e, address(deployer), 100
+        );
+        assertTrue(factory.isImplementation(address(d.impl)), "fresh stable auto-allowlisted");
+        assertTrue(factory.isImplementation(address(d.volatileImpl)), "fresh volatile auto-allowlisted");
+    }
+
+    /// @notice If the broadcaster is not the factory owner, auto-allowlist is skipped (no revert).
+    function test_autoAllowlistSkippedWhenNotOwner() public {
+        LPManagerFactory factory = new LPManagerFactory(makeAddr("someoneElse"), new address[](0));
+        DeployStableLP.Existing memory e = _noExisting();
+        e.exists = true;
+        e.factory = address(factory);
+
+        DeployStableLP.Deployment memory d = deployer.deployComponents(
+            pm, admin, _flags(false, true, false, false, false, false, false), treasury, e, address(this), 100
+        );
+        assertFalse(factory.isImplementation(address(d.impl)), "not allowlisted (broadcaster != owner)");
     }
 }

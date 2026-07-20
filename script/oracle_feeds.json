@@ -1,0 +1,92 @@
+{
+  "_comment": "Chainlink USD price-feed aggregator proxies for the ChainlinkPriceOracle (src/oracle/ChainlinkPriceOracle.sol). Only the 5 chains with an existing deployment are covered. Per feed: `aggregator` = the AggregatorV3Interface proxy to pass to setFeed; `feedDecimals` = the feed's own decimals() (informational — the contract reads it on-chain); `heartbeat` = the feed's max staleness in seconds as published in the official Chainlink reference-data-directory. NOTE: setFeed(currency, aggregator, heartbeat, tokenDecimals) is keyed by the managed TOKEN address (per pool config), not by symbol — map each pool token to its asset symbol here, and pass the TOKEN's own decimals as tokenDecimals. Verified from Chainlink reference-data-directory JSON (2026-07). See script/README.md.",
+
+  "1": {
+    "_name": "mainnet",
+    "BTC": { "pair": "BTC / USD", "aggregator": "0xF4030086522a5bEEa4988F8cA5B36dbC97BeE88c", "feedDecimals": 8, "heartbeat": 3600 },
+    "ETH": { "pair": "ETH / USD", "aggregator": "0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419", "feedDecimals": 8, "heartbeat": 3600 },
+    "USDC": { "pair": "USDC / USD", "aggregator": "0x8fFfFfd4AfB6115b954Bd326cbe7B4BA576818f6", "feedDecimals": 8, "heartbeat": 82800 },
+    "USDT": { "pair": "USDT / USD", "aggregator": "0x3E7d1eAB13ad0104d2750B8863b489D65364e32D", "feedDecimals": 8, "heartbeat": 86400 },
+    "DAI": { "pair": "DAI / USD", "aggregator": "0xAed0c38402a5d19df6E4c03F4E2DceD6e29c1ee9", "feedDecimals": 8, "heartbeat": 3600 },
+    "cbBTC": { "pair": "cbBTC / USD", "aggregator": "0x2665701293fCbEB223D11A08D826563EDcCE423A", "feedDecimals": 8, "heartbeat": 86400 },
+    "wstETH": { "pair": "wstETH / USD (Calculated)", "aggregator": "0x164b276057258d81941e97B0a900D4C7B358bCe0", "feedDecimals": 8, "heartbeat": 86400 },
+    "LINK": { "pair": "LINK / USD", "aggregator": "0x2c1d072e956AFFC0D435Cb7AC38EF18d24d9127c", "feedDecimals": 8, "heartbeat": 3600 },
+    "UNI": { "pair": "UNI / USD", "aggregator": "0x553303d460EE0afB37EdFf9bE42922D8FF63220e", "feedDecimals": 8, "heartbeat": 3600 },
+    "AAVE": { "pair": "AAVE / USD", "aggregator": "0x547a514d5e3769680Ce22B2361c10Ea13619e8a9", "feedDecimals": 8, "heartbeat": 3600 },
+    "SOL": { "pair": "SOL / USD", "aggregator": "0x4ffC43a60e009B551865A93d232E33Fce9f01507", "feedDecimals": 8, "heartbeat": 86400 },
+    "BNB": { "pair": "BNB / USD", "aggregator": "0x14e613AC84a31f709eadbdF89C6CC390fDc9540A", "feedDecimals": 8, "heartbeat": 86400 },
+    "AVAX": { "pair": "AVAX / USD", "aggregator": "0xFF3EEb22B5E3dE6e705b44749C2559d704923FD7", "feedDecimals": 8, "heartbeat": 86400 },
+    "POL": { "pair": "POL / USD (on-chain name MATIC / USD)", "aggregator": "0x7bAC85A8a13A4BcD8abb3eB7d6b4d632c5a57676", "feedDecimals": 8, "heartbeat": 86400 },
+    "ARB": { "pair": "ARB / USD", "aggregator": "0x31697852a68433DbCc2Ff612c516d69E3D9bd08F", "feedDecimals": 8, "heartbeat": 86400 },
+    "CRV": { "pair": "CRV / USD", "aggregator": "0xCd627aA160A6fA45Eb793D19Ef54f5062F20f33f", "feedDecimals": 8, "heartbeat": 86400 },
+    "MKR": { "pair": "MKR / USD", "aggregator": "0xec1D1B3b0443256cc3860e24a46F108e699484Aa", "feedDecimals": 8, "heartbeat": 3600 }
+  },
+
+  "8453": {
+    "_name": "base",
+    "BTC": { "pair": "BTC / USD", "aggregator": "0x64c911996D3c6aC71f9b455B1E8E7266BcbD848F", "feedDecimals": 8, "heartbeat": 1200 },
+    "ETH": { "pair": "ETH / USD", "aggregator": "0x71041dddad3595F9CEd3DcCFBe3D1F4b0a16Bb70", "feedDecimals": 8, "heartbeat": 1200 },
+    "USDC": { "pair": "USDC / USD", "aggregator": "0x7e860098F58bBFC8648a4311b374B1D669a2bc6B", "feedDecimals": 8, "heartbeat": 86400 },
+    "USDT": { "pair": "USDT / USD", "aggregator": "0xf19d560eB8d2ADf07BD6D13ed03e1D11215721F9", "feedDecimals": 8, "heartbeat": 86400 },
+    "DAI": { "pair": "DAI / USD", "aggregator": "0x591e79239a7d679378eC8c847e5038150364C78F", "feedDecimals": 8, "heartbeat": 86400 },
+    "WBTC": { "pair": "WBTC / USD", "aggregator": "0xCCADC697c55bbB68dc5bCdf8d3CBe83CdD4E071E", "feedDecimals": 8, "heartbeat": 1200 },
+    "cbBTC": { "pair": "cbBTC / USD", "aggregator": "0x07DA0E54543a844a80ABE69c8A12F22B3aA59f9D", "feedDecimals": 8, "heartbeat": 1200 },
+    "LINK": { "pair": "LINK / USD", "aggregator": "0x17CAb8FE31E32f08326e5E27412894e49B0f9D65", "feedDecimals": 8, "heartbeat": 86400 },
+    "AAVE": { "pair": "AAVE / USD", "aggregator": "0x3d6774EF702A10b20FCa8Ed40FC022f7E4938e07", "feedDecimals": 8, "heartbeat": 86400 },
+    "SOL": { "pair": "SOL / USD", "aggregator": "0x975043adBb80fc32276CbF9Bbcfd4A601a12462D", "feedDecimals": 8, "heartbeat": 86400 },
+    "BNB": { "pair": "BNB / USD", "aggregator": "0x4b7836916781CAAfbb7Bd1E5FDd20ED544B453b1", "feedDecimals": 8, "heartbeat": 86400 },
+    "XRP": { "pair": "XRP / USD", "aggregator": "0x9f0C1dD78C4CBdF5b9cf923a549A201EdC676D34", "feedDecimals": 8, "heartbeat": 86400 },
+    "ADA": { "pair": "ADA / USD", "aggregator": "0x34cD971a092d5411bD69C10a5F0A7EEF72C69041", "feedDecimals": 8, "heartbeat": 86400 },
+    "AVAX": { "pair": "AVAX / USD", "aggregator": "0xE70f2D34Fd04046aaEC26a198A35dD8F2dF5cd92", "feedDecimals": 8, "heartbeat": 86400 },
+    "DOGE": { "pair": "DOGE / USD", "aggregator": "0x8422f3d3CAFf15Ca682939310d6A5e619AE08e57", "feedDecimals": 8, "heartbeat": 86400 },
+    "LTC": { "pair": "LTC / USD", "aggregator": "0x206a34e47093125fbf4C75b7c7E88b84c6A77a69", "feedDecimals": 8, "heartbeat": 86400 },
+    "POL": { "pair": "POL / USD", "aggregator": "0x5E988c11a4f92155C30D9fb69Ed75597f712B113", "feedDecimals": 8, "heartbeat": 86400 },
+    "OP": { "pair": "OP / USD", "aggregator": "0x3E3A6bD129A63564FE7abde85FA67c3950569060", "feedDecimals": 8, "heartbeat": 86400 }
+  },
+
+  "42161": {
+    "_name": "arbitrum-one",
+    "BTC": { "pair": "BTC / USD", "aggregator": "0x6ce185860a4963106506C203335A2910413708e9", "feedDecimals": 8, "heartbeat": 1755 },
+    "ETH": { "pair": "ETH / USD", "aggregator": "0x639Fe6ab55C921f74e7fac1ee960C0B6293ba612", "feedDecimals": 8, "heartbeat": 1755 },
+    "USDC": { "pair": "USDC / USD", "aggregator": "0x50834F3163758fcC1Df9973b6e91f0F0F0434aD3", "feedDecimals": 8, "heartbeat": 255 },
+    "USDT": { "pair": "USDT / USD", "aggregator": "0x3f3f5dF88dC9F13eac63DF89EC16ef6e7E25DdE7", "feedDecimals": 8, "heartbeat": 255 },
+    "DAI": { "pair": "DAI / USD", "aggregator": "0xc5C8E77B397E531B8EC06BFb0048328B30E9eCfB", "feedDecimals": 8, "heartbeat": 86400 },
+    "WBTC": { "pair": "WBTC / USD", "aggregator": "0xd0C7101eACbB49F3deCcCc166d238410D6D46d57", "feedDecimals": 8, "heartbeat": 86400 },
+    "LINK": { "pair": "LINK / USD", "aggregator": "0x86E53CF1B870786351Da77A57575e79CB55812CB", "feedDecimals": 8, "heartbeat": 1755 },
+    "UNI": { "pair": "UNI / USD", "aggregator": "0x9C917083fDb403ab5ADbEC26Ee294f6EcAda2720", "feedDecimals": 8, "heartbeat": 86400 },
+    "AAVE": { "pair": "AAVE / USD", "aggregator": "0xaD1d5344AaDE45F43E596773Bcc4c423EAbdD034", "feedDecimals": 8, "heartbeat": 86400 },
+    "SOL": { "pair": "SOL / USD", "aggregator": "0x24ceA4b8ce57cdA5058b924B9B9987992450590c", "feedDecimals": 8, "heartbeat": 86400 },
+    "BNB": { "pair": "BNB / USD", "aggregator": "0x6970460aabF80C5BE983C6b74e5D06dEDCA95D4A", "feedDecimals": 8, "heartbeat": 86400 },
+    "XRP": { "pair": "XRP / USD", "aggregator": "0xB4AD57B52aB9141de9926a3e0C8dc6264c2ef205", "feedDecimals": 8, "heartbeat": 86400 },
+    "ADA": { "pair": "ADA / USD", "aggregator": "0xD9f615A9b820225edbA2d821c4A696a0924051c6", "feedDecimals": 8, "heartbeat": 86400 },
+    "AVAX": { "pair": "AVAX / USD", "aggregator": "0x8bf61728eeDCE2F32c456454d87B5d6eD6150208", "feedDecimals": 8, "heartbeat": 86400 },
+    "DOGE": { "pair": "DOGE / USD", "aggregator": "0x9A7FB1b3950837a8D9b40517626E11D4127C098C", "feedDecimals": 8, "heartbeat": 86400 },
+    "LTC": { "pair": "LTC / USD", "aggregator": "0x5698690a7B7B84F6aa985ef7690A8A7288FBc9c8", "feedDecimals": 8, "heartbeat": 86400 },
+    "DOT": { "pair": "DOT / USD", "aggregator": "0xa6bC5bAF2000424e90434bA7104ee399dEe80DEc", "feedDecimals": 8, "heartbeat": 86400 },
+    "POL": { "pair": "POL / USD", "aggregator": "0x82BA56a2fADF9C14f17D08bc51bDA0bDB83A8934", "feedDecimals": 8, "heartbeat": 86400 },
+    "ARB": { "pair": "ARB / USD", "aggregator": "0xb2A824043730FE05F3DA2efaFa1CBbe83fa548D6", "feedDecimals": 8, "heartbeat": 86400 },
+    "OP": { "pair": "OP / USD", "aggregator": "0x205aaD468a11fd5D34fA7211bC6Bad5b3deB9b98", "feedDecimals": 8, "heartbeat": 86400 },
+    "CRV": { "pair": "CRV / USD", "aggregator": "0xaebDA2c976cfd1eE1977Eac079B4382acb849325", "feedDecimals": 8, "heartbeat": 3600 },
+    "LDO": { "pair": "LDO / USD", "aggregator": "0xA43A34030088E6510FecCFb77E88ee5e7ed0fE64", "feedDecimals": 8, "heartbeat": 86400 },
+    "MKR": { "pair": "MKR / USD", "aggregator": "0xdE9f0894670c4EFcacF370426F10C3AD2Cdf147e", "feedDecimals": 8, "heartbeat": 86400 }
+  },
+
+  "130": {
+    "_name": "unichain",
+    "_note": "Unichain USD feeds are 18-decimal SVR-era proxies with a 24h heartbeat; BTC/ETH/UNI are only available as SVR proxy variants. Review before mainnet use.",
+    "BTC": { "pair": "BTC / USD", "aggregator": "0xC13f3E310Dd7436FA24338174acB64254b9A8039", "feedDecimals": 18, "heartbeat": 86400 },
+    "ETH": { "pair": "ETH / USD", "aggregator": "0xBcE70e194940a157f3A80566505a7E96f5238CCa", "feedDecimals": 18, "heartbeat": 86400 },
+    "USDC": { "pair": "USDC / USD", "aggregator": "0xbd1cD1518eFB92a92100da62D4C488c810dFd75b", "feedDecimals": 18, "heartbeat": 86400 },
+    "UNI": { "pair": "UNI / USD", "aggregator": "0xdAd6f90429a2C821496B78Fe7482412971E278f1", "feedDecimals": 18, "heartbeat": 86400 },
+    "LINK": { "pair": "LINK / USD", "aggregator": "0x04343180ABa8543a850A87d594644D84fE38a919", "feedDecimals": 18, "heartbeat": 86400 }
+  },
+
+  "1301": {
+    "_name": "unichain-sepolia",
+    "BTC": { "pair": "BTC / USD", "aggregator": "0x2AF69319fACBbc1ad77d56538B35c1f9FFe86dEF", "feedDecimals": 8, "heartbeat": 86400 },
+    "ETH": { "pair": "ETH / USD", "aggregator": "0xd9c93081210dFc33326B2af4C2c11848095E6a9a", "feedDecimals": 8, "heartbeat": 86400 },
+    "USDC": { "pair": "USDC / USD", "aggregator": "0x25DdD2fEd0d51fe79d292Da47dd9f10AbdB4b3EC", "feedDecimals": 8, "heartbeat": 86400 },
+    "USDT": { "pair": "USDT / USD", "aggregator": "0xd391fB4c7D0B88dc44530E785246112388AFA98F", "feedDecimals": 8, "heartbeat": 86400 },
+    "LINK": { "pair": "LINK / USD", "aggregator": "0x331b7521a8985dbDdA5CF4FCDB57EC25465C55cB", "feedDecimals": 8, "heartbeat": 86400 }
+  }
+}

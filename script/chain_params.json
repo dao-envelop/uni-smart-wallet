@@ -2,121 +2,145 @@
   "1": {
     "name": "mainnet",
     "poolManager": "0x000000000004444c5dc75cB358380D2e3dE08A90",
-    "initialOwner": "0x0000000000000000000000000000000000000000"
+    "initialOwner": "0x0000000000000000000000000000000000000000",
+    "deploy": { "feeRedeemer": false, "stableImpl": true, "volatileImpl": true, "factory": true, "lens": false, "descriptor": false, "oracle": true }
   },
   "10": {
     "name": "optimism",
     "poolManager": "0x9a13F98Cb987694C9F086b1F5eB990EeA8264Ec3",
-    "initialOwner": "0x0000000000000000000000000000000000000000"
+    "initialOwner": "0x0000000000000000000000000000000000000000",
+    "deploy": { "feeRedeemer": false, "stableImpl": true, "volatileImpl": true, "factory": true, "lens": false, "descriptor": false, "oracle": true }
   },
   "56": {
     "name": "bnb-smart-chain",
     "poolManager": "0x28e2Ea090877bF75740558f6BFB36A5ffeE9e9dF",
-    "initialOwner": "0x0000000000000000000000000000000000000000"
+    "initialOwner": "0x0000000000000000000000000000000000000000",
+    "deploy": { "feeRedeemer": false, "stableImpl": true, "volatileImpl": true, "factory": true, "lens": false, "descriptor": false, "oracle": true }
   },
   "130": {
     "name": "unichain",
     "poolManager": "0x1F98400000000000000000000000000000000004",
-    "initialOwner": "0x0000000000000000000000000000000000000000"
+    "initialOwner": "0x0000000000000000000000000000000000000000",
+    "deploy": { "feeRedeemer": false, "stableImpl": true, "volatileImpl": true, "factory": true, "lens": false, "descriptor": false, "oracle": true }
   },
   "137": {
     "name": "polygon",
     "poolManager": "0x67366782805870060151383F4BbFF9daB53e5cD6",
-    "initialOwner": "0x0000000000000000000000000000000000000000"
+    "initialOwner": "0x0000000000000000000000000000000000000000",
+    "deploy": { "feeRedeemer": false, "stableImpl": true, "volatileImpl": true, "factory": true, "lens": false, "descriptor": false, "oracle": true }
   },
   "143": {
     "name": "monad",
     "poolManager": "0x188D586DDCf52439676CA21a244753FA19F9eA8E",
-    "initialOwner": "0x0000000000000000000000000000000000000000"
+    "initialOwner": "0x0000000000000000000000000000000000000000",
+    "deploy": { "feeRedeemer": false, "stableImpl": true, "volatileImpl": true, "factory": true, "lens": false, "descriptor": false, "oracle": true }
   },
   "196": {
     "name": "x-layer",
     "poolManager": "0x360E68faCcca8cA495c1B759Fd9EEe466db9FB32",
-    "initialOwner": "0x0000000000000000000000000000000000000000"
+    "initialOwner": "0x0000000000000000000000000000000000000000",
+    "deploy": { "feeRedeemer": false, "stableImpl": true, "volatileImpl": true, "factory": true, "lens": false, "descriptor": false, "oracle": true }
   },
   "480": {
     "name": "worldchain",
     "poolManager": "0xb1860D529182ac3BC1F51Fa2ABd56662b7D13f33",
-    "initialOwner": "0x0000000000000000000000000000000000000000"
+    "initialOwner": "0x0000000000000000000000000000000000000000",
+    "deploy": { "feeRedeemer": false, "stableImpl": true, "volatileImpl": true, "factory": true, "lens": false, "descriptor": false, "oracle": true }
   },
   "1868": {
     "name": "soneium",
     "poolManager": "0x360E68faCcca8cA495c1B759Fd9EEe466db9FB32",
-    "initialOwner": "0x0000000000000000000000000000000000000000"
+    "initialOwner": "0x0000000000000000000000000000000000000000",
+    "deploy": { "feeRedeemer": false, "stableImpl": true, "volatileImpl": true, "factory": true, "lens": false, "descriptor": false, "oracle": true }
   },
   "4217": {
     "name": "tempo",
     "poolManager": "0x33620F62c5B9B2086dD6b62F4A297A9f30347029",
-    "initialOwner": "0x0000000000000000000000000000000000000000"
+    "initialOwner": "0x0000000000000000000000000000000000000000",
+    "deploy": { "feeRedeemer": false, "stableImpl": true, "volatileImpl": true, "factory": true, "lens": false, "descriptor": false, "oracle": true }
   },
   "4326": {
     "name": "megaeth",
     "poolManager": "0xacB7E78fa05d562e0a5d3089eC896d57d057D38e",
-    "initialOwner": "0x0000000000000000000000000000000000000000"
+    "initialOwner": "0x0000000000000000000000000000000000000000",
+    "deploy": { "feeRedeemer": false, "stableImpl": true, "volatileImpl": true, "factory": true, "lens": false, "descriptor": false, "oracle": true }
   },
   "8453": {
     "name": "base",
     "poolManager": "0x498581fF718922c3f8e6A244956aF099B2652b2b",
-    "initialOwner": "0x0000000000000000000000000000000000000000"
+    "initialOwner": "0x0000000000000000000000000000000000000000",
+    "deploy": { "feeRedeemer": false, "stableImpl": true, "volatileImpl": true, "factory": true, "lens": false, "descriptor": false, "oracle": true }
   },
   "42161": {
     "name": "arbitrum-one",
     "poolManager": "0x360E68faCcca8cA495c1B759Fd9EEe466db9FB32",
-    "initialOwner": "0x0000000000000000000000000000000000000000"
+    "initialOwner": "0x0000000000000000000000000000000000000000",
+    "deploy": { "feeRedeemer": false, "stableImpl": true, "volatileImpl": true, "factory": true, "lens": false, "descriptor": false, "oracle": true }
   },
   "42220": {
     "name": "celo",
     "poolManager": "0x288dc841A52FCA2707c6947B3A777c5E56cd87BC",
-    "initialOwner": "0x0000000000000000000000000000000000000000"
+    "initialOwner": "0x0000000000000000000000000000000000000000",
+    "deploy": { "feeRedeemer": false, "stableImpl": true, "volatileImpl": true, "factory": true, "lens": false, "descriptor": false, "oracle": true }
   },
   "43114": {
     "name": "avalanche",
     "poolManager": "0x06380C0e0912312B5150364B9DC4542BA0DbBc85",
-    "initialOwner": "0x0000000000000000000000000000000000000000"
+    "initialOwner": "0x0000000000000000000000000000000000000000",
+    "deploy": { "feeRedeemer": false, "stableImpl": true, "volatileImpl": true, "factory": true, "lens": false, "descriptor": false, "oracle": true }
   },
   "57073": {
     "name": "ink",
     "poolManager": "0x360E68faCcca8cA495c1B759Fd9EEe466db9FB32",
-    "initialOwner": "0x0000000000000000000000000000000000000000"
+    "initialOwner": "0x0000000000000000000000000000000000000000",
+    "deploy": { "feeRedeemer": false, "stableImpl": true, "volatileImpl": true, "factory": true, "lens": false, "descriptor": false, "oracle": true }
   },
   "81457": {
     "name": "blast",
     "poolManager": "0x1631559198A9e474033433b2958daBC135ab6446",
-    "initialOwner": "0x0000000000000000000000000000000000000000"
+    "initialOwner": "0x0000000000000000000000000000000000000000",
+    "deploy": { "feeRedeemer": false, "stableImpl": true, "volatileImpl": true, "factory": true, "lens": false, "descriptor": false, "oracle": true }
   },
   "7777777": {
     "name": "zora",
     "poolManager": "0x0575338e4C17006aE181B47900A84404247CA30f",
-    "initialOwner": "0x0000000000000000000000000000000000000000"
+    "initialOwner": "0x0000000000000000000000000000000000000000",
+    "deploy": { "feeRedeemer": false, "stableImpl": true, "volatileImpl": true, "factory": true, "lens": false, "descriptor": false, "oracle": true }
   },
   "1301": {
     "name": "unichain-sepolia",
     "poolManager": "0x00B036B58a818B1BC34d502D3fE730Db729e62AC",
-    "initialOwner": "0x0000000000000000000000000000000000000000"
+    "initialOwner": "0x0000000000000000000000000000000000000000",
+    "deploy": { "feeRedeemer": false, "stableImpl": true, "volatileImpl": true, "factory": true, "lens": false, "descriptor": false, "oracle": true }
   },
   "11155111": {
     "name": "sepolia",
     "poolManager": "0xE03A1074c86CFeDd5C142C4F04F1a1536e203543",
-    "initialOwner": "0x0000000000000000000000000000000000000000"
+    "initialOwner": "0x0000000000000000000000000000000000000000",
+    "deploy": { "feeRedeemer": false, "stableImpl": true, "volatileImpl": true, "factory": true, "lens": false, "descriptor": false, "oracle": true }
   },
   "84532": {
     "name": "base-sepolia",
     "poolManager": "0x05E73354cFDd6745C338b50BcFDfA3Aa6fA03408",
-    "initialOwner": "0x0000000000000000000000000000000000000000"
+    "initialOwner": "0x0000000000000000000000000000000000000000",
+    "deploy": { "feeRedeemer": false, "stableImpl": true, "volatileImpl": true, "factory": true, "lens": false, "descriptor": false, "oracle": true }
   },
   "421614": {
     "name": "arbitrum-sepolia",
     "poolManager": "0xFB3e0C6F74eB1a21CC1Da29aeC80D2Dfe6C9a317",
-    "initialOwner": "0x0000000000000000000000000000000000000000"
+    "initialOwner": "0x0000000000000000000000000000000000000000",
+    "deploy": { "feeRedeemer": false, "stableImpl": true, "volatileImpl": true, "factory": true, "lens": false, "descriptor": false, "oracle": true }
   },
   "420120000": {
     "name": "interop-alpha-0",
     "poolManager": "0x9131B9084E6017Be19c6a0ef23f73dbB1Bf41f96",
-    "initialOwner": "0x0000000000000000000000000000000000000000"
+    "initialOwner": "0x0000000000000000000000000000000000000000",
+    "deploy": { "feeRedeemer": false, "stableImpl": true, "volatileImpl": true, "factory": true, "lens": false, "descriptor": false, "oracle": true }
   },
   "420120001": {
     "name": "interop-alpha-1",
     "poolManager": "0x9131B9084E6017Be19c6a0ef23f73dbB1Bf41f96",
-    "initialOwner": "0x0000000000000000000000000000000000000000"
+    "initialOwner": "0x0000000000000000000000000000000000000000",
+    "deploy": { "feeRedeemer": false, "stableImpl": true, "volatileImpl": true, "factory": true, "lens": false, "descriptor": false, "oracle": true }
   }
 }
