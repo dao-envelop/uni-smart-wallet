@@ -1,0 +1,33 @@
+{
+  "_comment": "Base (8453) Uniswap V4 pools for PriceDeviation.s.sol. PoolKeys verified on-chain via PoolManager Initialize event (poolId = keccak(PoolKey) cross-checked). Ranked by TVL (GeckoTerminal). symbol0/1 are keys in oracle_feeds.json (Base has a dedicated cbBTC/USD feed). Index 0 = currency0 (lower address).",
+  "currency0": [
+    "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "0x0000000000000000000000000000000000000000",
+    "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "0x0000000000000000000000000000000000000000",
+    "0x0000000000000000000000000000000000000000",
+    "0x0000000000000000000000000000000000000000"
+  ],
+  "currency1": [
+    "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf",
+    "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2",
+    "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf",
+    "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf"
+  ],
+  "fee": [500, 3000, 7, 500, 500, 3000],
+  "tickSpacing": [10, 60, 1, 10, 10, 60],
+  "hooks": [
+    "0x0000000000000000000000000000000000000000",
+    "0x0000000000000000000000000000000000000000",
+    "0x0000000000000000000000000000000000000000",
+    "0x0000000000000000000000000000000000000000",
+    "0x0000000000000000000000000000000000000000",
+    "0x0000000000000000000000000000000000000000"
+  ],
+  "symbol0": ["USDC", "ETH", "USDC", "ETH", "ETH", "ETH"],
+  "symbol1": ["cbBTC", "USDC", "USDT", "cbBTC", "USDC", "cbBTC"],
+  "decimals0": [6, 18, 6, 18, 18, 18],
+  "decimals1": [8, 6, 6, 8, 6, 8]
+}
