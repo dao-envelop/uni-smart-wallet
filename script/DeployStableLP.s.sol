@@ -36,8 +36,9 @@ import {ChainlinkPriceOracle} from "../src/oracle/ChainlinkPriceOracle.sol";
 ///   existing `.factory` — but only if the broadcaster is the factory owner (otherwise it logs a warning
 ///   and you must call `setImplementation` manually).
 /// - The oracle ({ChainlinkPriceOracle}) is standalone: it is deployed and recorded, then wired into each
-///   manager clone later via the owner-only `setPriceOracle` (per-clone, not done here). Its initial
-///   deviation tolerance comes from the chain's `oracleMaxDeviationBps` (default 100 = 1%).
+///   manager clone later via the owner-only `setPriceOracle` (per-clone, not done here). Its inputs come
+///   from the chain's `oracleMaxDeviationBps` (default 100 = 1%), `oracleSequencerFeed` (L2 Sequencer
+///   Uptime Feed; omitted ⇒ no sequencer gate), and `oracleGracePeriod` (default 3600s).
 ///
 /// ### Output
 /// Addresses are MERGED into `deployments/<chainId>.json`: keys for components deployed this run are
@@ -52,10 +53,18 @@ import {ChainlinkPriceOracle} from "../src/oracle/ChainlinkPriceOracle.sol";
 contract DeployStableLP is Script {
     string internal constant CONFIG_PATH = "./script/chain_params.json";
     uint16 internal constant DEFAULT_ORACLE_MAX_DEVIATION_BPS = 100; // 1%
+    uint32 internal constant DEFAULT_SEQUENCER_GRACE_PERIOD = 3600; // 1h (Chainlink L2 best practice)
 
     error ChainConfigMissing(uint256 chainId);
     error InvalidPoolManager(uint256 chainId);
     error TreasuryMissing(uint256 chainId);
+
+    /// @notice ChainlinkPriceOracle constructor inputs (resolved from chain_params.json).
+    struct OracleParams {
+        uint16 maxDeviationBps;
+        address sequencerFeed; // L2 Sequencer Uptime Feed; zero ⇒ no sequencer gate (L1 / unsupported)
+        uint32 gracePeriod;
+    }
 
     /// @notice Which components to deploy this run.
     struct Flags {
@@ -101,7 +110,7 @@ contract DeployStableLP is Script {
         address treasury = c.treasury != address(0) ? c.treasury : existing.feeRedeemer;
 
         vm.startBroadcast();
-        d = deployComponents(c.poolManager, admin, c.flags, treasury, existing, broadcaster, c.oracleMaxDeviationBps);
+        d = deployComponents(c.poolManager, admin, c.flags, treasury, existing, broadcaster, c.oracle);
         vm.stopBroadcast();
 
         _log(c.poolManager, admin, c.name, c.flags, d);
@@ -120,7 +129,12 @@ contract DeployStableLP is Script {
             descriptor: true,
             oracle: true
         });
-        return deployComponents(pm, admin, all, address(0), _emptyExisting(), admin, DEFAULT_ORACLE_MAX_DEVIATION_BPS);
+        OracleParams memory oracle = OracleParams({
+            maxDeviationBps: DEFAULT_ORACLE_MAX_DEVIATION_BPS,
+            sequencerFeed: address(0),
+            gracePeriod: DEFAULT_SEQUENCER_GRACE_PERIOD
+        });
+        return deployComponents(pm, admin, all, address(0), _emptyExisting(), admin, oracle);
     }
 
     /// @notice Deploy exactly the components enabled in `flags`, resolving prerequisites (treasury for the
@@ -131,7 +145,7 @@ contract DeployStableLP is Script {
     /// @param treasury Fallback treasury (used only when `flags.feeRedeemer` is false and an impl is built).
     /// @param existing Previously-recorded addresses (for factory allowlisting when impls aren't fresh).
     /// @param broadcaster The tx sender; must equal the existing factory's owner to auto-allowlist on it.
-    /// @param oracleMaxDeviationBps Initial oracle deviation tolerance (bps, < 10_000).
+    /// @param oracle Oracle constructor inputs (deviation tolerance, L2 sequencer feed + grace period).
     function deployComponents(
         IPoolManager pm,
         address admin,
@@ -139,7 +153,7 @@ contract DeployStableLP is Script {
         address treasury,
         Existing memory existing,
         address broadcaster,
-        uint16 oracleMaxDeviationBps
+        OracleParams memory oracle
     ) public returns (Deployment memory d) {
         // 1. Treasury: a fresh FeeRedeemer overrides any fallback.
         address treasuryAddr = treasury;
@@ -167,7 +181,9 @@ contract DeployStableLP is Script {
         // 4. Standalone components.
         if (flags.lens) d.lens = new UniLens();
         if (flags.descriptor) d.descriptor = new WalletPositionDescriptor();
-        if (flags.oracle) d.oracle = new ChainlinkPriceOracle(admin, oracleMaxDeviationBps);
+        if (flags.oracle) {
+            d.oracle = new ChainlinkPriceOracle(admin, oracle.maxDeviationBps, oracle.sequencerFeed, oracle.gracePeriod);
+        }
     }
 
     /// @dev Best-effort: bless freshly-deployed impls on an already-deployed factory the broadcaster owns.
@@ -216,7 +232,7 @@ contract DeployStableLP is Script {
         address treasury;
         string name;
         Flags flags;
-        uint16 oracleMaxDeviationBps;
+        OracleParams oracle;
     }
 
     function loadConfig(uint256 chainId) public view returns (Config memory c) {
@@ -233,7 +249,7 @@ contract DeployStableLP is Script {
         c.treasury = _optAddr(json, string.concat(base, ".treasury"));
         c.name = _optStr(json, string.concat(base, ".name"));
         c.flags = _readFlags(json, base);
-        c.oracleMaxDeviationBps = _readOracleBps(json, base);
+        c.oracle = _readOracle(json, base);
     }
 
     /// @dev Read the `deploy` toggle object; a missing object ⇒ the legacy full set (oracle off).
@@ -259,10 +275,16 @@ contract DeployStableLP is Script {
         f.oracle = _optBool(json, string.concat(deployPath, ".oracle"));
     }
 
-    function _readOracleBps(string memory json, string memory base) internal view returns (uint16) {
-        string memory p = string.concat(base, ".oracleMaxDeviationBps");
-        if (!vm.keyExistsJson(json, p)) return DEFAULT_ORACLE_MAX_DEVIATION_BPS;
-        return uint16(vm.parseJsonUint(json, p));
+    /// @dev Read the oracle config: deviation tolerance + optional L2 sequencer feed / grace period.
+    function _readOracle(string memory json, string memory base) internal view returns (OracleParams memory o) {
+        string memory bpsPath = string.concat(base, ".oracleMaxDeviationBps");
+        o.maxDeviationBps = vm.keyExistsJson(json, bpsPath)
+            ? uint16(vm.parseJsonUint(json, bpsPath))
+            : DEFAULT_ORACLE_MAX_DEVIATION_BPS;
+        o.sequencerFeed = _optAddr(json, string.concat(base, ".oracleSequencerFeed"));
+        string memory gpPath = string.concat(base, ".oracleGracePeriod");
+        o.gracePeriod =
+            vm.keyExistsJson(json, gpPath) ? uint32(vm.parseJsonUint(json, gpPath)) : DEFAULT_SEQUENCER_GRACE_PERIOD;
     }
 
     function _optAddr(string memory json, string memory path) internal view returns (address) {

@@ -48,6 +48,8 @@ in `chain_params.json`. **A missing flag defaults to `false`.** Components: `fee
   "initialOwner": "0x....",         // protocol admin (owner of FeeRedeemer / factory / oracle)
   "treasury": "0x....",             // optional: FeeRedeemer to pass to impls when it isn't redeployed
   "oracleMaxDeviationBps": 100,     // optional: ChainlinkPriceOracle initial tolerance (default 100 = 1%)
+  "oracleSequencerFeed": "0x....",  // optional: L2 Sequencer Uptime Feed (omit on L1 / unsupported L2)
+  "oracleGracePeriod": 3600,        // optional: seconds after sequencer restart before feeds trusted (default 3600)
   "deploy": {                       // deploy ONLY the oracle + the two manager impls this run
     "oracle": true,
     "stableImpl": true,
@@ -99,6 +101,11 @@ Two things to keep in mind when wiring these into the oracle:
   passing a **padded** heartbeat to `setFeed` (e.g. official × 2–3) so a normal update lag doesn't
   spuriously block operators. `130` unichain feeds are **18-decimal SVR** variants (BTC/ETH/UNI only as
   SVR proxies) — review before mainnet use.
+- **L2 Sequencer Uptime gate.** The oracle also takes an L2 Sequencer Uptime Feed (`oracleSequencerFeed`
+  in `chain_params.json`) + grace period; while the sequencer is down or within the grace window after a
+  restart it returns *no opinion* (operator swaps fail-closed). Wired for `8453` base and `42161`
+  arbitrum. Chainlink publishes **no** sequencer feed for unichain (`130`/`1301`), and none is needed on
+  L1 mainnet (`1`) — there the gate is simply skipped.
 
 ### Wiring the price oracle (per manager clone)
 

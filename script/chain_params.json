@@ -69,12 +69,16 @@
     "name": "base",
     "poolManager": "0x498581fF718922c3f8e6A244956aF099B2652b2b",
     "initialOwner": "0x0000000000000000000000000000000000000000",
+    "oracleSequencerFeed": "0xBCF85224fc0756B9Fa45aA7892530B47e10b6433",
+    "oracleGracePeriod": 3600,
     "deploy": { "feeRedeemer": false, "stableImpl": true, "volatileImpl": true, "factory": true, "lens": false, "descriptor": false, "oracle": true }
   },
   "42161": {
     "name": "arbitrum-one",
     "poolManager": "0x360E68faCcca8cA495c1B759Fd9EEe466db9FB32",
     "initialOwner": "0x0000000000000000000000000000000000000000",
+    "oracleSequencerFeed": "0xFdB631F5EE196F0ed6FAa767959853A9F217697D",
+    "oracleGracePeriod": 3600,
     "deploy": { "feeRedeemer": false, "stableImpl": true, "volatileImpl": true, "factory": true, "lens": false, "descriptor": false, "oracle": true }
   },
   "42220": {
