@@ -1,0 +1,30 @@
+{
+  "_comment": "Pools to check with PriceDeviation.s.sol (Base, chainId 8453). Parallel arrays; index 0 must be currency0 (lower address). symbol0/1 must exist in oracle_feeds.json for this chain. Native ETH = 0x0. Candidate fee tiers included; uninitialized ones are reported and skipped.",
+  "currency0": [
+    "0x0000000000000000000000000000000000000000",
+    "0x0000000000000000000000000000000000000000",
+    "0x0000000000000000000000000000000000000000",
+    "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+  ],
+  "currency1": [
+    "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf",
+    "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf"
+  ],
+  "fee": [500, 3000, 100, 3000, 500],
+  "tickSpacing": [10, 60, 1, 60, 10],
+  "hooks": [
+    "0x0000000000000000000000000000000000000000",
+    "0x0000000000000000000000000000000000000000",
+    "0x0000000000000000000000000000000000000000",
+    "0x0000000000000000000000000000000000000000",
+    "0x0000000000000000000000000000000000000000"
+  ],
+  "symbol0": ["ETH", "ETH", "ETH", "USDC", "USDC"],
+  "symbol1": ["USDC", "USDC", "USDC", "cbBTC", "cbBTC"],
+  "decimals0": [18, 18, 18, 6, 6],
+  "decimals1": [6, 6, 6, 8, 8]
+}

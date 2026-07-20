@@ -1,0 +1,24 @@
+{
+  "_comment": "Unichain (130) Uniswap V4 pools for PriceDeviation.s.sol. PoolKeys verified on-chain via the PoolManager Initialize event. NOTE: Unichain Chainlink feeds are 18-decimal SVR proxies. symbol0/1 are keys in oracle_feeds.json (BTC feed serves WBTC). Index 0 = currency0 (lower address; native ETH sorts first).",
+  "currency0": [
+    "0x0000000000000000000000000000000000000000",
+    "0x0000000000000000000000000000000000000000",
+    "0x0000000000000000000000000000000000000000"
+  ],
+  "currency1": [
+    "0x078D782b760474a361dDA0AF3839290b0EF57AD6",
+    "0x0555E30da8f98308EdB960aa94C0Db47230d2B9c",
+    "0x8f187aA05619a017077f5308904739877ce9eA21"
+  ],
+  "fee": [500, 500, 3000],
+  "tickSpacing": [10, 10, 60],
+  "hooks": [
+    "0x0000000000000000000000000000000000000000",
+    "0x0000000000000000000000000000000000000000",
+    "0x0000000000000000000000000000000000000000"
+  ],
+  "symbol0": ["ETH", "ETH", "ETH"],
+  "symbol1": ["USDC", "BTC", "UNI"],
+  "decimals0": [18, 18, 18],
+  "decimals1": [6, 8, 18]
+}
