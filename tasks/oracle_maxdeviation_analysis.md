@@ -71,6 +71,30 @@ No usable V4 pools: the PoolManager is active but every pool pairs arbitrary moc
 pool, no canonical/Circle USDC pool). Testnet prices are not meaningful for tuning — set its
 `maxDeviationBps` to match Unichain mainnet (or a conservative default) at deploy.
 
+## Snapshot 2 (2026-07-21) — worst `min maxDeviationBps` per chain
+
+| Chain | Snapshot 1 (07-20) | Snapshot 2 (07-21) | Note |
+|---|---|---|---|
+| Ethereum (1) | 96 | 95 | stable |
+| Base (8453) | 92 | 88 | ↓ |
+| Arbitrum (42161) | 98 | 106 | ↑ — driven by thin ARB/USDC 0.30% (basis 26 bps, noisy ~$32k pool) |
+| Unichain (130) | 91 | **152** | ↑↑ — see finding below |
+
+Per-pool basis (bps) day-1 → day-2 for the movers: Ethereum WBTC/USDC 17→21; Arbitrum WBTC/USDC
+14→17, ARB/USDC 2→26; **Unichain ETH/WBTC 3→39, ETH/UNI 11→72** (ETH/USDC stayed 11→6).
+
+### Finding — Unichain basis is dominated by SVR feed lag, not pool mispricing
+Unichain Chainlink feeds are **18-decimal SVR proxies with a 24h heartbeat** — they update infrequently
+(daily / on large deviation). The V4 pool tracks price in real time, so for volatile assets (BTC, UNI)
+the *feed* lags the pool and the measured "basis" is mostly **feed staleness**, not a real gap. ETH stays
+tight because ETH moved less / its feed is fresher. Consequence: a tolerance wide enough to accommodate
+the stale-feed basis (150+ bps) would be too loose to catch manipulation. Combined with Unichain having
+**no** L2 Sequencer Uptime Feed, the guard is weak there for BTC/UNI. Practical: on Unichain, gate
+operators only on stable/ETH pairs, or don't rely on this oracle for BTC/UNI.
+
+> Two snapshots is still a small sample. Keep running (`memory: oracle-maxdev-price-deviation-tool`) to
+> build a real distribution before committing to a number.
+
 ## Recommendation
 
 | Scope | Suggested `maxDeviationBps` |
