@@ -5,7 +5,7 @@
   "feeRedeemer": "0xA6014AAAd7C786b6c502b1F4B017392ac68Fd951",
   "fromBlock": 57770905,
   "impl": "0x789B70962c78c703Ec3403a722921Ecf1c823684",
-  "lens": "0xFaF8815D478cf2d8dbCE81440551e99Ce9fB1D52",
+  "lens": "0x7CDCBEa338ce3598F8caEFa6A3883f72395b9E3e",
   "name": "unichain-sepolia",
   "oracle": "0xaA8D8504c86619bc39a81cce0E35d1d2e164dB51",
   "poolManager": "0x00B036B58a818B1BC34d502D3fE730Db729e62AC",
