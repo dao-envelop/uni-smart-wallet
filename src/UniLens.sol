@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency, CurrencyLibrary} from "@uniswap/v4-core/src/types/Currency.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {V4PositionManager} from "./abstract/V4PositionManager.sol";
@@ -47,6 +48,43 @@ contract UniLens {
         BaseLPManager.PoolConfig[] pools; // configured pools
     }
 
+    /// @notice A token (managed stable or caller-supplied extra) with its metadata + the manager's idle
+    /// balance. `currency == address(0)` ⇒ native ETH (decimals 18, symbol `"ETH"`).
+    struct StableInfo {
+        Currency currency;
+        uint8 decimals;
+        string symbol;
+        uint256 idle;
+    }
+
+    /// @notice A configured pool with its live price + total liquidity.
+    struct PoolInfo {
+        PoolKey key;
+        uint160 sqrtPriceX96; // live pool price (0 if uninitialized)
+        uint128 liquidity; // total pool liquidity
+    }
+
+    /// @notice Rich manager configuration — everything the manage/deposit UI needs in one read, so the
+    /// frontend stops fanning out ~9 RPC round-trips per page. Product-agnostic ({BaseLPManager}).
+    struct ManagerConfig {
+        address owner; // ownerOf(TOKEN_ID)
+        uint16 protocolFeeBps;
+        address treasury;
+        uint256 oracleType; // product tag: 3000 stable / 3001 volatile
+        address positionDescriptor;
+        address priceOracle;
+        string name;
+        StableInfo[] managed; // managed stables (index-aligned to managedStables) + metadata/idle
+        StableInfo[] extra; // caller-supplied extraTokens with a NON-ZERO idle and not already managed
+        PoolInfo[] pools; // configured pools + live slot0/liquidity
+    }
+
+    /// @notice {ManagerConfig} plus the full open-position portfolio — the "everything" getter.
+    struct ManagerFull {
+        ManagerConfig config;
+        PositionView[] positions;
+    }
+
     /// @notice Value a single open position of `wallet` (any {V4PositionManager}, e.g. `StableLPManager`).
     /// @param wallet The wallet/manager contract to read.
     /// @param salt The position key.
@@ -59,7 +97,7 @@ contract UniLens {
     /// @notice The full open-position portfolio of `wallet`, each position valued live.
     /// @param wallet The wallet/manager contract to read.
     /// @return views One {PositionView} per open position.
-    function positions(address wallet) external view returns (PositionView[] memory views) {
+    function positions(address wallet) public view returns (PositionView[] memory views) {
         V4PositionManager w = V4PositionManager(wallet);
         IPoolManager pm = w.POOL_MANAGER();
         uint256 n = w.openPositionCount();
@@ -94,6 +132,122 @@ contract UniLens {
             PoolKey memory key = m.pools(i);
             info.pools[i] = BaseLPManager.PoolConfig({key: key});
         }
+    }
+
+    /// @notice Rich, single-call config getter: owner/fee/treasury, product tag, descriptor/oracle
+    /// addresses, name, managed stables (with decimals/symbol/idle), any funded unmanaged extra tokens,
+    /// and each configured pool with its live price + liquidity.
+    /// @param manager The {BaseLPManager} product to read (`StableLPManager` / `VolatileLPManager`).
+    /// @param extraTokens Candidate tokens (e.g. the chain's stablecoin list) to surface stray idle for;
+    /// only those with a non-zero manager balance and not already managed are returned in `extra`.
+    /// @return cfg The aggregated manager configuration.
+    function managerConfig(address manager, address[] calldata extraTokens)
+        public
+        view
+        returns (ManagerConfig memory cfg)
+    {
+        BaseLPManager m = BaseLPManager(payable(manager));
+        cfg.owner = m.ownerOf(m.TOKEN_ID());
+        cfg.protocolFeeBps = m.PROTOCOL_FEE_BPS();
+        cfg.treasury = m.PROTOCOL_TREASURY();
+        cfg.oracleType = m.ORACLE_TYPE();
+        cfg.positionDescriptor = m.positionDescriptor();
+        cfg.priceOracle = m.priceOracle();
+        cfg.name = m.name();
+
+        uint256 s = m.managedStablesCount();
+        cfg.managed = new StableInfo[](s);
+        for (uint256 i = 0; i < s; ++i) {
+            cfg.managed[i] = _stableInfo(m.managedStables(i), manager);
+        }
+
+        // extra[]: caller-supplied tokens with a non-zero idle that are not already managed.
+        StableInfo[] memory tmp = new StableInfo[](extraTokens.length);
+        uint256 e;
+        for (uint256 i = 0; i < extraTokens.length; ++i) {
+            Currency c = Currency.wrap(extraTokens[i]);
+            if (_isManaged(cfg.managed, c)) continue;
+            if (c.balanceOf(manager) == 0) continue;
+            tmp[e++] = _stableInfo(c, manager);
+        }
+        cfg.extra = new StableInfo[](e);
+        for (uint256 i = 0; i < e; ++i) {
+            cfg.extra[i] = tmp[i];
+        }
+
+        IPoolManager pm = m.POOL_MANAGER();
+        uint256 p = m.poolCount();
+        cfg.pools = new PoolInfo[](p);
+        for (uint256 i = 0; i < p; ++i) {
+            PoolKey memory key = m.pools(i);
+            PoolId id = key.toId();
+            (uint160 sqrtP,,,) = pm.getSlot0(id);
+            cfg.pools[i] = PoolInfo({key: key, sqrtPriceX96: sqrtP, liquidity: pm.getLiquidity(id)});
+        }
+    }
+
+    /// @notice The "everything" getter: {managerConfig} plus the full open-position portfolio.
+    /// @param manager The {BaseLPManager} product to read.
+    /// @param extraTokens Candidate unmanaged tokens to surface stray idle for (see {managerConfig}).
+    /// @return full The manager config + one {PositionView} per open position.
+    function managerFull(address manager, address[] calldata extraTokens)
+        external
+        view
+        returns (ManagerFull memory full)
+    {
+        full.config = managerConfig(manager, extraTokens);
+        full.positions = positions(manager);
+    }
+
+    /// @dev Read a token's metadata + the manager's idle balance. Native (`address(0)`) ⇒ decimals 18,
+    /// symbol `"ETH"`; ERC-20 metadata is read defensively (see {_safeDecimals}/{_safeSymbol}).
+    function _stableInfo(Currency c, address manager) private view returns (StableInfo memory si) {
+        si.currency = c;
+        si.idle = c.balanceOf(manager);
+        if (c.isAddressZero()) {
+            si.decimals = 18;
+            si.symbol = "ETH";
+        } else {
+            address token = Currency.unwrap(c);
+            si.decimals = _safeDecimals(token);
+            si.symbol = _safeSymbol(token);
+        }
+    }
+
+    /// @dev True if `c` is already among the managed stables.
+    function _isManaged(StableInfo[] memory managed, Currency c) private pure returns (bool) {
+        for (uint256 i = 0; i < managed.length; ++i) {
+            if (Currency.unwrap(managed[i].currency) == Currency.unwrap(c)) return true;
+        }
+        return false;
+    }
+
+    /// @dev `decimals()` via low-level staticcall; falls back to 18 on revert / malformed return.
+    function _safeDecimals(address token) private view returns (uint8) {
+        (bool ok, bytes memory data) = token.staticcall(abi.encodeWithSignature("decimals()"));
+        if (ok && data.length >= 32) return uint8(abi.decode(data, (uint256)));
+        return 18;
+    }
+
+    /// @dev `symbol()` via low-level staticcall: try-decode as `string`, fall back to `bytes32`, then
+    /// to the empty string on revert. (Some tokens revert or return a `bytes32` symbol — never bare-cast.)
+    function _safeSymbol(address token) private view returns (string memory) {
+        (bool ok, bytes memory data) = token.staticcall(abi.encodeWithSignature("symbol()"));
+        if (!ok) return "";
+        if (data.length == 32) return _bytes32ToString(bytes32(data));
+        if (data.length >= 64) return abi.decode(data, (string));
+        return "";
+    }
+
+    /// @dev Trim a right-padded `bytes32` symbol to its first NUL and return it as a string.
+    function _bytes32ToString(bytes32 x) private pure returns (string memory) {
+        uint256 len;
+        while (len < 32 && x[len] != 0) ++len;
+        bytes memory b = new bytes(len);
+        for (uint256 i = 0; i < len; ++i) {
+            b[i] = x[i];
+        }
+        return string(b);
     }
 
     function _view(V4PositionManager w, IPoolManager pm, bytes32 salt) private view returns (PositionView memory v) {
