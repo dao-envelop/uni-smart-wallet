@@ -251,7 +251,8 @@ contract DeployStableLPSubsetTest is Test {
             treasury,
             _noExisting(),
             admin,
-            _oracle(250)
+            _oracle(250),
+            new address[](0)
         );
 
         // Only the requested components exist.
@@ -281,7 +282,8 @@ contract DeployStableLPSubsetTest is Test {
             treasury,
             _noExisting(),
             admin,
-            _oracle(100)
+            _oracle(100),
+            new address[](0)
         );
         assertEq(d.impl.PROTOCOL_TREASURY(), address(d.feeRedeemer), "treasury == fresh feeRedeemer, not fallback");
     }
@@ -296,7 +298,8 @@ contract DeployStableLPSubsetTest is Test {
             address(0),
             _noExisting(),
             admin,
-            _oracle(100)
+            _oracle(100),
+            new address[](0)
         );
     }
 
@@ -308,7 +311,14 @@ contract DeployStableLPSubsetTest is Test {
         e.volatileImpl = makeAddr("existingVolatile");
 
         DeployStableLP.Deployment memory d = deployer.deployComponents(
-            pm, admin, _flags(false, false, false, true, false, false, false), treasury, e, admin, _oracle(100)
+            pm,
+            admin,
+            _flags(false, false, false, true, false, false, false),
+            treasury,
+            e,
+            admin,
+            _oracle(100),
+            new address[](0)
         );
         assertTrue(d.factory.isImplementation(e.impl), "existing stable allowlisted");
         assertTrue(d.factory.isImplementation(e.volatileImpl), "existing volatile allowlisted");
@@ -332,7 +342,8 @@ contract DeployStableLPSubsetTest is Test {
             treasury,
             e,
             address(deployer),
-            _oracle(100)
+            _oracle(100),
+            new address[](0)
         );
         assertTrue(factory.isImplementation(address(d.impl)), "fresh stable auto-allowlisted");
         assertTrue(factory.isImplementation(address(d.volatileImpl)), "fresh volatile auto-allowlisted");
@@ -346,7 +357,14 @@ contract DeployStableLPSubsetTest is Test {
         e.factory = address(factory);
 
         DeployStableLP.Deployment memory d = deployer.deployComponents(
-            pm, admin, _flags(false, true, false, false, false, false, false), treasury, e, address(this), _oracle(100)
+            pm,
+            admin,
+            _flags(false, true, false, false, false, false, false),
+            treasury,
+            e,
+            address(this),
+            _oracle(100),
+            new address[](0)
         );
         assertFalse(factory.isImplementation(address(d.impl)), "not allowlisted (broadcaster != owner)");
     }

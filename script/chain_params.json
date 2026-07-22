@@ -3,7 +3,19 @@
     "name": "mainnet",
     "poolManager": "0x000000000004444c5dc75cB358380D2e3dE08A90",
     "initialOwner": "0x0000000000000000000000000000000000000000",
-    "deploy": { "feeRedeemer": false, "stableImpl": false, "volatileImpl": false, "factory": false, "lens": true, "descriptor": false, "oracle": false }
+    "stablecoins": [
+      "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+      "0xdAC17F958D2ee523a2206206994597C13D831ec7",
+      "0x6B175474E89094C44Da98b954EedeAC495271d0F",
+      "0x4c9EDD5852cd905f086C759E8383e09bff1E68B3",
+      "0x6c3ea9036406852006290770BEdFcAbA0e23A0e8",
+      "0x853d955aCEf822Db058eb8505911ED77F175b99e",
+      "0x5f98805A4E8be255a32880FDeC7F6728C6568bA0",
+      "0x57Ab1ec28D129707052df4dF418D58a2D46d5f51",
+      "0x0000000000085d4780B73119b644AE5ecd22b376",
+      "0xdC035D45d973E3EC169d2276DDab16f1e407384F"
+    ],
+    "deploy": { "feeRedeemer": false, "stableImpl": false, "volatileImpl": false, "factory": false, "lens": false, "descriptor": true, "oracle": false }
   },
   "10": {
     "name": "optimism",
@@ -21,7 +33,14 @@
     "name": "unichain",
     "poolManager": "0x1F98400000000000000000000000000000000004",
     "initialOwner": "0x0000000000000000000000000000000000000000",
-    "deploy": { "feeRedeemer": false, "stableImpl": false, "volatileImpl": false, "factory": false, "lens": true, "descriptor": false, "oracle": false }
+    "stablecoins": [
+      "0x078D782b760474a361dDA0AF3839290b0EF57AD6",
+      "0x9151434b16b9763660705744891fA906F660EcC5",
+      "0x7e10036Acc4B56d4dFCa3b77810356CE52313F9C",
+      "0x14D9143BEcC348920b68D123687045db49a016C6",
+      "0xA06b10Db9F390990364A3984C04FadF1c13691b5"
+    ],
+    "deploy": { "feeRedeemer": false, "stableImpl": false, "volatileImpl": false, "factory": false, "lens": false, "descriptor": true, "oracle": false }
   },
   "137": {
     "name": "polygon",
@@ -71,7 +90,13 @@
     "initialOwner": "0x0000000000000000000000000000000000000000",
     "oracleSequencerFeed": "0xBCF85224fc0756B9Fa45aA7892530B47e10b6433",
     "oracleGracePeriod": 3600,
-    "deploy": { "feeRedeemer": false, "stableImpl": false, "volatileImpl": false, "factory": false, "lens": true, "descriptor": false, "oracle": false }
+    "stablecoins": [
+      "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "0xd9aAEc86B65D86f6A7B5B1b0c42FFA531710b6CA",
+      "0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb",
+      "0x5d3a1Ff2b6BAb83b63cd9AD0787074081a52ef34"
+    ],
+    "deploy": { "feeRedeemer": false, "stableImpl": false, "volatileImpl": false, "factory": false, "lens": false, "descriptor": true, "oracle": false }
   },
   "42161": {
     "name": "arbitrum-one",
@@ -79,7 +104,14 @@
     "initialOwner": "0x0000000000000000000000000000000000000000",
     "oracleSequencerFeed": "0xFdB631F5EE196F0ed6FAa767959853A9F217697D",
     "oracleGracePeriod": 3600,
-    "deploy": { "feeRedeemer": false, "stableImpl": false, "volatileImpl": false, "factory": false, "lens": true, "descriptor": false, "oracle": false }
+    "stablecoins": [
+      "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
+      "0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8",
+      "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9",
+      "0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1",
+      "0x5d3a1Ff2b6BAb83b63cd9AD0787074081a52ef34"
+    ],
+    "deploy": { "feeRedeemer": false, "stableImpl": false, "volatileImpl": false, "factory": false, "lens": false, "descriptor": true, "oracle": false }
   },
   "42220": {
     "name": "celo",
@@ -115,7 +147,7 @@
     "name": "unichain-sepolia",
     "poolManager": "0x00B036B58a818B1BC34d502D3fE730Db729e62AC",
     "initialOwner": "0x0000000000000000000000000000000000000000",
-    "deploy": { "feeRedeemer": false, "stableImpl": false, "volatileImpl": false, "factory": false, "lens": true, "descriptor": false, "oracle": false }
+    "deploy": { "feeRedeemer": false, "stableImpl": false, "volatileImpl": false, "factory": false, "lens": false, "descriptor": false, "oracle": false }
   },
   "11155111": {
     "name": "sepolia",

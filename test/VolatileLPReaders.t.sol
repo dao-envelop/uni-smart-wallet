@@ -100,7 +100,7 @@ contract VolatileLPReadersTest is Test {
         MockERC20(Currency.unwrap(t2)).mint(address(mgr), FUND);
 
         lens = new UniLens();
-        descriptor = new WalletPositionDescriptor();
+        descriptor = new WalletPositionDescriptor(new address[](0));
         vm.prank(owner);
         mgr.setPositionDescriptor(address(descriptor));
     }
