@@ -1,6 +1,6 @@
 {
   "chainId": 42161,
-  "descriptor": "0x7D85544213E61595f8757EBE0D0bF903bafb789d",
+  "descriptor": "0x330ce9c5d9271b0aeC08cD363C535Ef126743b0c",
   "factory": "0x8A56c6be755aC385395E96234b553DB1B9B06bEa",
   "feeRedeemer": "0x430D09A7969A5c6eF2fb5DcE40972d6e66eF5E33",
   "fromBlock": 486143228,
