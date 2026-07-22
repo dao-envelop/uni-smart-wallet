@@ -1,0 +1,426 @@
+[
+ {
+  "type": "function",
+  "name": "managerConfig",
+  "inputs": [
+   {
+    "name": "manager",
+    "type": "address",
+    "internalType": "address"
+   },
+   {
+    "name": "extraTokens",
+    "type": "address[]",
+    "internalType": "address[]"
+   }
+  ],
+  "outputs": [
+   {
+    "name": "cfg",
+    "type": "tuple",
+    "internalType": "struct UniLens.ManagerConfig",
+    "components": [
+     {
+      "name": "owner",
+      "type": "address",
+      "internalType": "address"
+     },
+     {
+      "name": "protocolFeeBps",
+      "type": "uint16",
+      "internalType": "uint16"
+     },
+     {
+      "name": "treasury",
+      "type": "address",
+      "internalType": "address"
+     },
+     {
+      "name": "oracleType",
+      "type": "uint256",
+      "internalType": "uint256"
+     },
+     {
+      "name": "positionDescriptor",
+      "type": "address",
+      "internalType": "address"
+     },
+     {
+      "name": "priceOracle",
+      "type": "address",
+      "internalType": "address"
+     },
+     {
+      "name": "name",
+      "type": "string",
+      "internalType": "string"
+     },
+     {
+      "name": "managed",
+      "type": "tuple[]",
+      "internalType": "struct UniLens.StableInfo[]",
+      "components": [
+       {
+        "name": "currency",
+        "type": "address",
+        "internalType": "Currency"
+       },
+       {
+        "name": "decimals",
+        "type": "uint8",
+        "internalType": "uint8"
+       },
+       {
+        "name": "symbol",
+        "type": "string",
+        "internalType": "string"
+       },
+       {
+        "name": "idle",
+        "type": "uint256",
+        "internalType": "uint256"
+       }
+      ]
+     },
+     {
+      "name": "extra",
+      "type": "tuple[]",
+      "internalType": "struct UniLens.StableInfo[]",
+      "components": [
+       {
+        "name": "currency",
+        "type": "address",
+        "internalType": "Currency"
+       },
+       {
+        "name": "decimals",
+        "type": "uint8",
+        "internalType": "uint8"
+       },
+       {
+        "name": "symbol",
+        "type": "string",
+        "internalType": "string"
+       },
+       {
+        "name": "idle",
+        "type": "uint256",
+        "internalType": "uint256"
+       }
+      ]
+     },
+     {
+      "name": "pools",
+      "type": "tuple[]",
+      "internalType": "struct UniLens.PoolInfo[]",
+      "components": [
+       {
+        "name": "key",
+        "type": "tuple",
+        "internalType": "struct PoolKey",
+        "components": [
+         {
+          "name": "currency0",
+          "type": "address",
+          "internalType": "Currency"
+         },
+         {
+          "name": "currency1",
+          "type": "address",
+          "internalType": "Currency"
+         },
+         {
+          "name": "fee",
+          "type": "uint24",
+          "internalType": "uint24"
+         },
+         {
+          "name": "tickSpacing",
+          "type": "int24",
+          "internalType": "int24"
+         },
+         {
+          "name": "hooks",
+          "type": "address",
+          "internalType": "contract IHooks"
+         }
+        ]
+       },
+       {
+        "name": "sqrtPriceX96",
+        "type": "uint160",
+        "internalType": "uint160"
+       },
+       {
+        "name": "liquidity",
+        "type": "uint128",
+        "internalType": "uint128"
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "stateMutability": "view"
+ },
+ {
+  "type": "function",
+  "name": "managerFull",
+  "inputs": [
+   {
+    "name": "manager",
+    "type": "address",
+    "internalType": "address"
+   },
+   {
+    "name": "extraTokens",
+    "type": "address[]",
+    "internalType": "address[]"
+   }
+  ],
+  "outputs": [
+   {
+    "name": "full",
+    "type": "tuple",
+    "internalType": "struct UniLens.ManagerFull",
+    "components": [
+     {
+      "name": "config",
+      "type": "tuple",
+      "internalType": "struct UniLens.ManagerConfig",
+      "components": [
+       {
+        "name": "owner",
+        "type": "address",
+        "internalType": "address"
+       },
+       {
+        "name": "protocolFeeBps",
+        "type": "uint16",
+        "internalType": "uint16"
+       },
+       {
+        "name": "treasury",
+        "type": "address",
+        "internalType": "address"
+       },
+       {
+        "name": "oracleType",
+        "type": "uint256",
+        "internalType": "uint256"
+       },
+       {
+        "name": "positionDescriptor",
+        "type": "address",
+        "internalType": "address"
+       },
+       {
+        "name": "priceOracle",
+        "type": "address",
+        "internalType": "address"
+       },
+       {
+        "name": "name",
+        "type": "string",
+        "internalType": "string"
+       },
+       {
+        "name": "managed",
+        "type": "tuple[]",
+        "internalType": "struct UniLens.StableInfo[]",
+        "components": [
+         {
+          "name": "currency",
+          "type": "address",
+          "internalType": "Currency"
+         },
+         {
+          "name": "decimals",
+          "type": "uint8",
+          "internalType": "uint8"
+         },
+         {
+          "name": "symbol",
+          "type": "string",
+          "internalType": "string"
+         },
+         {
+          "name": "idle",
+          "type": "uint256",
+          "internalType": "uint256"
+         }
+        ]
+       },
+       {
+        "name": "extra",
+        "type": "tuple[]",
+        "internalType": "struct UniLens.StableInfo[]",
+        "components": [
+         {
+          "name": "currency",
+          "type": "address",
+          "internalType": "Currency"
+         },
+         {
+          "name": "decimals",
+          "type": "uint8",
+          "internalType": "uint8"
+         },
+         {
+          "name": "symbol",
+          "type": "string",
+          "internalType": "string"
+         },
+         {
+          "name": "idle",
+          "type": "uint256",
+          "internalType": "uint256"
+         }
+        ]
+       },
+       {
+        "name": "pools",
+        "type": "tuple[]",
+        "internalType": "struct UniLens.PoolInfo[]",
+        "components": [
+         {
+          "name": "key",
+          "type": "tuple",
+          "internalType": "struct PoolKey",
+          "components": [
+           {
+            "name": "currency0",
+            "type": "address",
+            "internalType": "Currency"
+           },
+           {
+            "name": "currency1",
+            "type": "address",
+            "internalType": "Currency"
+           },
+           {
+            "name": "fee",
+            "type": "uint24",
+            "internalType": "uint24"
+           },
+           {
+            "name": "tickSpacing",
+            "type": "int24",
+            "internalType": "int24"
+           },
+           {
+            "name": "hooks",
+            "type": "address",
+            "internalType": "contract IHooks"
+           }
+          ]
+         },
+         {
+          "name": "sqrtPriceX96",
+          "type": "uint160",
+          "internalType": "uint160"
+         },
+         {
+          "name": "liquidity",
+          "type": "uint128",
+          "internalType": "uint128"
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "name": "positions",
+      "type": "tuple[]",
+      "internalType": "struct UniLens.PositionView[]",
+      "components": [
+       {
+        "name": "salt",
+        "type": "bytes32",
+        "internalType": "bytes32"
+       },
+       {
+        "name": "key",
+        "type": "tuple",
+        "internalType": "struct PoolKey",
+        "components": [
+         {
+          "name": "currency0",
+          "type": "address",
+          "internalType": "Currency"
+         },
+         {
+          "name": "currency1",
+          "type": "address",
+          "internalType": "Currency"
+         },
+         {
+          "name": "fee",
+          "type": "uint24",
+          "internalType": "uint24"
+         },
+         {
+          "name": "tickSpacing",
+          "type": "int24",
+          "internalType": "int24"
+         },
+         {
+          "name": "hooks",
+          "type": "address",
+          "internalType": "contract IHooks"
+         }
+        ]
+       },
+       {
+        "name": "tickLower",
+        "type": "int24",
+        "internalType": "int24"
+       },
+       {
+        "name": "tickUpper",
+        "type": "int24",
+        "internalType": "int24"
+       },
+       {
+        "name": "liquidity",
+        "type": "uint128",
+        "internalType": "uint128"
+       },
+       {
+        "name": "openedAt",
+        "type": "uint64",
+        "internalType": "uint64"
+       },
+       {
+        "name": "sqrtPriceX96",
+        "type": "uint160",
+        "internalType": "uint160"
+       },
+       {
+        "name": "amount0",
+        "type": "uint256",
+        "internalType": "uint256"
+       },
+       {
+        "name": "amount1",
+        "type": "uint256",
+        "internalType": "uint256"
+       },
+       {
+        "name": "fees0",
+        "type": "uint256",
+        "internalType": "uint256"
+       },
+       {
+        "name": "fees1",
+        "type": "uint256",
+        "internalType": "uint256"
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "stateMutability": "view"
+ }
+]
