@@ -3,7 +3,7 @@
     "name": "mainnet",
     "poolManager": "0x000000000004444c5dc75cB358380D2e3dE08A90",
     "initialOwner": "0x0000000000000000000000000000000000000000",
-    "deploy": { "feeRedeemer": false, "stableImpl": true, "volatileImpl": true, "factory": true, "lens": false, "descriptor": false, "oracle": true }
+    "deploy": { "feeRedeemer": false, "stableImpl": false, "volatileImpl": false, "factory": false, "lens": true, "descriptor": false, "oracle": false }
   },
   "10": {
     "name": "optimism",
@@ -21,7 +21,7 @@
     "name": "unichain",
     "poolManager": "0x1F98400000000000000000000000000000000004",
     "initialOwner": "0x0000000000000000000000000000000000000000",
-    "deploy": { "feeRedeemer": false, "stableImpl": true, "volatileImpl": true, "factory": true, "lens": false, "descriptor": false, "oracle": true }
+    "deploy": { "feeRedeemer": false, "stableImpl": false, "volatileImpl": false, "factory": false, "lens": true, "descriptor": false, "oracle": false }
   },
   "137": {
     "name": "polygon",
@@ -71,7 +71,7 @@
     "initialOwner": "0x0000000000000000000000000000000000000000",
     "oracleSequencerFeed": "0xBCF85224fc0756B9Fa45aA7892530B47e10b6433",
     "oracleGracePeriod": 3600,
-    "deploy": { "feeRedeemer": false, "stableImpl": true, "volatileImpl": true, "factory": true, "lens": false, "descriptor": false, "oracle": true }
+    "deploy": { "feeRedeemer": false, "stableImpl": false, "volatileImpl": false, "factory": false, "lens": true, "descriptor": false, "oracle": false }
   },
   "42161": {
     "name": "arbitrum-one",
@@ -79,7 +79,7 @@
     "initialOwner": "0x0000000000000000000000000000000000000000",
     "oracleSequencerFeed": "0xFdB631F5EE196F0ed6FAa767959853A9F217697D",
     "oracleGracePeriod": 3600,
-    "deploy": { "feeRedeemer": false, "stableImpl": true, "volatileImpl": true, "factory": true, "lens": false, "descriptor": false, "oracle": true }
+    "deploy": { "feeRedeemer": false, "stableImpl": false, "volatileImpl": false, "factory": false, "lens": true, "descriptor": false, "oracle": false }
   },
   "42220": {
     "name": "celo",
@@ -115,7 +115,7 @@
     "name": "unichain-sepolia",
     "poolManager": "0x00B036B58a818B1BC34d502D3fE730Db729e62AC",
     "initialOwner": "0x0000000000000000000000000000000000000000",
-    "deploy": { "feeRedeemer": false, "stableImpl": true, "volatileImpl": true, "factory": true, "lens": false, "descriptor": false, "oracle": true }
+    "deploy": { "feeRedeemer": false, "stableImpl": false, "volatileImpl": false, "factory": false, "lens": true, "descriptor": false, "oracle": false }
   },
   "11155111": {
     "name": "sepolia",
