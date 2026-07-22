@@ -4,7 +4,12 @@ pragma solidity ^0.8.26;
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
+import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
+import {FixedPoint96} from "@uniswap/v4-core/src/libraries/FixedPoint96.sol";
+import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {PoolSwapTest} from "@uniswap/v4-core/src/test/PoolSwapTest.sol";
 
 import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
@@ -13,6 +18,8 @@ import {stdJson} from "forge-std/StdJson.sol";
 import {NFTPositionHarness} from "./helpers/NFTPositionHarness.sol";
 import {SingletonNFTOwned} from "../src/abstract/SingletonNFTOwned.sol";
 import {WalletPositionDescriptor} from "../src/WalletPositionDescriptor.sol";
+import {PositionState} from "../src/lib/PositionState.sol";
+import {V4PositionManager} from "../src/abstract/V4PositionManager.sol";
 import {MockERC20} from "./helpers/Mocks.sol";
 import {DescriptorLibWrapper} from "./helpers/DescriptorLibWrapper.sol";
 import {V4WalletTestBase} from "./helpers/V4WalletTestBase.sol";
@@ -30,7 +37,9 @@ contract WalletPositionDescriptorTest is V4WalletTestBase {
 
     function setUp() public override {
         super.setUp();
-        descriptor = new WalletPositionDescriptor();
+        // Base descriptor with an EMPTY stable allowlist ⇒ the naive $1/token model, so the pre-existing
+        // 1:1-pool suites are unaffected. Price-anchored valuation is exercised in dedicated tests below.
+        descriptor = new WalletPositionDescriptor(new address[](0));
         vm.prank(owner);
         wallet.setPositionDescriptor(address(descriptor));
 
@@ -155,6 +164,77 @@ contract WalletPositionDescriptorTest is V4WalletTestBase {
         assertEq(json.readString(".attributes[0].value"), "0", "no positions");
         assertEq(json.readString(".attributes[1].value"), "0.00", "zero total value");
         assertEq(json.readString(".attributes[2].value"), "0", "zero apr");
+    }
+
+    // ────────── price-anchored valuation (task_041) ──────────
+
+    uint24 internal constant FEE2 = 500;
+    int24 internal constant SPACING2 = 10;
+
+    /// @dev A second, non-1:1 pool over the same token pair, initialized at `initTick`.
+    function _initPricedPool(int24 initTick) internal returns (PoolKey memory k) {
+        k = PoolKey({
+            currency0: currency0, currency1: currency1, fee: FEE2, tickSpacing: SPACING2, hooks: IHooks(address(0))
+        });
+        poolManager.initialize(k, TickMath.getSqrtPriceAtTick(initTick));
+    }
+
+    function _openIn(PoolKey memory k, int24 tl, int24 tu, uint128 liq, bytes32 salt) internal {
+        vm.prank(owner);
+        wallet.openPosition(k, tl, tu, liq, salt, 0, type(uint128).max, type(uint128).max);
+    }
+
+    /// @dev token0 raw → token1 raw at the pool price (mirrors the descriptor's `_q0to1`).
+    function _q0to1(uint256 a0, uint160 sp) internal pure returns (uint256) {
+        return FullMath.mulDiv(FullMath.mulDiv(a0, sp, FixedPoint96.Q96), sp, FixedPoint96.Q96);
+    }
+
+    /// @notice With one leg (currency1) in the stable allowlist and a non-1:1 pool, the rendered
+    /// "Total Value (USD)" values the volatile leg (currency0) through the pool price — NOT $1/token.
+    function test_tokenURI_stableAnchoredValue_usesPoolPrice() public {
+        // Descriptor that treats currency1 as the $1 stable leg.
+        address[] memory stables = new address[](1);
+        stables[0] = Currency.unwrap(currency1);
+        WalletPositionDescriptor priced = new WalletPositionDescriptor(stables);
+        vm.prank(owner);
+        wallet.setPositionDescriptor(address(priced));
+
+        // Pool at tick 6900 (price ≈ 1.99 → clearly not 1:1); position straddles the current tick.
+        int24 initTick = 6900;
+        PoolKey memory k = _initPricedPool(initTick);
+        bytes32 salt = bytes32(uint256(0xABCD));
+        _openIn(k, 6000, 7800, uint128(1000e18), salt);
+
+        // Recompute the expected anchored total from on-chain state (fees are 0 on a fresh position).
+        V4PositionManager.Position memory p = wallet.positionOf(salt);
+        (uint256 a0, uint256 a1,,) = PositionState.value(IPoolManager(address(poolManager)), address(wallet), salt, p);
+        (uint160 sp,,,) = StateLibrary.getSlot0(IPoolManager(address(poolManager)), k.toId());
+        assertGt(a0, 0, "position holds volatile leg");
+
+        uint256 anchored = a1 + _q0to1(a0, sp); // 18-decimals both, USD == 1e18
+        uint256 naive = a0 + a1;
+        assertGt(anchored, naive, "anchored > naive when price > 1");
+
+        DescriptorLibWrapper fmt = new DescriptorLibWrapper();
+        string memory rendered = _decodeJson(wallet.tokenURI(1)).readString(".attributes[1].value");
+        assertEq(rendered, fmt.formatUsd(anchored), "renders price-weighted total");
+        assertTrue(keccak256(bytes(rendered)) != keccak256(bytes(fmt.formatUsd(naive))), "not the naive $1/token sum");
+    }
+
+    /// @notice A pair with NO stable leg keeps the naive $1/token model (no on-chain USD anchor).
+    function test_tokenURI_noStablePair_naiveFallback() public {
+        // The base `descriptor` has an empty allowlist ⇒ neither leg is stable.
+        int24 initTick = 6900;
+        PoolKey memory k = _initPricedPool(initTick);
+        bytes32 salt = bytes32(uint256(0xBEEF));
+        _openIn(k, 6000, 7800, uint128(1000e18), salt);
+
+        V4PositionManager.Position memory p = wallet.positionOf(salt);
+        (uint256 a0, uint256 a1,,) = PositionState.value(IPoolManager(address(poolManager)), address(wallet), salt, p);
+
+        DescriptorLibWrapper fmt = new DescriptorLibWrapper();
+        string memory rendered = _decodeJson(wallet.tokenURI(1)).readString(".attributes[1].value");
+        assertEq(rendered, fmt.formatUsd(a0 + a1), "naive $1/token sum");
     }
 
     /// @dev Strip the `data:application/json;base64,` prefix and base64-decode via ffi → raw JSON.

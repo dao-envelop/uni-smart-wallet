@@ -5,6 +5,10 @@ import {Base64} from "@openzeppelin/contracts/utils/Base64.sol";
 import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
+import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
+import {FixedPoint96} from "@uniswap/v4-core/src/libraries/FixedPoint96.sol";
 import {IWalletDescriptor} from "./interfaces/IWalletDescriptor.sol";
 import {V4PositionManager} from "./abstract/V4PositionManager.sol";
 import {PositionState} from "./lib/PositionState.sol";
@@ -26,12 +30,26 @@ interface INftName {
 /// owning N salt-keyed positions).
 contract WalletPositionDescriptor is IWalletDescriptor {
     using Strings for uint256;
+    using StateLibrary for IPoolManager;
 
-    /// @dev Value/APR use a `1 stable == $1` model, normalizing raw token amounts by their
-    /// on-chain `decimals()`. Non-$1 currencies (e.g. native ETH in an ETH pool) are approximated
-    /// at $1 — the card is a portfolio summary, not an oracle.
+    /// @dev USD anchoring: a stablecoin leg is valued at $1; the paired (volatile) leg is converted to
+    /// the stable leg at the live pool price (`sqrtPriceX96`). For pairs with NO stable leg there is no
+    /// on-chain USD anchor, so we fall back to the naive `1 token == $1` model. The card is a pool-spot
+    /// estimate, not a market oracle.
     uint256 private constant USD = 1e18;
+    uint256 private constant Q96 = FixedPoint96.Q96;
     uint256 private constant SECONDS_PER_YEAR = 365 days;
+
+    /// @dev Per-chain stablecoin allowlist (set once at deploy) — currencies valued at $1 for the anchor.
+    /// Stateless w.r.t. any manager, so one deployed descriptor still serves every clone on the chain.
+    mapping(address => bool) private isStable;
+
+    /// @param stablecoins The chain's stablecoin addresses (e.g. USDC/USDT/DAI) valued at $1.
+    constructor(address[] memory stablecoins) {
+        for (uint256 i = 0; i < stablecoins.length; ++i) {
+            isStable[stablecoins[i]] = true;
+        }
+    }
 
     string private constant DESCRIPTION =
         "NFT-owned Uniswap V4 liquidity wallet. Holding this token controls the wallet and all of its positions.";
@@ -98,17 +116,45 @@ contract WalletPositionDescriptor is IWalletDescriptor {
         }
     }
 
-    /// @dev One position's principal/fee value in 1e18-scaled USD (decimals-normalized, $1/token).
+    /// @dev One position's principal/fee value in 1e18-scaled USD. When one leg is a stablecoin it is
+    /// valued at $1 and the volatile leg is converted to it at the live pool price; a pair with no stable
+    /// leg keeps the naive `1 token == $1` model (no on-chain USD anchor otherwise).
     function _positionUsd(IPoolManager pm, address w, bytes32 salt, V4PositionManager.Position memory p)
         private
         view
         returns (uint256 principalUsd, uint256 feeUsd)
     {
         (uint256 a0, uint256 a1, uint256 f0, uint256 f1) = PositionState.value(pm, w, salt, p);
-        uint256 unit0 = 10 ** _decimals(p.key.currency0);
-        uint256 unit1 = 10 ** _decimals(p.key.currency1);
-        principalUsd = (a0 * USD) / unit0 + (a1 * USD) / unit1;
-        feeUsd = (f0 * USD) / unit0 + (f1 * USD) / unit1;
+
+        if (isStable[Currency.unwrap(p.key.currency1)]) {
+            // token1 = $1; convert token0 → token1 at the pool price.
+            uint256 unit1 = 10 ** _decimals(p.key.currency1);
+            (uint160 sp,,,) = pm.getSlot0(p.key.toId());
+            principalUsd = (a1 * USD) / unit1 + (_q0to1(a0, sp) * USD) / unit1;
+            feeUsd = (f1 * USD) / unit1 + (_q0to1(f0, sp) * USD) / unit1;
+        } else if (isStable[Currency.unwrap(p.key.currency0)]) {
+            // token0 = $1; convert token1 → token0 at the pool price.
+            uint256 unit0 = 10 ** _decimals(p.key.currency0);
+            (uint160 sp,,,) = pm.getSlot0(p.key.toId());
+            principalUsd = (a0 * USD) / unit0 + (_q1to0(a1, sp) * USD) / unit0;
+            feeUsd = (f0 * USD) / unit0 + (_q1to0(f1, sp) * USD) / unit0;
+        } else {
+            // No stable anchor → naive $1/token fallback.
+            uint256 unit0 = 10 ** _decimals(p.key.currency0);
+            uint256 unit1 = 10 ** _decimals(p.key.currency1);
+            principalUsd = (a0 * USD) / unit0 + (a1 * USD) / unit1;
+            feeUsd = (f0 * USD) / unit0 + (f1 * USD) / unit1;
+        }
+    }
+
+    /// @dev token0 raw → token1 raw at price `sp`:  a0 · (sqrtP/2^96)^2. Two-step 512-bit mulDiv.
+    function _q0to1(uint256 a0, uint160 sp) private pure returns (uint256) {
+        return FullMath.mulDiv(FullMath.mulDiv(a0, sp, Q96), sp, Q96);
+    }
+
+    /// @dev token1 raw → token0 raw at price `sp`:  a1 / (sqrtP/2^96)^2. Two-step 512-bit mulDiv.
+    function _q1to0(uint256 a1, uint160 sp) private pure returns (uint256) {
+        return FullMath.mulDiv(FullMath.mulDiv(a1, Q96, sp), Q96, sp);
     }
 
     function _pushDistinct(Currency[] memory arr, uint256 count, Currency c) private pure returns (uint256) {

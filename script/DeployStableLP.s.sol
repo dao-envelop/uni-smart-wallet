@@ -110,7 +110,7 @@ contract DeployStableLP is Script {
         address treasury = c.treasury != address(0) ? c.treasury : existing.feeRedeemer;
 
         vm.startBroadcast();
-        d = deployComponents(c.poolManager, admin, c.flags, treasury, existing, broadcaster, c.oracle);
+        d = deployComponents(c.poolManager, admin, c.flags, treasury, existing, broadcaster, c.oracle, c.stablecoins);
         vm.stopBroadcast();
 
         _log(c.poolManager, admin, c.name, c.flags, d);
@@ -134,7 +134,7 @@ contract DeployStableLP is Script {
             sequencerFeed: address(0),
             gracePeriod: DEFAULT_SEQUENCER_GRACE_PERIOD
         });
-        return deployComponents(pm, admin, all, address(0), _emptyExisting(), admin, oracle);
+        return deployComponents(pm, admin, all, address(0), _emptyExisting(), admin, oracle, new address[](0));
     }
 
     /// @notice Deploy exactly the components enabled in `flags`, resolving prerequisites (treasury for the
@@ -153,7 +153,8 @@ contract DeployStableLP is Script {
         address treasury,
         Existing memory existing,
         address broadcaster,
-        OracleParams memory oracle
+        OracleParams memory oracle,
+        address[] memory stablecoins
     ) public returns (Deployment memory d) {
         // 1. Treasury: a fresh FeeRedeemer overrides any fallback.
         address treasuryAddr = treasury;
@@ -180,7 +181,7 @@ contract DeployStableLP is Script {
 
         // 4. Standalone components.
         if (flags.lens) d.lens = new UniLens();
-        if (flags.descriptor) d.descriptor = new WalletPositionDescriptor();
+        if (flags.descriptor) d.descriptor = new WalletPositionDescriptor(stablecoins);
         if (flags.oracle) {
             d.oracle = new ChainlinkPriceOracle(admin, oracle.maxDeviationBps, oracle.sequencerFeed, oracle.gracePeriod);
         }
@@ -233,6 +234,7 @@ contract DeployStableLP is Script {
         string name;
         Flags flags;
         OracleParams oracle;
+        address[] stablecoins; // per-chain $1 allowlist for the descriptor
     }
 
     function loadConfig(uint256 chainId) public view returns (Config memory c) {
@@ -250,6 +252,7 @@ contract DeployStableLP is Script {
         c.name = _optStr(json, string.concat(base, ".name"));
         c.flags = _readFlags(json, base);
         c.oracle = _readOracle(json, base);
+        c.stablecoins = _optAddrArray(json, string.concat(base, ".stablecoins"));
     }
 
     /// @dev Read the `deploy` toggle object; a missing object ⇒ the legacy full set (oracle off).
@@ -289,6 +292,11 @@ contract DeployStableLP is Script {
 
     function _optAddr(string memory json, string memory path) internal view returns (address) {
         return vm.keyExistsJson(json, path) ? vm.parseJsonAddress(json, path) : address(0);
+    }
+
+    /// @dev Optional address array (e.g. the descriptor stablecoin allowlist); missing key ⇒ empty.
+    function _optAddrArray(string memory json, string memory path) internal view returns (address[] memory) {
+        return vm.keyExistsJson(json, path) ? vm.parseJsonAddressArray(json, path) : new address[](0);
     }
 
     function _optStr(string memory json, string memory path) internal view returns (string memory) {

@@ -13,13 +13,13 @@ contract DeployDescriptorTest is Test {
     }
 
     function test_deploy_returnsDescriptor() public {
-        WalletPositionDescriptor d = deployer.deploy();
+        WalletPositionDescriptor d = deployer.deploy(new address[](0));
         assertTrue(address(d) != address(0), "descriptor deployed");
     }
 
     function test_deploy_distinctInstances() public {
-        WalletPositionDescriptor a = deployer.deploy();
-        WalletPositionDescriptor b = deployer.deploy();
+        WalletPositionDescriptor a = deployer.deploy(new address[](0));
+        WalletPositionDescriptor b = deployer.deploy(new address[](0));
         assertTrue(address(a) != address(b), "distinct deploys");
     }
 }
