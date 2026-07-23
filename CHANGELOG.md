@@ -6,6 +6,64 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-07-23
+
+Second major release. Adds the **VolatileLPManager** product, replaces the stable-only factory with a
+**universal `LPManagerFactory`**, hardens the operator/oracle model from three post-1.0.0 audits, and
+redeploys the read/render layer (UniLens aggregators + price-anchored descriptor) on every chain.
+
+**Breaking since 1.0.0:** `StableLPFactory` → `LPManagerFactory` (task_030); the deployment event
+`ManagerCreated` → `EnvelopV2Deployment` (task_035); `IPriceOracle.check` now returns `bool enforced`
+(task_031); `predictManagerAddress` gains an `initData` parameter (task_033).
+
+### Added
+
+- **VolatileLPManager** (task_026 / task_027) — new product for arbitrary/volatile pairs. Unlike Stable
+  (`salt == poolId`, one position per pool), a pool holds **many** positions (caller-chosen salt) at
+  **per-call** ranges; each position records its `poolId`. Adds `minAmountOut` on the balancing pre-swap,
+  `recenter` (remove → swap → re-add in one call), and an external `IPriceOracle` guard that gates
+  operator swaps fail-closed. `InitParams.pools` is `PoolKey[]` (ranges are per-call).
+- **`BaseLPManager` shared base** (task_025) — extracted the configured-pool set, managed-currency union,
+  position store, protocol-fee skim, `tokenURI`/descriptor, and the owner escape hatch into a base shared
+  by both products; `StableLPManager` becomes a thin subclass. (The original JIT-LP `UniSmartWallet` was
+  removed in this release.)
+- **UniLens rich aggregators** (task_040) — `managerConfig(manager, extraTokens)` and
+  `managerFull(manager, extraTokens)` return owner/fee/treasury, product tag, descriptor/oracle addresses,
+  name, managed stables (with safe decimals/symbol/idle), funded unmanaged extra tokens, per-pool live
+  slot0/liquidity — and (for `managerFull`) the full open-position portfolio, in one call. Product-agnostic
+  and stateless; `managerInfo`/`positions`/`position` kept for backwards-compat.
+- **VolatileLPManager Base-fork gas benchmark** (task_037) — `test/GasCompareVolatile.fork.t.sol` measures
+  gas on every VolatileLPManager op against the live Base v4 PoolManager and compares `recenter` (one call)
+  with the equivalent manual rebalance via the Uniswap v4 PositionManager (decrease+swap+mint). Env-gated by
+  `BASE_RPC`; validated live: `recenter` ≈46% cheaper than the manual path.
+- **`LPManagerFactory.createManagerNondeterministic`** (task_033) — create a manager at a non-deterministic
+  (CREATE) address when the counterfactual-funding flow isn't needed; same guards as `createManager`.
+- **Native funding on manager creation** (task_033) — `createManager` / `createManagerNondeterministic` are
+  now `payable` and forward any `msg.value` to the new manager (`ManagerFunded` event); atomic, so a
+  reverted creation returns the ETH.
+
+### Changed
+
+- **Universal `LPManagerFactory` replaces `StableLPFactory`** (task_030). One factory allowlists multiple
+  implementations (Stable **and** Volatile) and clones any of them via EIP-1167 with atomic
+  `clone + initialize`. **Breaking:** integrations referencing `StableLPFactory` must switch.
+- **Descriptor values volatile legs at the pool price** (task_041). `WalletPositionDescriptor` takes a
+  per-chain stablecoin allowlist (constructor) and values a position from the live pool price
+  (`sqrtPriceX96`) with the stable leg anchored at $1, instead of the naive $1/token model that undervalued
+  ETH/WBTC legs on volatile managers. Pairs with no stable leg keep the naive fallback. `tokenURI` output
+  shape and `IWalletDescriptor` signature unchanged.
+- **Envelop-protocol-v2 event-model compatibility** (task_036). `EnvelopV2OracleType` is now emitted in the
+  implementation **constructor** (per-impl declaration, like envelop's `WNFTV2Envelop721`) instead of per-clone
+  in `initialize`. Added the `SmartWallet` ether-tracking events — `EtherReceived` (in `receive()`) and
+  `EtherBalanceChanged` (via a `fixEtherBalance` modifier on every value-moving op: `withdrawTo`,
+  `executeEncodedTxBatch`, and the Stable/Volatile allocate/reinvest/recenter/claimFees paths).
+- **Factory queries the manager instead of hard-coding; Envelop deployment event** (task_035). The
+  `LPManagerFactory` post-init owner check now reads the singleton token id from the manager
+  (`m.ownerOf(m.TOKEN_ID())`) rather than a local `TOKEN_ID` constant, and the deployment event is now
+  **`EnvelopV2Deployment(address indexed proxy, address indexed implementation, uint256 envelopOracleType)`**
+  (replacing `ManagerCreated`), with `envelopOracleType` queried from the manager's `ORACLE_TYPE()`.
+  **Breaking:** indexers keying on `ManagerCreated` must switch to `EnvelopV2Deployment`.
+
 ### Security
 
 - **Operator swap safety** — audit `2026-07-18` H-VOL-1 / M-VOL-2 (task_031 + task_032). Any
@@ -23,32 +81,9 @@ All notable changes to this project are documented here. The format is based on
   CREATE2 salt now binds `keccak256(initData)`, so a front-runner can no longer deploy a different pool
   config at a caller's predicted, pre-funded address (`predictManagerAddress` gains an `initData`
   parameter). Counterfactual funding is now safe by construction.
-
-### Added
-
-- **VolatileLPManager Base-fork gas benchmark** (task_037) — `test/GasCompareVolatile.fork.t.sol` measures
-  gas on every VolatileLPManager op against the live Base v4 PoolManager and compares `recenter` (one call)
-  with the equivalent manual rebalance via the Uniswap v4 PositionManager (decrease+swap+mint). Env-gated by
-  `BASE_RPC`; validated live: `recenter` ≈46% cheaper than the manual path.
-- **`LPManagerFactory.createManagerNondeterministic`** (task_033) — create a manager at a non-deterministic
-  (CREATE) address when the counterfactual-funding flow isn't needed; same guards as `createManager`.
-- **Native funding on manager creation** (task_033) — `createManager` / `createManagerNondeterministic` are
-  now `payable` and forward any `msg.value` to the new manager (`ManagerFunded` event); atomic, so a
-  reverted creation returns the ETH.
-
-### Changed
-
-- **Envelop-protocol-v2 event-model compatibility** (task_036). `EnvelopV2OracleType` is now emitted in the
-  implementation **constructor** (per-impl declaration, like envelop's `WNFTV2Envelop721`) instead of per-clone
-  in `initialize`. Added the `SmartWallet` ether-tracking events — `EtherReceived` (in `receive()`) and
-  `EtherBalanceChanged` (via a `fixEtherBalance` modifier on every value-moving op: `withdrawTo`,
-  `executeEncodedTxBatch`, and the Stable/Volatile allocate/reinvest/recenter/claimFees paths).
-- **Factory queries the manager instead of hard-coding; Envelop deployment event** (task_035). The
-  `LPManagerFactory` post-init owner check now reads the singleton token id from the manager
-  (`m.ownerOf(m.TOKEN_ID())`) rather than a local `TOKEN_ID` constant, and the deployment event is now
-  **`EnvelopV2Deployment(address indexed proxy, address indexed implementation, uint256 envelopOracleType)`**
-  (replacing `ManagerCreated`), with `envelopOracleType` queried from the manager's `ORACLE_TYPE()`.
-  **Breaking:** indexers keying on `ManagerCreated` must switch to `EnvelopV2Deployment`.
+- **ChainlinkPriceOracle hardening** (task_039). Added an L2 sequencer-uptime gate (with a configurable
+  grace period), fixed a staleness-check underflow, and bounded feed `decimals`. Sized `maxDeviationBps`
+  from on-chain price-deviation snapshots (`script/PriceDeviation`).
 
 ### Fixed
 
@@ -56,6 +91,15 @@ All notable changes to this project are documented here. The format is based on
   now revert `ZeroLiquidity` when the computed liquidity is `0` (previously, with `minLiquidity == 0`, a
   no-op add slipped through and a fresh salt registered a zero-liquidity "ghost" in `openSalts`). Guard
   added in the shared `_addLiquidity` / `_addLiquidityAt` helpers.
+- **Arbitrum deploy `fromBlock`** — record a mainnet-range `block.number` so indexers backfill from the
+  right height.
+
+### Deployed
+
+- Redeployed **UniLens** (task_040) and **WalletPositionDescriptor** (task_041) on Ethereum (1),
+  Unichain (130), Base (8453), Arbitrum One (42161), and Unichain Sepolia (1301). **VolatileLPManager**
+  implementation and **ChainlinkPriceOracle** deployed on all chains. See
+  [Deployments](./README.md#deployments) / `deployments/<chainId>.json`.
 
 ## [1.0.0] - 2026-06-29
 
@@ -96,5 +140,6 @@ First public release of **Envelop StableLP** — an NFT-owned, factory-cloned Un
 - Ethereum (1), Arbitrum One (42161), Base (8453), Unichain (130), and Unichain Sepolia (1301).
   See [Deployments](./README.md#deployments) / `deployments/<chainId>.json`.
 
-[Unreleased]: https://github.com/dao-envelop/uni-smart-wallet/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/dao-envelop/uni-smart-wallet/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/dao-envelop/uni-smart-wallet/compare/v1.0.0...v2.0.0
 [1.0.0]: https://github.com/dao-envelop/uni-smart-wallet/releases/tag/v1.0.0

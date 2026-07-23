@@ -42,10 +42,15 @@ The contract holds your principal with **no admin, no pause switch, and no upgra
   gate; it's what makes operator delegation safe).
 - **10% protocol fee** skimmed from realized fees only (principal is never taxed), as ERC-6909 claims to
   an immutable treasury; redeemed via `FeeRedeemer`.
-- **On-chain `tokenURI`** — the singleton NFT renders the live position portfolio (`WalletPositionDescriptor`),
-  with a read aggregator (`UniLens`) for frontends.
-- **EIP-1167 clones** via `StableLPFactory` (atomic clone + `initialize`); per-clone NFT name with a
-  default fallback of `Envelop LP Uniswap Manager`.
+- **On-chain `tokenURI`** — the singleton NFT renders the live position portfolio (`WalletPositionDescriptor`,
+  which values a position at the live pool price with the stable leg anchored at $1), with a read aggregator
+  (`UniLens`) for frontends.
+- **Volatile pairs** — `VolatileLPManager` handles arbitrary/volatile pairs: many positions per pool at
+  per-call ranges, `recenter` (remove → swap → re-add in one call), and an `IPriceOracle` guard that gates
+  operator swaps fail-closed (owner swaps bypass).
+- **EIP-1167 clones** via the universal `LPManagerFactory` (atomic clone + `initialize`; allowlists both
+  the Stable and Volatile implementations); per-clone NFT name with a default fallback of
+  `Envelop LP Uniswap Manager`.
 
 Design details: [`tasks/spec_StableLPManager.md`](./tasks/spec_StableLPManager.md) ·
 asset/delta flow diagrams: [`tasks/StableLPManager_flows_ru.md`](./tasks/StableLPManager_flows_ru.md).
@@ -55,16 +60,19 @@ asset/delta flow diagrams: [`tasks/StableLPManager_flows_ru.md`](./tasks/StableL
 Addresses are the source of truth in [`deployments/<chainId>.json`](./deployments). V4 `PoolManager`
 addresses come from the [official Uniswap deployments](https://docs.uniswap.org/contracts/v4/deployments).
 
-| Chain | `StableLPFactory` | `StableLPManager` (impl) | `FeeRedeemer` | `UniLens` | `WalletPositionDescriptor` |
-|---|---|---|---|---|---|
-| **Ethereum** (1) | [`0x17b2B071821E1c3DF2C325E7c53B9D907a8436bE`](https://blockscan.com/address/0x17b2B071821E1c3DF2C325E7c53B9D907a8436bE) | [`0xe4c62017a9044CE0Bf6519A02626224d9D3aB471`](https://blockscan.com/address/0xe4c62017a9044CE0Bf6519A02626224d9D3aB471) | [`0x3352dbb1507182140225B9aFbeb40e604208F9Fe`](https://blockscan.com/address/0x3352dbb1507182140225B9aFbeb40e604208F9Fe) | [`0xb309F1f386AaaBe8f1Dc81Fc2226DCe2B23de214`](https://blockscan.com/address/0xb309F1f386AaaBe8f1Dc81Fc2226DCe2B23de214) | [`0x3218aa613C3545cf5Bf1698155e7BBb924A9b791`](https://blockscan.com/address/0x3218aa613C3545cf5Bf1698155e7BBb924A9b791) |
-| **Arbitrum One** (42161) | [`0xAE46573C559d2ef665102E86289685C2602D96e3`](https://blockscan.com/address/0xAE46573C559d2ef665102E86289685C2602D96e3) | [`0x6Cd8a96c9A6E441Bfeea521F1B8E4b757debbD04`](https://blockscan.com/address/0x6Cd8a96c9A6E441Bfeea521F1B8E4b757debbD04) | [`0x430D09A7969A5c6eF2fb5DcE40972d6e66eF5E33`](https://blockscan.com/address/0x430D09A7969A5c6eF2fb5DcE40972d6e66eF5E33) | [`0x498E0Bb7F7413272D1cFa3B1219e13598498d428`](https://blockscan.com/address/0x498E0Bb7F7413272D1cFa3B1219e13598498d428) | [`0x7D85544213E61595f8757EBE0D0bF903bafb789d`](https://blockscan.com/address/0x7D85544213E61595f8757EBE0D0bF903bafb789d) |
-| **Base** (8453) | [`0x653bce4d7A6CF5C4FdbBD5fc6B2bB41c8eAFC56A`](https://blockscan.com/address/0x653bce4d7A6CF5C4FdbBD5fc6B2bB41c8eAFC56A) | [`0xa98F88B8Fb494651a7F5cAff67E86E94AD7b424a`](https://blockscan.com/address/0xa98F88B8Fb494651a7F5cAff67E86E94AD7b424a) | [`0x21c23bA0ec49c9440CD259cCB48ff9D06CD16522`](https://blockscan.com/address/0x21c23bA0ec49c9440CD259cCB48ff9D06CD16522) | [`0x4F85fFB544c0DE49a231408157c5b8dAB4A55a1C`](https://blockscan.com/address/0x4F85fFB544c0DE49a231408157c5b8dAB4A55a1C) | [`0x22bBBE241464AB67c9B4F0881fA45F7f2d26870F`](https://blockscan.com/address/0x22bBBE241464AB67c9B4F0881fA45F7f2d26870F) |
-| **Unichain** (130) | [`0xC425A68df03764F648883b961eb982f087fe22ca`](https://blockscan.com/address/0xC425A68df03764F648883b961eb982f087fe22ca) | [`0x886D60f9218A53546A4046BDf66c28881e67aD96`](https://blockscan.com/address/0x886D60f9218A53546A4046BDf66c28881e67aD96) | [`0xc73724c684225DB5B1736a510825C0E76E8c9766`](https://blockscan.com/address/0xc73724c684225DB5B1736a510825C0E76E8c9766) | [`0x4765B0E28cdC0a9fd715B3520e94870473D3e7e4`](https://blockscan.com/address/0x4765B0E28cdC0a9fd715B3520e94870473D3e7e4) | [`0xDAf75f915e648FBdE1017733B3E8998bBD29f0ba`](https://blockscan.com/address/0xDAf75f915e648FBdE1017733B3E8998bBD29f0ba) |
-| **Unichain Sepolia** (1301) | [`0x63c6c2D5cC5E987e59D321a4e4e9560c346fb8e8`](https://blockscan.com/address/0x63c6c2D5cC5E987e59D321a4e4e9560c346fb8e8) | [`0x746D334045E3F755984d111340cC158e7D89864e`](https://blockscan.com/address/0x746D334045E3F755984d111340cC158e7D89864e) | [`0xA6014AAAd7C786b6c502b1F4B017392ac68Fd951`](https://blockscan.com/address/0xA6014AAAd7C786b6c502b1F4B017392ac68Fd951) | [`0xFaF8815D478cf2d8dbCE81440551e99Ce9fB1D52`](https://blockscan.com/address/0xFaF8815D478cf2d8dbCE81440551e99Ce9fB1D52) | [`0xDfEEB1e46C110Bea6d299136556003054c5C8363`](https://blockscan.com/address/0xDfEEB1e46C110Bea6d299136556003054c5C8363) |
+Columns: universal `LPManagerFactory`, the `StableLPManager` and `VolatileLPManager` implementations,
+`FeeRedeemer`, `UniLens`, `WalletPositionDescriptor`, and `ChainlinkPriceOracle`.
 
-A new manager is created by anyone via `StableLPFactory.createManager(InitParams)`; the singleton NFT is
-minted to the configured owner.
+| Chain | `LPManagerFactory` | `StableLPManager` (impl) | `VolatileLPManager` (impl) | `FeeRedeemer` | `UniLens` | `WalletPositionDescriptor` | `ChainlinkPriceOracle` |
+|---|---|---|---|---|---|---|---|
+| **Ethereum** (1) | [`0x75e5d72D6971221b6332AaE8F59759d4Ba366dd0`](https://blockscan.com/address/0x75e5d72D6971221b6332AaE8F59759d4Ba366dd0) | [`0x5a4417E55880De60A5b8C25F2100e7ba42BC43Bb`](https://blockscan.com/address/0x5a4417E55880De60A5b8C25F2100e7ba42BC43Bb) | [`0x16932D018Da2F84ce4a784Fac71Fb0924F389F92`](https://blockscan.com/address/0x16932D018Da2F84ce4a784Fac71Fb0924F389F92) | [`0x3352dbb1507182140225B9aFbeb40e604208F9Fe`](https://blockscan.com/address/0x3352dbb1507182140225B9aFbeb40e604208F9Fe) | [`0xC0dB1c4f28bF5956871aA217f87F73023ebc6cd9`](https://blockscan.com/address/0xC0dB1c4f28bF5956871aA217f87F73023ebc6cd9) | [`0x67a2CD3804F2e5E7e09cA213929011A77C8aefEa`](https://blockscan.com/address/0x67a2CD3804F2e5E7e09cA213929011A77C8aefEa) | [`0x67b914B41967AbFF6231E9c5114eA7Bc533Dfc9B`](https://blockscan.com/address/0x67b914B41967AbFF6231E9c5114eA7Bc533Dfc9B) |
+| **Arbitrum One** (42161) | [`0x8A56c6be755aC385395E96234b553DB1B9B06bEa`](https://blockscan.com/address/0x8A56c6be755aC385395E96234b553DB1B9B06bEa) | [`0x7f373092bDAFdc47a34c406Ec7Ac903B7780C4a2`](https://blockscan.com/address/0x7f373092bDAFdc47a34c406Ec7Ac903B7780C4a2) | [`0xa373FBAcd0964FCb7BC01CB447a2F25f11E8995b`](https://blockscan.com/address/0xa373FBAcd0964FCb7BC01CB447a2F25f11E8995b) | [`0x430D09A7969A5c6eF2fb5DcE40972d6e66eF5E33`](https://blockscan.com/address/0x430D09A7969A5c6eF2fb5DcE40972d6e66eF5E33) | [`0x205549BCb010D429354aabc2CaE057B090BcF5B8`](https://blockscan.com/address/0x205549BCb010D429354aabc2CaE057B090BcF5B8) | [`0x330ce9c5d9271b0aeC08cD363C535Ef126743b0c`](https://blockscan.com/address/0x330ce9c5d9271b0aeC08cD363C535Ef126743b0c) | [`0xf8dA8DC6d8cDCadcc96b51d5fC0Cb59EF3672005`](https://blockscan.com/address/0xf8dA8DC6d8cDCadcc96b51d5fC0Cb59EF3672005) |
+| **Base** (8453) | [`0x7A3c8F45b809078da58d17fb6Cd059334622838F`](https://blockscan.com/address/0x7A3c8F45b809078da58d17fb6Cd059334622838F) | [`0x9C10eD902Ae7fD997D92eeD7535849f204b727b7`](https://blockscan.com/address/0x9C10eD902Ae7fD997D92eeD7535849f204b727b7) | [`0x28466e3e92CB6FB292618D0faEbB49624f4d6f0C`](https://blockscan.com/address/0x28466e3e92CB6FB292618D0faEbB49624f4d6f0C) | [`0x21c23bA0ec49c9440CD259cCB48ff9D06CD16522`](https://blockscan.com/address/0x21c23bA0ec49c9440CD259cCB48ff9D06CD16522) | [`0x54B328Ef3A93b4a22896187588166fF361Ea0f1E`](https://blockscan.com/address/0x54B328Ef3A93b4a22896187588166fF361Ea0f1E) | [`0xa950991F86eF1b79Db65c4F3893dA9408A1ce157`](https://blockscan.com/address/0xa950991F86eF1b79Db65c4F3893dA9408A1ce157) | [`0xf58208676a7b5a604df41ca25b5310f3cc997bF3`](https://blockscan.com/address/0xf58208676a7b5a604df41ca25b5310f3cc997bF3) |
+| **Unichain** (130) | [`0x62D51DFF0c264a5aF8452A10789E4C98b7413A3c`](https://blockscan.com/address/0x62D51DFF0c264a5aF8452A10789E4C98b7413A3c) | [`0x71B7a17299592e06b80c28C6aB1C1DB5dC67D06D`](https://blockscan.com/address/0x71B7a17299592e06b80c28C6aB1C1DB5dC67D06D) | [`0x0A55A8e0Ee3d58e8D7d82803d70092903c593a96`](https://blockscan.com/address/0x0A55A8e0Ee3d58e8D7d82803d70092903c593a96) | [`0xc73724c684225DB5B1736a510825C0E76E8c9766`](https://blockscan.com/address/0xc73724c684225DB5B1736a510825C0E76E8c9766) | [`0x03Ed05c589B567D94d2dc0157A8D8DC365f82bc7`](https://blockscan.com/address/0x03Ed05c589B567D94d2dc0157A8D8DC365f82bc7) | [`0x5406073Cd50d338fb80A850aAa78b8401eD6D82e`](https://blockscan.com/address/0x5406073Cd50d338fb80A850aAa78b8401eD6D82e) | [`0xAC7966454B32006de29273094Ff0FCf8D367eF87`](https://blockscan.com/address/0xAC7966454B32006de29273094Ff0FCf8D367eF87) |
+| **Unichain Sepolia** (1301) | [`0xF813Bdc4de2658e2bC7Dd2c4afdeC4846Cfa7986`](https://blockscan.com/address/0xF813Bdc4de2658e2bC7Dd2c4afdeC4846Cfa7986) | [`0x789B70962c78c703Ec3403a722921Ecf1c823684`](https://blockscan.com/address/0x789B70962c78c703Ec3403a722921Ecf1c823684) | [`0x31D497F619DB989268c346D11fd7D980052124E1`](https://blockscan.com/address/0x31D497F619DB989268c346D11fd7D980052124E1) | [`0xA6014AAAd7C786b6c502b1F4B017392ac68Fd951`](https://blockscan.com/address/0xA6014AAAd7C786b6c502b1F4B017392ac68Fd951) | [`0x7CDCBEa338ce3598F8caEFa6A3883f72395b9E3e`](https://blockscan.com/address/0x7CDCBEa338ce3598F8caEFa6A3883f72395b9E3e) | [`0x24F15fC420ff0773F9e949c9cE3474A696e26608`](https://blockscan.com/address/0x24F15fC420ff0773F9e949c9cE3474A696e26608) | [`0xaA8D8504c86619bc39a81cce0E35d1d2e164dB51`](https://blockscan.com/address/0xaA8D8504c86619bc39a81cce0E35d1d2e164dB51) |
+
+A new manager is created by anyone via `LPManagerFactory.createManager(implementation, InitParams)`; the
+singleton NFT is minted to the configured owner.
 
 ## Build & test
 
@@ -86,7 +94,7 @@ forge fmt --check        # CI fails on unformatted files
 forge test -vvv          # full suite (fork tests skip without BASE_RPC)
 ```
 
-The StableLP suites boot a `StableLPFactory` with a multi-pool stable config (`test/helpers/StableLPTestBase.sol`):
+The StableLP suites boot an `LPManagerFactory` with a multi-pool stable config (`test/helpers/StableLPTestBase.sol`):
 
 ```bash
 forge test --match-path "test/StableLP*.t.sol" -vvv          # factory, allocate/withdraw, protocol fee, native, audit fixes
