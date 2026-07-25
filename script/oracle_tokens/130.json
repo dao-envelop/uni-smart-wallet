@@ -1,0 +1,11 @@
+{
+  "_comment": "Unichain (130) currencies for SetOracleFeeds.s.sol. Parallel arrays; `symbol` keys into script/oracle_feeds.json, `decimals` is the token's own ERC-20 decimals (18 for native ETH = address(0)). Token addresses match script/price_pools/130.json. Unichain feeds are 18-decimal SVR aggregators — setFeed caches feedDecimals from the aggregator, so nothing extra is needed here. No WBTC/USD feed on this chain: the wrapped BTC token rides BTC/USD.",
+  "token": [
+    "0x0000000000000000000000000000000000000000",
+    "0x078D782b760474a361dDA0AF3839290b0EF57AD6",
+    "0x0555E30da8f98308EdB960aa94C0Db47230d2B9c",
+    "0x8f187aA05619a017077f5308904739877ce9eA21"
+  ],
+  "symbol": ["ETH", "USDC", "BTC", "UNI"],
+  "decimals": [18, 6, 8, 18]
+}

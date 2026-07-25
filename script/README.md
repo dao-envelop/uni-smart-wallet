@@ -46,6 +46,7 @@ artifacts (addresses) are written to `deployments/<chainId>.json`.
 | `DeployStableLP.s.sol` | Deploys the LP-manager stack — the FULL set (`FeeRedeemer`, `StableLPManager` + `VolatileLPManager` impls, universal `LPManagerFactory`, `UniLens`, `WalletPositionDescriptor`) **or an arbitrary subset** (e.g. only the oracle + manager impls) selected via a per-chain `deploy` object. Adds the `ChainlinkPriceOracle`. Merges addresses into `deployments/<chainId>.json`. |
 | `DeployDescriptor.s.sol` | Deploys **only** a `WalletPositionDescriptor` and updates `.descriptor` in `deployments/<chainId>.json`. |
 | `CreateManager.s.sol` | Clones one manager (Stable **or** Volatile) via the universal factory. |
+| `SetOracleFeeds.s.sol` | Fills a deployed `ChainlinkPriceOracle` with the per-currency Chainlink USD feeds (`setFeed`). Idempotent — unchanged entries are skipped. |
 
 ### Selective deploy — the `deploy` toggle
 
@@ -128,20 +129,43 @@ currency's USD feed on the oracle (`setFeed`, owner-only) using `oracle_feeds.js
 manager at the oracle:
 
 ```bash
+# 1. Register the feeds on the oracle (owner-only). SetOracleFeeds does the whole set at once,
+#    reading script/oracle_tokens/<chainId>.json + script/oracle_feeds.json. Drop --broadcast for a
+#    dry run; re-running is free (entries that already match are skipped).
+forge script script/SetOracleFeeds.s.sol \
+  --rpc-url "$RPC" --sender "$SENDER" --account "$KEYSTORE" --broadcast
+
+# 2. Point the manager (clone) at the oracle. onlyOwnerNFT — the caller must hold the singleton NFT.
 CHAIN_ID=8453
 ORACLE="$(jq -r .oracle deployments/$CHAIN_ID.json)"
-
-# Example: register WBTC (18-dec token) against the BTC/USD feed, heartbeat padded 2×.
-cast send "$ORACLE" "setFeed(address,address,uint32,uint8)" \
-  "$WBTC_TOKEN_ADDR" \
-  "$(jq -r '."'$CHAIN_ID'".BTC.aggregator' script/oracle_feeds.json)" \
-  2400 8 \
-  --rpc-url "$RPC" --account "$KEYSTORE" --from "$SENDER"
-
-# Then point the manager (clone) at the oracle:
 cast send "$TARGET" "setPriceOracle(address)" "$ORACLE" \
   --rpc-url "$RPC" --account "$KEYSTORE" --from "$SENDER"
 ```
+
+Both halves are required. An oracle with **no feed** for a pool's currencies has no opinion, so `check`
+returns false and every operator swap fails closed with `OperatorSwapUnverified` — the same end state as
+having wired no oracle at all.
+
+#### `oracle_tokens/<chainId>.json` — which currencies to wire
+
+Parallel arrays consumed by `SetOracleFeeds`:
+
+```json
+{
+  "token":    ["0x0000000000000000000000000000000000000000", "0xaf88...5831"],
+  "symbol":   ["ETH", "USDC"],
+  "decimals": [18, 6]
+}
+```
+
+- `token` — the currency as the manager sees it; `address(0)` for native ETH.
+- `symbol` — a key in `oracle_feeds.json` for that chain (`BTC` serves wrapped BTC on chains with no
+  `WBTC` entry).
+- `decimals` — the **token's own** ERC-20 decimals (18 for native). Feed decimals are not listed here:
+  `setFeed` caches them from the aggregator.
+
+Overrides: `ORACLE` (skip the `deployments` lookup), `TOKENS_CONFIG`, `FEEDS_CONFIG`. The broadcaster must
+be the oracle owner — the script reverts `NotOracleOwner` before touching anything otherwise.
 
 ### CreateManager — universal factory
 
