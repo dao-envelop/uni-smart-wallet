@@ -65,8 +65,10 @@ The repo implements **NFT-owned Uniswap V4 LP managers** that interact with the 
 **Products:**
 
 - **`StableLPManager`** (`src/StableLPManager.sol`) — configured set of hookless stable pools.
-  **`salt == poolId`** (one position per pool) at a **fixed per-pool range** stored in `_range[poolId]`
-  at `initialize`. Deployed as an **EIP-1167 clone** via **`StableLPFactory`** (atomic `initialize`).
+  **`salt == poolId`** (one position per pool), each position held between **fixed bounds** recorded in
+  `rangeOf[poolId]` at `initialize` — product policy, not a property of the pool (a pool has liquidity
+  and a price; a range belongs to a position).
+  Deployed as an **EIP-1167 clone** via **`StableLPFactory`** (atomic `initialize`).
   Ops: `allocate` / `allocateFrom` (snapshot-guarded) / `withdrawTo` (indirect drain via `take`) /
   `reinvest` / `claimFees`. `allocate`/`reinvest` carry no `amount*Max` (owed ≤ desired at the on-chain
   price; `minLiquidity` is the floor). `InitParams.pools` is `StablePoolInit[] { key, tickLower, tickUpper }`.

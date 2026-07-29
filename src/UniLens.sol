@@ -11,6 +11,19 @@ import {StableLPManager} from "./StableLPManager.sol";
 import {BaseLPManager} from "./BaseLPManager.sol";
 import {PositionState} from "./lib/PositionState.sol";
 
+/// @notice The `ChainlinkPriceOracle` surface {UniLens.oracleStatus} probes. Declared locally (rather than
+/// importing the concrete oracle) because a manager's `priceOracle` is only an {IPriceOracle} — every call
+/// through this interface is made inside `try/catch` so a different implementation degrades, not reverts.
+interface IChainlinkOracleView {
+    function maxDeviationBps() external view returns (uint16);
+    function sequencerUptimeFeed() external view returns (address);
+    function sequencerGracePeriod() external view returns (uint32);
+    function feeds(Currency currency)
+        external
+        view
+        returns (address aggregator, uint32 heartbeat, uint8 feedDecimals, uint8 tokenDecimals);
+}
+
 /// @title UniLens
 /// @notice Stateless read aggregator for frontends. One call returns the full open-position portfolio
 /// of any NFT-owned {BaseLPManager} product (e.g. `StableLPManager`, a volatile-pair manager):
@@ -85,6 +98,36 @@ contract UniLens {
         PositionView[] positions;
     }
 
+    /// @notice The tick bounds of the single position a `StableLPManager` holds in `poolId`, fixed at
+    /// `initialize`. The pool itself has no range — this is stable-product policy (one position per pool).
+    struct StableRange {
+        PoolId poolId;
+        int24 tickLower;
+        int24 tickUpper;
+    }
+
+    /// @notice One managed currency's USD reference feed as registered on the manager's price oracle.
+    /// `aggregator == address(0)` ⇒ unconfigured, i.e. any operator swap touching this currency is
+    /// rejected (`OperatorSwapUnverified`).
+    struct OracleFeedInfo {
+        Currency currency;
+        address aggregator;
+        uint32 heartbeat; // max accepted answer age, seconds
+        uint8 feedDecimals;
+        uint8 tokenDecimals;
+    }
+
+    /// @notice The operator-swap price guard of a manager, resolved in one call.
+    /// `oracle == address(0)` ⇒ operators cannot swap at all (`OperatorSwapGuardRequired`).
+    struct OracleStatus {
+        address oracle;
+        bool isChainlinkLike; // false ⇒ a non-Chainlink IPriceOracle; the fields below are meaningless
+        uint16 maxDeviationBps;
+        address sequencerUptimeFeed; // zero ⇒ no L2 sequencer gate on this chain
+        uint32 sequencerGracePeriod;
+        OracleFeedInfo[] feeds; // index-aligned to ManagerConfig.managed
+    }
+
     /// @notice Value a single open position of `wallet` (any {V4PositionManager}, e.g. `StableLPManager`).
     /// @param wallet The wallet/manager contract to read.
     /// @param salt The position key.
@@ -104,6 +147,90 @@ contract UniLens {
         views = new PositionView[](n);
         for (uint256 i = 0; i < n; ++i) {
             views[i] = _view(w, pm, w.openSalts(i));
+        }
+    }
+
+    /// @notice The manager's currently-authorized operator set, in one call.
+    /// @dev Aggregates `operatorCount()` + `operatorList(i)` — the same shape as {positions} over
+    /// `openSalts`. Doing the array build here keeps it off the managers' EIP-170 budget. Callers with a
+    /// manager deployed **before** this getter existed must still fold `OperatorSet` logs instead.
+    /// @param manager The {BaseLPManager} product to read.
+    /// @return ops The active operators (unordered — the manager splices on disable).
+    function operators(address manager) external view returns (address[] memory ops) {
+        BaseLPManager m = BaseLPManager(payable(manager));
+        uint256 n = m.operatorCount();
+        ops = new address[](n);
+        for (uint256 i = 0; i < n; ++i) {
+            ops[i] = m.operatorList(i);
+        }
+    }
+
+    /// @notice `StableLPManager`-only: the tick bounds this manager holds its position between in each
+    /// configured pool, as fixed at `initialize`.
+    /// @dev A pool has no range of its own — a range belongs to a position. What this returns is the
+    /// stable product's policy: one position per pool, always at the same bounds, set once at init.
+    /// Nothing emits it, so before the first `allocate` (no position to read ticks off) it was previously
+    /// recoverable only by decoding the factory's creation calldata. Volatile managers hold many positions
+    /// per pool at per-call bounds and so have no such policy — this call reverts on one.
+    /// @param manager The `StableLPManager` to read.
+    /// @return ranges One entry per configured pool, index-aligned to `managerConfig(...).pools`.
+    function stableRanges(address manager) external view returns (StableRange[] memory ranges) {
+        StableLPManager m = StableLPManager(payable(manager));
+        uint256 n = m.poolCount();
+        ranges = new StableRange[](n);
+        for (uint256 i = 0; i < n; ++i) {
+            PoolKey memory key = m.pools(i);
+            PoolId id = key.toId();
+            (int24 lo, int24 hi) = m.rangeOf(id);
+            ranges[i] = StableRange({poolId: id, tickLower: lo, tickUpper: hi});
+        }
+    }
+
+    /// @notice Everything needed to predict whether an **operator-triggered** swap will pass the price
+    /// guard, in one call instead of a 4-deep dependent read chain (`priceOracle` → `maxDeviationBps` /
+    /// `sequencerUptimeFeed` / `feeds(currency)` per managed currency).
+    /// @dev Operator swaps are fail-closed: no oracle ⇒ `OperatorSwapGuardRequired`; a currency without a
+    /// fresh feed ⇒ `OperatorSwapUnverified`. Surfacing `aggregator == 0` here lets a bot/UI diagnose that
+    /// *before* burning gas on a revert. Reads are defensive: `priceOracle` may be any {IPriceOracle}
+    /// implementation, so a non-Chainlink (or non-contract) oracle yields `isChainlinkLike == false` with
+    /// the remaining fields zeroed rather than reverting the whole call.
+    /// @param manager The {BaseLPManager} product to read.
+    /// @return st The wired oracle, its tolerance/sequencer config, and one {OracleFeedInfo} per managed
+    /// currency (index-aligned to `managerConfig(...).managed`).
+    function oracleStatus(address manager) external view returns (OracleStatus memory st) {
+        BaseLPManager m = BaseLPManager(payable(manager));
+        st.oracle = m.priceOracle();
+
+        uint256 s = m.managedStablesCount();
+        st.feeds = new OracleFeedInfo[](s);
+        for (uint256 i = 0; i < s; ++i) {
+            st.feeds[i].currency = m.managedStables(i);
+        }
+        // Zero oracle ⇒ operator swaps are disabled outright; nothing further to read.
+        // Non-contract ⇒ the typed calls below would revert uncatchably on the extcodesize check.
+        if (st.oracle == address(0) || st.oracle.code.length == 0) return st;
+
+        IChainlinkOracleView o = IChainlinkOracleView(st.oracle);
+        try o.maxDeviationBps() returns (uint16 bps) {
+            st.maxDeviationBps = bps;
+            st.isChainlinkLike = true;
+        } catch {
+            return st;
+        }
+        try o.sequencerUptimeFeed() returns (address f) {
+            st.sequencerUptimeFeed = f;
+        } catch {}
+        try o.sequencerGracePeriod() returns (uint32 g) {
+            st.sequencerGracePeriod = g;
+        } catch {}
+
+        for (uint256 i = 0; i < s; ++i) {
+            try o.feeds(st.feeds[i].currency) returns (address agg, uint32 hb, uint8 fd, uint8 td) {
+                st.feeds[i].aggregator = agg;
+                st.feeds[i].heartbeat = hb;
+                st.feeds[i].feedDecimals = fd;
+                st.feeds[i].tokenDecimals = td;
+            } catch {}
         }
     }
 

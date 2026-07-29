@@ -31,13 +31,15 @@ contract StableLPManager is BaseLPManager {
     uint8 internal constant OP_ALLOCATE = 4;
     uint8 internal constant OP_REINVEST = 6;
 
-    /// @notice The fixed per-pool range (a stable-product policy). One position per pool at this range.
+    /// @notice The tick bounds a position is held between. A pool has no range of its own — this is the
+    /// stable product's policy: one position per pool, always between the same bounds.
     struct Range {
         int24 tickLower;
         int24 tickUpper;
     }
 
-    /// @notice A pool + its fixed range, as supplied at `initialize`.
+    /// @notice A pool + the bounds this manager will hold its position between there, as supplied at
+    /// `initialize`.
     struct StablePoolInit {
         PoolKey key;
         int24 tickLower;
@@ -49,11 +51,13 @@ contract StableLPManager is BaseLPManager {
         address owner; // receives the singleton NFT
         bytes32 name; // NFT name, packed (≤31 chars); "" ⇒ default "Envelop LP Uniswap Manager"
         address descriptor; // default tokenURI renderer; zero ⇒ none (owner sets later)
-        StablePoolInit[] pools; // 1..MAX_POOLS hookless stable pools + their fixed ranges
+        StablePoolInit[] pools; // 1..MAX_POOLS hookless stable pools + the position bounds for each
     }
 
-    /// @notice The configured range per pool (`poolId → range`), set once at `initialize`.
-    mapping(PoolId => Range) internal _range;
+    /// @notice The bounds this manager holds its single position between in a given pool
+    /// (`poolId → bounds`), set once at `initialize` and never changed — there is no setter.
+    /// Read by `_allocateLeg` and `_handleReinvest`; every add into that pool uses these ticks.
+    mapping(PoolId => Range) public rangeOf;
 
     /// @param poolManager_ The Uniswap V4 PoolManager shared by every clone.
     /// @param treasury_ The immutable protocol-fee recipient (non-zero; typically a {FeeRedeemer}).
@@ -71,7 +75,7 @@ contract StableLPManager is BaseLPManager {
             StablePoolInit calldata c = p.pools[i];
             PositionMath.requireValidTickRange(c.tickLower, c.tickUpper, c.key.tickSpacing);
             _registerPool(c.key); // hookless gate + dedup + managed-currency union
-            _range[c.key.toId()] = Range({tickLower: c.tickLower, tickUpper: c.tickUpper});
+            rangeOf[c.key.toId()] = Range({tickLower: c.tickLower, tickUpper: c.tickUpper});
         }
         _finishInit(p.owner, n, p.descriptor);
     }
@@ -177,7 +181,7 @@ contract StableLPManager is BaseLPManager {
     /// the operator's desired amounts. Settlement is deferred to the final `_settleManaged()` pass.
     function _allocateLeg(AllocLeg memory leg, bool byOwner) internal virtual returns (uint128 L) {
         PoolKey memory key = pools[_indexOf(leg.poolId)].key;
-        Range memory rg = _range[leg.poolId];
+        Range memory rg = rangeOf[leg.poolId];
         if (leg.swapAmountIn > 0) {
             BalanceDelta sd = _swap(key, leg.zeroForOne, -int256(leg.swapAmountIn), leg.swapPriceLimit);
             int128 inDelta = leg.zeroForOne ? sd.amount0() : sd.amount1();
@@ -271,7 +275,7 @@ contract StableLPManager is BaseLPManager {
     function _handleReinvest(bytes memory payload) internal returns (bytes memory) {
         (bool byOwner, AllocLeg memory leg) = abi.decode(payload, (bool, AllocLeg));
         PoolKey memory key = pools[_indexOf(leg.poolId)].key;
-        Range memory rg = _range[leg.poolId];
+        Range memory rg = rangeOf[leg.poolId];
         bytes32 salt = PoolId.unwrap(leg.poolId);
 
         // Realize fees as a positive caller delta, then skim the protocol cut before compounding.
