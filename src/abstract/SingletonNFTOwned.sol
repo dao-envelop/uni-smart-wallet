@@ -24,10 +24,14 @@ abstract contract SingletonNFTOwned is ERC721 {
     /// @notice Whether an address is currently an authorized operator (owner-delegated, can drive
     /// position ops but cannot withdraw). Auto-cleared on ownership transfer.
     mapping(address => bool) public operators;
-    /// @dev Active operators only. Kept compact via swap-and-pop on disable so the per-transfer
-    /// `_clearOperators` loop stays bounded (can't be grown into a transfer-bricking gas bomb).
-    address[] internal _operatorList;
-    /// @dev 1-based index into `_operatorList` (0 ⇒ not present). Enables O(1) splice.
+    /// @notice Active operators only, enumerable by index (pairs with {operatorCount}). Kept compact via
+    /// swap-and-pop on disable so the per-transfer `_clearOperators` loop stays bounded (can't be grown
+    /// into a transfer-bricking gas bomb) — which also means **the order is not stable** across disables.
+    /// @dev Enumerable rather than returning `address[] memory`: the index getter costs the size-tight
+    /// managers 88 B where a memory-array getter costs 215 B. `UniLens.operators` does the aggregation
+    /// off the critical EIP-170 budget, mirroring `openSalts`/`openPositionCount` ↔ `UniLens.positions`.
+    address[] public operatorList;
+    /// @dev 1-based index into `operatorList` (0 ⇒ not present). Enables O(1) splice.
     mapping(address => uint256) internal _operatorIndexPlusOne;
 
     /// @notice Emitted when an operator is enabled or disabled (also for each operator auto-cleared
@@ -64,6 +68,12 @@ abstract contract SingletonNFTOwned is ERC721 {
         _singletonMinted = true;
     }
 
+    /// @notice Number of currently active operators — the bound for `operatorList(i)` enumeration.
+    /// @return The length of {operatorList}.
+    function operatorCount() external view returns (uint256) {
+        return operatorList.length;
+    }
+
     /// @notice NFT-owner delegates operational rights to a bot without surrendering custody.
     /// Operators can drive position ops but cannot withdraw funds. Owner-only.
     /// @param op The operator address to enable or disable.
@@ -73,8 +83,8 @@ abstract contract SingletonNFTOwned is ERC721 {
         if (allowed) {
             if (!operators[op]) {
                 operators[op] = true;
-                _operatorList.push(op);
-                _operatorIndexPlusOne[op] = _operatorList.length;
+                operatorList.push(op);
+                _operatorIndexPlusOne[op] = operatorList.length;
             }
         } else {
             if (operators[op]) {
@@ -85,19 +95,19 @@ abstract contract SingletonNFTOwned is ERC721 {
         emit OperatorSet(op, allowed);
     }
 
-    /// @dev O(1) swap-and-pop removal of `op` from `_operatorList` (mirrors `_removeSalt`).
+    /// @dev O(1) swap-and-pop removal of `op` from `operatorList` (mirrors `_removeSalt`).
     /// @param op The operator to splice out of the active list.
     function _spliceOperator(address op) private {
         uint256 idxPlusOne = _operatorIndexPlusOne[op];
         if (idxPlusOne == 0) return;
         uint256 idx = idxPlusOne - 1;
-        uint256 lastIdx = _operatorList.length - 1;
+        uint256 lastIdx = operatorList.length - 1;
         if (idx != lastIdx) {
-            address last = _operatorList[lastIdx];
-            _operatorList[idx] = last;
+            address last = operatorList[lastIdx];
+            operatorList[idx] = last;
             _operatorIndexPlusOne[last] = idx + 1;
         }
-        _operatorList.pop();
+        operatorList.pop();
         delete _operatorIndexPlusOne[op];
     }
 
@@ -119,16 +129,16 @@ abstract contract SingletonNFTOwned is ERC721 {
         return previousOwner;
     }
 
-    /// @dev `_operatorList` holds only ACTIVE operators (disable splices out), so this loop is
+    /// @dev `operatorList` holds only ACTIVE operators (disable splices out), so this loop is
     /// bounded by the live operator count, not by historical churn.
     function _clearOperators() internal {
-        uint256 n = _operatorList.length;
+        uint256 n = operatorList.length;
         for (uint256 i = 0; i < n; ++i) {
-            address op = _operatorList[i];
+            address op = operatorList[i];
             operators[op] = false;
             delete _operatorIndexPlusOne[op];
             emit OperatorSet(op, false);
         }
-        delete _operatorList;
+        delete operatorList;
     }
 }
