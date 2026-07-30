@@ -9,7 +9,8 @@ hookless should be the **default**, not the only option.
 The restriction was not paranoia. It was deliberately narrowed from a whitelist to a categorical reject
 in task_012 after audit `2026-05-17` [H-6] (a whitelist is permission-bit blind — approving an address
 says nothing about what it may do), [H-7]/[M-7] (a mutable policy can be flipped mid-flight), and [M-3]
-(hook-borne re-entry). Audit `2026-07-18` still takes hooklessness as a premise.
+(hook-borne re-entry — which task_044 later showed was never reachable, though that does not change why
+the gate was narrowed at the time). Audit `2026-07-18` still takes hooklessness as a premise.
 
 So the change is additive: **a third implementation**, not a flag on the existing two and not a relaxed
 base.
@@ -66,9 +67,10 @@ misleading one-liner. Verbatim risks, all verified against current code:
 2. A hook that reverts on `beforeRemoveLiquidity` can brick `withdrawTo` and trap the principal.
 3. Swap-delta hooks reach the withdraw conversion swaps, which have `sqrtPriceLimitX96` but **no**
    `minAmountOut` and do not pass `_guardSwap`.
-4. [M-3] is still open — `unlockCallback` is not `nonReentrant` and its `(op, payload)` is not bound to the
-   outer entry point. For the hookless products the gate is what closes the hook-borne variant.
-   **Hardening that is its own task and is needed regardless of this one.**
+4. ~~[M-3] is still open — `unlockCallback` is not `nonReentrant`…~~ **Withdrawn by task_044.** This was
+   wrong: v4 reverts a nested `unlock`, the callback cannot be retargeted or forged, and every entry point
+   is `nonReentrant`, so there is no hook-borne re-entry to close and the gate was never what closed it.
+   The recommended fix would have bricked every operation. Risks 1-3 are the real ones.
 
 ## Tests — `test/OpenVolatileLPManager.t.sol`, 9 tests
 
@@ -138,9 +140,10 @@ policy. `audits/2026-07-18/AUDIT-REPORT.md` carries an update note where its "х
   two tokens + a seed), and this suite needs a materially different setup anyway (hooked key, etched hook,
   no swap router). The new suite is self-contained, matching what all three existing Volatile suites
   already do. Worth doing as its own cleanup if someone adds a fourth Volatile-shaped suite.
-- **[M-3] hardening** (`nonReentrant` on `unlockCallback` + binding the in-flight op) — needed
-  independently of this task, and it costs bytes in both tight managers, so it deserves its own
-  measurement and its own commit.
+- ~~**[M-3] hardening**~~ — investigated in task_044 and resolved **NOT APPLICABLE**: the finding's
+  premise (nested `unlock` is possible) is false for the pinned v4, and its recommendation would revert
+  every operation. **[M-4]** (`nonReentrant` on `executeEncodedTxBatch`) is the one genuinely open item in
+  that area — narrow, since it needs an owner that is a contract proxying token callbacks.
 - **Full frontend support for a third product** (~15 files in `stablelp-ui`) — separate task. What *did*
   ship alongside is the one-line guard so an unknown oracle type can no longer be silently reported as
   "stable"; see that repo's task doc.

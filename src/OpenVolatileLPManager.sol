@@ -38,9 +38,13 @@ import {VolatileLPManager} from "./VolatileLPManager.sol";
 ///    manual unwind, not a supported path.
 /// 3. Swap-delta hooks (`BEFORE/AFTER_SWAP_RETURNS_DELTA`) reach the withdraw conversion swaps, which
 ///    carry a `sqrtPriceLimitX96` but **no** `minAmountOut` and do not pass through `_guardSwap`.
-/// 4. `unlockCallback` is not `nonReentrant` and its `(op, payload)` is not bound to the outer entry
-///    point (audit `2026-05-17` [M-3]); until that is hardened, the hookless gate is what closes the
-///    hook-borne variant of it, and this product does not have that gate.
+///
+/// What is NOT on that list, despite hooks now running inside our `unlock`: re-entrancy. v4 reverts a
+/// nested `unlock` (`AlreadyUnlocked`), the callback target is hardcoded to the caller so it cannot be
+/// retargeted at us, a forged direct call is rejected by `NotPoolManager`, and every entry point carries
+/// `nonReentrant` on a shared guard. Audit `2026-05-17` [M-3] claimed otherwise and is resolved NOT
+/// APPLICABLE (task_044) — its recommended fix would in fact brick every operation. So the residual here
+/// is the delta problem in 1-3, not re-entry.
 ///
 /// Pools are still deduped by `poolId` and capped at `MAX_POOLS`, and the hook set is fixed at
 /// `initialize` — an operator can only ever name a `PoolId` already in the configured set.
