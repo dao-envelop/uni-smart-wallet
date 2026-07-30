@@ -14,9 +14,9 @@ import {LPManagerFactory} from "../src/LPManagerFactory.sol";
 /// pool-config JSON.
 ///
 /// The factory address and the product implementations are read from `deployments/<chainId>.json`
-/// (written by DeployStableLP): `.factory`, `.impl` (stable), `.volatileImpl`. The config JSON
+/// (written by DeployStableLP): `.factory`, `.impl` (stable), `.volatileImpl`, `.openImpl`. The config JSON
 /// (env `MANAGER_CONFIG`, default `script/manager_config.example.json`) selects the product via
-/// `.product` ("stable" | "volatile"; default "stable") and lists pools as PARALLEL ARRAYS (so we avoid
+/// `.product` ("stable" | "volatile" | "open"; default "stable") and lists pools as PARALLEL ARRAYS (so we avoid
 /// forge's alphabetical struct-decode key ordering). Volatile configs omit `.tickLower`/`.tickUpper`
 /// (ranges are per-call). Every array must have the same length.
 ///
@@ -26,24 +26,33 @@ contract CreateManager is Script {
     error LengthMismatch();
     error NoPools();
     error NameTooLong(uint256 length);
+    /// @notice `.product` was not one of "stable" | "volatile" | "open".
+    error UnknownProduct();
 
     function run() external returns (address manager) {
         uint256 chainId = block.chainid;
         address factory = _readFactory(chainId);
         string memory json = vm.readFile(vm.envOr("MANAGER_CONFIG", string("script/manager_config.example.json")));
 
-        bool isVolatile = vm.keyExistsJson(json, ".product")
-            && keccak256(bytes(vm.parseJsonString(json, ".product"))) == keccak256(bytes("volatile"));
+        // Three products, two init shapes: "open" is OpenVolatileLPManager, which reuses
+        // VolatileLPManager's `initialize`/`InitParams` verbatim, so only the impl address differs.
+        // An unrecognised string REVERTS rather than falling back to stable — a typo in `.product`
+        // silently deploying the wrong product is worse than a failed script run.
+        bytes32 ph =
+            keccak256(bytes(vm.keyExistsJson(json, ".product") ? vm.parseJsonString(json, ".product") : "stable"));
+        bool isOpen = ph == keccak256(bytes("open"));
+        bool isVolatile = isOpen || ph == keccak256(bytes("volatile"));
+        if (!isVolatile && ph != keccak256(bytes("stable"))) revert UnknownProduct();
 
         address owner = vm.parseJsonAddress(json, ".owner");
-        bytes32 name = _readName(json, isVolatile);
+        bytes32 name = _readName(json, ph);
         // Default the tokenURI renderer to the chain's deployed descriptor (config `.descriptor`
         // overrides). Wired at init so the clone renders `tokenURI` without a follow-up owner call.
         address descriptor =
             vm.keyExistsJson(json, ".descriptor") ? vm.parseJsonAddress(json, ".descriptor") : _readDescriptor(chainId);
 
         (address impl, bytes memory initData, uint256 poolCount) = isVolatile
-            ? _volatileInit(json, chainId, owner, name, descriptor)
+            ? _volatileInit(json, chainId, owner, name, descriptor, isOpen ? ".openImpl" : ".volatileImpl")
             : _stableInit(json, chainId, owner, name, descriptor);
 
         vm.startBroadcast();
@@ -51,7 +60,7 @@ contract CreateManager is Script {
         vm.stopBroadcast();
 
         console2.log("Manager created:", manager);
-        console2.log("Product:        ", isVolatile ? "volatile" : "stable");
+        console2.log("Product:        ", isOpen ? "open (hooks allowed)" : isVolatile ? "volatile" : "stable");
         console2.log("Owner:          ", owner);
         console2.log("Pools:          ", poolCount);
         console2.log("Factory:        ", factory);
@@ -78,12 +87,16 @@ contract CreateManager is Script {
         initData = abi.encodeCall(StableLPManager.initialize, (p));
     }
 
-    function _volatileInit(string memory json, uint256 chainId, address owner, bytes32 name, address descriptor)
-        internal
-        view
-        returns (address impl, bytes memory initData, uint256 poolCount)
-    {
-        impl = _readImpl(chainId, ".volatileImpl");
+    /// @dev Shared by "volatile" and "open": identical init ABI, different implementation address.
+    function _volatileInit(
+        string memory json,
+        uint256 chainId,
+        address owner,
+        bytes32 name,
+        address descriptor,
+        string memory implKey
+    ) internal view returns (address impl, bytes memory initData, uint256 poolCount) {
+        impl = _readImpl(chainId, implKey);
         PoolKey[] memory keys = _parseKeys(json);
         poolCount = keys.length;
         VolatileLPManager.InitParams memory p =
@@ -129,9 +142,11 @@ contract CreateManager is Script {
         if (lower.length != keys.length || upper.length != keys.length) revert LengthMismatch();
     }
 
-    function _readName(string memory json, bool isVolatile) internal view returns (bytes32) {
+    function _readName(string memory json, bytes32 productHash) internal view returns (bytes32) {
         if (vm.keyExistsJson(json, ".name")) return _packName(vm.parseJsonString(json, ".name"));
-        return isVolatile ? bytes32("Envelop VolatileLP") : bytes32("Envelop StableLP");
+        if (productHash == keccak256(bytes("open"))) return bytes32("Envelop OpenLP");
+        if (productHash == keccak256(bytes("volatile"))) return bytes32("Envelop VolatileLP");
+        return bytes32("Envelop StableLP");
     }
 
     // ────────── deployments JSON lookups ──────────

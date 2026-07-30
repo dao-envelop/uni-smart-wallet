@@ -75,6 +75,14 @@ fees** (принятая C-H1). Для **VolatileLPManager** новый `recente
    (`_accountPoolBalanceDelta`). `_skimFees` берёт только протокольную долю от *fee*-компоненты, поэтому
    **весь principal остаётся положительной `currencyDelta`** — расходуемой внутри того же unlock. Пулы
    hookless, хук не может изменить дельту.
+
+   > **Обновление (task_043).** Эта предпосылка относится к `StableLPManager` и `VolatileLPManager` —
+   > они остались hookless. Появилась третья имплементация `OpenVolatileLPManager` (`ORACLE_TYPE 3002`),
+   > у которой гейта нет вообще: там хук МОЖЕТ вернуть дельту, и разбор выше на неё не распространяется.
+   > Это осознанный выбор владельца (отдельный имплант в allowlist фабрики, не флаг), последствия
+   > перечислены в шапке `src/OpenVolatileLPManager.sol` и в `CLAUDE.md` § Hook policy. Отдельно
+   > напоминание: `unlockCallback` до сих пор не `nonReentrant` и `(op, payload)` не привязан к внешнему
+   > входу ([M-3] аудита 2026-05-17) — для hookless-продуктов этот путь закрыт именно гейтом.
 2. `_rebalanceSwap` делает своп с **оператор-заданными** `swapAmountIn`, `swapPriceLimit`, `minAmountOut`.
    Своп неттится против того же счёта, то есть **освобождённый principal финансирует вход свопа**. При
    `minAmountOut = 0` и `swapPriceLimit` на экстремуме MIN/MAX-sqrt обе Uniswap-защиты отключены; проверка

@@ -57,7 +57,9 @@ Thereafter:
   `"Envelop LP Uniswap Manager"`); the pool set is fixed at init (no `poolManager`/`quote` fields).
 - **`PoolConfig { PoolKey key; int24 tickLower; int24 tickUpper; }`** — one config per pool.
 - **Validation in `initialize`** (per pool): hookless-only (`key.hooks == address(0)` else
-  `HookNotAllowed`); valid tick range; **duplicate-pool reject** (`DuplicatePool` — required because
+  `HookNotAllowed`) — this spec covers `StableLPManager`, whose `_hooksAllowed()` is the base `false`;
+  the separate `OpenVolatileLPManager` (task_043) overrides it to `true` and is NOT in scope here;
+  valid tick range; **duplicate-pool reject** (`DuplicatePool` — required because
   `salt == poolId`). Pool count bounded `1..MAX_POOLS` (`NoPools` / `TooManyPools`). `name()` is the
   per-clone `InitParams.name` (packed `bytes32`, trailing zeros trimmed), falling back to
   `"Envelop LP Uniswap Manager"` when empty; `symbol()` is the constant `"eStableLP"`.
@@ -200,7 +202,7 @@ or **DOCUMENTED/ACCEPTED**.
 | LOW/INFO | **Fee-on-transfer / rebasing** tokens break `_settle` / the `allocateFrom` snapshot / `withdrawTo` delivery (all assume `received == sent`). | DOCUMENTED — managed currencies must be standard ERC-20 (or native). |
 | INFO | Protocol fee accrues as **ERC-6909**; the treasury must redeem via `unlock→burn→take`. | Resolved — use `src/FeeRedeemer.sol` as the treasury (task_018). |
 | INFO | No deadlines on entry points; no two-step NFT ownership handoff. | ACCEPTED. (The dead `reinvestRemainder` no-op field was removed in task_029 when `withdrawTo` was unified into `BaseLPManager`.) |
-| — | Pools are **hookless-only** (categorical reject); positions are operator-driven so all slippage discipline lives off-chain. | By design. |
+| — | Pools are **hookless-only** (categorical reject); positions are operator-driven so all slippage discipline lives off-chain. | By design — for THIS product. `OpenVolatileLPManager` (task_043) lifts the gate for owners who opt into it by choosing that implementation; the exit-path consequences are spelled out in its contract header and in CLAUDE.md § Hook policy. |
 
 ## EIP-170
 

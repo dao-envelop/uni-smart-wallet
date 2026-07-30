@@ -53,7 +53,13 @@ artifacts (addresses) are written to `deployments/<chainId>.json`.
 `DeployStableLP` deploys the FULL legacy set when a chain entry has **no** `deploy` object (backwards
 compatible). To deploy only a subset, add a `deploy` object of per-component booleans to the chain entry
 in `chain_params.json`. **A missing flag defaults to `false`.** Components: `feeRedeemer`, `stableImpl`,
-`volatileImpl`, `factory`, `lens`, `descriptor`, `oracle`.
+`volatileImpl`, `openImpl`, `factory`, `lens`, `descriptor`, `oracle`.
+
+`openImpl` is the third product, `OpenVolatileLPManager` — the Volatile model with the hook gate lifted,
+so a pool with a non-zero `hooks` address can be configured. It is **off unless explicitly enabled**,
+including for a chain entry with no `deploy` object at all: legacy configs predate it and must never gain
+it implicitly. Read `src/OpenVolatileLPManager.sol` before enabling it — with no hook gate, a hook that
+returns liquidity deltas can skim principal on the way out, and one that reverts can trap it.
 
 ```jsonc
 "8453": {
@@ -81,7 +87,7 @@ Dependency resolution:
 - **Treasury for the impls** (when `feeRedeemer: false`): `treasury` from config → else `.feeRedeemer`
   from the existing `deployments/<chainId>.json` → else revert `TreasuryMissing`.
 - **Factory allowlist**: when `factory: true` it blesses whichever impls are available (fresh this run,
-  else `.impl`/`.volatileImpl` from the deployments file). When `factory: false` but fresh impls were
+  else `.impl`/`.volatileImpl`/`.openImpl` from the deployments file). When `factory: false` but fresh impls were
   deployed, the script best-effort calls `setImplementation` on the existing `.factory` **only if the
   broadcaster is the factory owner** — otherwise it logs a warning and you allowlist manually.
 - **Oracle** is standalone: deployed + recorded under `.oracle`, then wired into each manager clone later
@@ -172,9 +178,12 @@ be the oracle owner — the script reverts `NotOracleOwner` before touching anyt
 `LPManagerFactory.createManager(implementation, expectedOwner, initData)` clones an **allowlisted**
 implementation and forwards the product's `initialize(InitParams)` as raw calldata (the two products'
 `initialize` selectors differ), then checks the singleton NFT landed on `expectedOwner`. `CreateManager`
-builds all of this from the config JSON: set `"product": "stable"` (default) or `"product":
-"volatile"`, and it reads `.impl` / `.volatileImpl` + `.factory` from `deployments/<chainId>.json`.
-Volatile configs omit `.tickLower` / `.tickUpper` (ranges are per-call). See
+builds all of this from the config JSON: set `"product"` to `"stable"` (default), `"volatile"`, or
+`"open"`, and it reads `.impl` / `.volatileImpl` / `.openImpl` + `.factory` from
+`deployments/<chainId>.json`. Anything else **reverts** `UnknownProduct` rather than quietly falling back
+to stable. `"open"` uses the same config shape and the same `initialize` ABI as `"volatile"` — only the
+implementation address differs — so it is the config for pools that carry hooks.
+Volatile and open configs omit `.tickLower` / `.tickUpper` (ranges are per-call). See
 `script/manager_config.example.json` (stable) and `script/manager_config.volatile.example.json`.
 
 ## Deploy the descriptor standalone

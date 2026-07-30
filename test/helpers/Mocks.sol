@@ -3,6 +3,9 @@ pragma solidity ^0.8.26;
 
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
+import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
+import {BaseTestHooks} from "@uniswap/v4-core/src/test/BaseTestHooks.sol";
 import {IPriceOracle} from "../../src/interfaces/IPriceOracle.sol";
 
 /// @notice Minimal ERC-20 with public mint, for tests that need a token balance.
@@ -77,5 +80,62 @@ contract MockPriceOracle is IPriceOracle {
     function check(PoolKey calldata, bool, uint256, uint256) external view returns (bool) {
         if (mode == Mode.Revert) revert MockPriceOutOfBounds();
         return mode == Mode.Pass;
+    }
+}
+
+/// @notice A no-op hook that only observes the add/remove-liquidity calls, for the
+/// {OpenVolatileLPManager} suite. It returns its own selector (so v4 accepts the call) and touches no
+/// deltas — deliberately: it proves the manager's ops still work with a hook *in the loop*, without the
+/// hook being the thing under test. Counters let a test assert it really was invoked.
+///
+/// Deployment is not `new MockObserverHook()`: v4 reads a hook's permissions from the low 14 bits of
+/// its ADDRESS (`Hooks.sol:15-18`) and `PoolManager.initialize` rejects a non-zero hook with no flags
+/// via `isValidHookAddress`. So a test must place the code at an address carrying the flags it
+/// implements — see the `vm.etch` in the suite.
+contract MockObserverHook is BaseTestHooks {
+    uint256 public beforeAddCalls;
+    uint256 public beforeRemoveCalls;
+
+    function beforeAddLiquidity(address, PoolKey calldata, ModifyLiquidityParams calldata, bytes calldata)
+        external
+        override
+        returns (bytes4)
+    {
+        ++beforeAddCalls;
+        return IHooks.beforeAddLiquidity.selector;
+    }
+
+    function beforeRemoveLiquidity(address, PoolKey calldata, ModifyLiquidityParams calldata, bytes calldata)
+        external
+        override
+        returns (bytes4)
+    {
+        ++beforeRemoveCalls;
+        return IHooks.beforeRemoveLiquidity.selector;
+    }
+}
+
+/// @notice A hook that reverts on `beforeRemoveLiquidity` — the "a benign-looking hook can brick
+/// `withdrawTo` and trap principal" risk that {OpenVolatileLPManager} documents as accepted. Present so
+/// that risk is demonstrated by a passing test rather than asserted in a comment.
+contract MockBrickingHook is BaseTestHooks {
+    error Bricked();
+
+    function beforeAddLiquidity(address, PoolKey calldata, ModifyLiquidityParams calldata, bytes calldata)
+        external
+        pure
+        override
+        returns (bytes4)
+    {
+        return IHooks.beforeAddLiquidity.selector;
+    }
+
+    function beforeRemoveLiquidity(address, PoolKey calldata, ModifyLiquidityParams calldata, bytes calldata)
+        external
+        pure
+        override
+        returns (bytes4)
+    {
+        revert Bricked();
     }
 }
