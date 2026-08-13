@@ -22,7 +22,8 @@ interface IEnvelopManager {
 /// implementation as an EIP-1167 minimal proxy at a deterministic (CREATE2) address, then forwards
 /// **product-specific `initialize` calldata** atomically in the same transaction.
 ///
-/// Products declare their own `InitParams` (Stable carries per-pool ranges, Volatile is keys-only), so
+/// Products declare their own `InitParams` (Stable carries position bounds per pool, Volatile is
+/// keys-only), so
 /// their `initialize` selectors differ and one typed call cannot serve both. The caller ABI-encodes the
 /// product's `initialize(InitParams)` off-chain and passes it as `initData`; the factory stays
 /// product-agnostic. Modeled on Envelop's `EnvelopWNFTFactory` clone pattern (previously `StableLPFactory`).

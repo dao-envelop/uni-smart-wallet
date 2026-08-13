@@ -21,10 +21,10 @@
 The wallet is small (~500 lines of in-scope Solidity) and the core V4 settle/take/unlock plumbing is correctly wired. The risk concentrates in three places:
 
 1. **Singleton-NFT-as-sole-authority** is a sharp design choice with sharp edges. The NFT is the only key to everything the wallet holds, has no two-step transfer, no approval-disabling override, and no recovery path — any of (typo, lost key, marketplace approval, transfer to a non-`onERC721Received` contract) permanently bricks the wallet.
-2. **Hook trust surface is wider than the validator assumes.** `_isHookAllowed` keys on the 20-byte address only — it ignores the permission bits encoded in the V4 hook address. Combined with no `nonReentrant` on `unlockCallback` and no mid-flight protection on `setHookAllowed`/`setHookRegistry`, an already-whitelisted hook can drive nested unlocks and inflate slippage caps.
+2. **Hook trust surface is wider than the validator assumes.** `_isHookAllowed` keys on the 20-byte address only — it ignores the permission bits encoded in the V4 hook address. Combined with no mid-flight protection on `setHookAllowed`/`setHookRegistry`, an already-whitelisted hook can inflate slippage caps. (This item originally also claimed such a hook "can drive nested unlocks" via the missing `nonReentrant` on `unlockCallback` — **withdrawn**, see the [M-3] resolution: v4 reverts a nested `unlock`, and adding that modifier would brick every operation.)
 3. **Asymmetric position lifecycle**: `_handleDecrease` does not clean up the registry when `liquidity` hits zero, and `closePosition`/`pokePosition` then revert on `UnknownPosition`. The inline comment that says "operator can call closePosition explicitly" describes an impossible path.
 
-The recommended mitigations are: bounded operator set (or operator-epoch), two-step NFT handoff with `IERC721Receiver` check, slippage + deadline on close/decrease/poke, `nonReentrant` on `unlockCallback`, auto-cleanup of drained positions, hook-flag-mask validation, and a guardian-pause for `executeEncodedTx`. Most fixes are localized and small.
+The recommended mitigations are: bounded operator set (or operator-epoch), two-step NFT handoff with `IERC721Receiver` check, slippage + deadline on close/decrease/poke, auto-cleanup of drained positions, hook-flag-mask validation, and a guardian-pause for `executeEncodedTx`. (`nonReentrant` on `unlockCallback` was on this list and is **withdrawn** — see the [M-3] resolution.) Most fixes are localized and small.
 
 ---
 
@@ -185,6 +185,55 @@ Drop the misleading comment.
 **Description**: `nonReentrant` is on `openPosition`/`closePosition`/`decreasePosition`/`pokePosition` only. `unlockCallback` itself is NOT `nonReentrant`. PoolManager allows nested `unlock()`. A hook invoked during the outer unlock can call `POOL_MANAGER.unlock(maliciousPayload)`, which causes PoolManager to call back into `wallet.unlockCallback(...)` — `msg.sender == POOL_MANAGER` is still true, the gate passes, and the dispatcher executes the attacker-chosen op on attacker-chosen state mid-flight (e.g., closing a victim salt while opening another).
 
 **Recommendation**: Add `nonReentrant` to `unlockCallback`. Additionally, set an `_inflightOp` flag in the outer entrypoint and require the callback payload to match it — bind dispatch to the outer caller.
+
+> ### RESOLUTION 2026-07-30 (task_044): NOT APPLICABLE — and **do not apply the recommendation**
+>
+> The finding rests on "PoolManager allows nested `unlock()`". That is **false** for the v4-core this
+> repo compiles against (`lib/v4-hooks-public/lib/v4-core`, pin `d153b048`, `git describe` `v4.0.0-19`;
+> `remappings.txt` confirms it is the tree actually built). `PoolManager.sol:102-114`:
+>
+> ```solidity
+> function unlock(bytes calldata data) external override returns (bytes memory result) {
+>     if (Lock.isUnlocked()) AlreadyUnlocked.selector.revertWith();   // ← first statement
+>     Lock.unlock();
+>     result = IUnlockCallback(msg.sender).unlockCallback(data);
+>     if (NonzeroDeltaCount.read() != 0) CurrencyNotSettled.selector.revertWith();
+>     Lock.lock();
+> }
+> ```
+>
+> `Lock` is a transient global boolean (`tstore`/`tload`, no depth counter), set before the callback and
+> cleared only after it returns, so for the whole duration of any `unlockCallback` a second `unlock()` is
+> uncallable by anyone. Three independent barriers, each sufficient alone:
+>
+> 1. **`AlreadyUnlocked`** — a nested `unlock()` anywhere in the call tree reverts.
+> 2. **`IUnlockCallback(msg.sender)`** — the callback target is hardcoded to the caller; `unlock` takes no
+>    address, so no third party can be named. A hook that calls `unlock` receives *its own* callback, not
+>    the manager's. `PoolManager.sol:110` is the only non-test invocation of `unlockCallback` in v4-core.
+> 3. **`NotPoolManager`** — a forged direct call to `manager.unlockCallback(data)` is rejected at the door.
+>
+> The "attacker-chosen op on attacker-chosen state" half has no input path either: every one of the 8
+> `POOL_MANAGER.unlock` call sites builds `abi.encode(CONSTANT_OP, abi.encode(...))` where the op is a
+> compile-time constant chosen by the entry point and never read from calldata, and `byOwner` is computed
+> on-chain via `_isOwnerCall()`.
+>
+> **The recommendation must NOT be applied.** OZ `ReentrancyGuard` is one shared `_status` slot per
+> contract (`ReentrancyGuard.sol:50-51,94-99`), and every function that reaches `unlock` already holds
+> `nonReentrant` (`allocate`, `allocateFrom`, `reinvest`, `claimFees` in both products, `recenter`,
+> `withdrawTo`). `unlockCallback` is therefore entered with `_status == ENTERED` **by construction**, so
+> the modifier reverts `ReentrancyGuardReentrantCall` on every operation. Verified by applying it
+> temporarily: `test/VolatileLPManagerAllocate.t.sol` went to **0 passed, 6 failed**, each
+> `ReentrancyGuardReentrantCall()`. The `_inflightOp` half has nothing to bind against, the op being ours
+> rather than the caller's.
+>
+> Residual, for the record: the reachable re-entrancy shape is external code invoked mid-unlock (a hook,
+> an ERC-777-style token in `_settle`/`_take`, a `withdrawTo` recipient) calling back into a *different*
+> entry point — closed by that same shared `nonReentrant` on all of them. The one unguarded entry point
+> is `executeEncodedTxBatch`, which is **[M-4]** below and still open.
+>
+> Note also that the locations named above (`openPosition` / `closePosition` / `decreasePosition` /
+> `pokePosition`) belonged to `UniSmartWallet`, removed in task_025; the live dispatcher is
+> `BaseLPManager.unlockCallback` → `_dispatchExtraOp`.
 
 ---
 
@@ -359,9 +408,10 @@ H-1, H-2, H-3, M-9, L-9, L-10, L-11, L-12 all stem from the same architectural c
 5. Block `to == address(this)` and the precompile range in `_update`.
 
 ### Hook trust gap
-H-6, H-7, M-3, M-11, I-6, I-7 cluster on hook validation:
+H-6, H-7, M-11, I-6, I-7 cluster on hook validation (M-3 was listed here and is **withdrawn** — it was
+not a hook-validation issue and not reachable at all; see its resolution block):
 1. Validate hook permission flags via address mask.
-2. `nonReentrant` on `unlockCallback` + outer-op binding.
+2. ~~`nonReentrant` on `unlockCallback` + outer-op binding.~~ Withdrawn — would brick every operation.
 3. Snapshot hook decision at open, never re-trust unless re-validated.
 4. Read `feesAccrued` on open path and settle it.
 5. try/catch around `IHookRegistry`.

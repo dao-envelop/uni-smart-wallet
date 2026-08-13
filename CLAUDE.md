@@ -36,13 +36,13 @@ MANAGER_CONFIG=script/my_pools.json forge script script/CreateManager.s.sol \
 from <https://developers.uniswap.org/contracts/v4/deployments>); addresses are written to
 `deployments/<chainId>.json`. See `script/README.md`.
 
-`foundry.toml` enables `ffi = true`, sets `solc = 0.8.26`, `evm = cancun`, `optimizer_runs = 800`,
+`foundry.toml` enables `ffi = true`, sets `solc = 0.8.26`, `evm = cancun`, `optimizer_runs = 200`,
 `via_ir = false`, and grants `fs_permissions` for `./script` and `./test`.
 
 ## Architecture
 
 The repo implements **NFT-owned Uniswap V4 LP managers** that interact with the `PoolManager` directly
-(no v4 `PositionManager`, no NFT-per-position). Two products share three abstract bases:
+(no v4 `PositionManager`, no NFT-per-position). Three products share three abstract bases:
 
 **Bases (`src/abstract/` + `src/BaseLPManager.sol`):**
 
@@ -65,8 +65,10 @@ The repo implements **NFT-owned Uniswap V4 LP managers** that interact with the 
 **Products:**
 
 - **`StableLPManager`** (`src/StableLPManager.sol`) — configured set of hookless stable pools.
-  **`salt == poolId`** (one position per pool) at a **fixed per-pool range** stored in `_range[poolId]`
-  at `initialize`. Deployed as an **EIP-1167 clone** via **`StableLPFactory`** (atomic `initialize`).
+  **`salt == poolId`** (one position per pool), each position held between **fixed bounds** recorded in
+  `rangeOf[poolId]` at `initialize` — product policy, not a property of the pool (a pool has liquidity
+  and a price; a range belongs to a position).
+  Deployed as an **EIP-1167 clone** via **`LPManagerFactory`** (atomic `initialize`).
   Ops: `allocate` / `allocateFrom` (snapshot-guarded) / `withdrawTo` (indirect drain via `take`) /
   `reinvest` / `claimFees`. `allocate`/`reinvest` carry no `amount*Max` (owed ≤ desired at the on-chain
   price; `minLiquidity` is the floor). `InitParams.pools` is `StablePoolInit[] { key, tickLower, tickUpper }`.
@@ -76,7 +78,14 @@ The repo implements **NFT-owned Uniswap V4 LP managers** that interact with the 
   remove→swap→re-add), and an external `IPriceOracle` guard (`setPriceOracle`) that gates **operator**
   swaps fail-closed (owner swaps bypass; see Authorization model). Like Stable,
   the add is sized from desired amounts with a `minLiquidity` floor — no `amount*Max` (owed ≤ desired
-  by construction). `InitParams.pools` is `PoolKey[]` (keys only — ranges are per-call). No factory yet.
+  by construction). `InitParams.pools` is `PoolKey[]` (keys only — ranges are per-call). Cloned through
+  the same `LPManagerFactory`.
+- **`OpenVolatileLPManager`** (`src/OpenVolatileLPManager.sol`, task_043) — `VolatileLPManager` with the
+  hook gate lifted (`_hooksAllowed() => true`), `ORACLE_TYPE 3002`, symbol `eOpenLP`. Everything else,
+  including `initialize`/`InitParams` and therefore the factory `initData` and the init selector, is
+  inherited **verbatim** — only the implementation address differs, so `FactoryHelper.cloneVolatile` and
+  the `CreateManager` volatile config shape both work unchanged. See **Hook policy** for what choosing it
+  costs.
 
 ### Authorization model
 
@@ -93,9 +102,37 @@ was idle+fees, not principal; Volatile's `recenter` frees principal, hence the H
 
 ### Hook policy
 
-Hookless-only, enforced in `_registerPool`: a pool with a non-zero hook reverts `HookNotAllowed` at
-init. Hooks with `afterAdd/RemoveLiquidityReturnDelta` can skim LP principal/fees; the products have no
-need for hooked pools, so the gate is a hard `hooks == address(0)`, not a whitelist.
+**Per product**, decided by `BaseLPManager._hooksAllowed()` and applied in `_registerPool` at init only
+(an operator can only ever name a `PoolId` already in the configured set, never a raw key):
+
+| Product | `_hooksAllowed()` | Behaviour |
+|---|---|---|
+| `StableLPManager`, `VolatileLPManager` | `false` (base default) | a non-zero hook reverts `HookNotAllowed` at init |
+| `OpenVolatileLPManager` | `true` (override) | any pool is accepted, hooked or not |
+
+The default is a hard `hooks == address(0)`, not a whitelist: a whitelist was tried and removed
+(task_012) because approving an address says nothing about its permission bits — audit `2026-05-17`
+[H-6]. Keeping it categorical also keeps [H-7]/[M-7] answered, since there is no setter and the decision
+is a property of the implementation a clone points at.
+
+Why the default is load-bearing rather than merely cautious: the **exit path has no floor**.
+`_pullLiquidity` discards the caller `BalanceDelta` entirely, `WithdrawStep` carries no `amount*Min`, and
+the only quantitative backstop is the aggregate `AmountNotDelivered` check on what reaches the recipient
+— so a hook with `AFTER_REMOVE_LIQUIDITY_RETURNS_DELTA` can skim principal and `_settleManaged` nets the
+shortfall silently. Audit `2026-07-18` still takes hooklessness as a premise **for those two products**.
+
+`OpenVolatileLPManager` (task_043, `ORACLE_TYPE 3002`) exists because forbidding hooked pools outright is
+a product decision the owner should be able to make. It is a separate implementation rather than a flag:
+each implementation gets its own EIP-170 budget (Stable has ~482 B left), and the factory's owner-curated
+`isImplementation` allowlist already makes choosing it the explicit opt-in. For that product the
+invariant "the manager's own code protects the principal" **does not hold** — it holds as far as the
+chosen hook is honest. `test/OpenVolatileLPManager.t.sol` demonstrates that with a passing test
+(`test_brickingHook_trapsPrincipal`), not just a comment. Hookless Volatile stays the default a UI offers
+first.
+
+`_hooksAllowed()` is shaped as a `pure` predicate rather than a virtual gate procedure so solc
+constant-folds it per contract: Stable and Volatile compile byte-for-byte the size they were. The
+procedure form cost each of them 9 B, which is too much at 482 B of headroom.
 
 ### Unlock dispatch
 
@@ -140,7 +177,7 @@ these managers — the managers do **not** inherit it (ERC20-only custody + a ba
 Tests split by concern; each boots only what it needs. Shared helpers in `test/helpers/`:
 
 - `Mocks.sol` — `MockERC20`, `Echo`. **Add new mocks here.**
-- `StableLPTestBase.sol` — deploys PoolManager + impl + `StableLPFactory`, clones a multi-pool stable
+- `StableLPTestBase.sol` — deploys PoolManager + impl + `LPManagerFactory`, clones a multi-pool stable
   manager, funds it; `_initParams` / `_saltFor` helpers. Most `StableLP*` suites inherit it.
 - `V4PositionOpsHarness.sol` — **test-only** mixin that restores a standalone open/close/decrease/poke
   lifecycle on `V4PositionManager` (removed from production when the JIT-LP wallet was retired). It keeps
@@ -156,7 +193,8 @@ Tests split by concern; each boots only what it needs. Shared helpers in `test/h
 | `test/V4PositionManager.t.sol` | base mechanics via `V4PositionManagerHarness` |
 | `test/WalletPositionDescriptor.t.sol` / `test/UniLens.t.sol` / `test/PositionState.t.sol` | `tokenURI` rendering, lens output, position valuation (via the NFT/ops harness) |
 | `test/PositionMath.t.sol` | library branch coverage via a wrapper |
-| `test/DeployStableLP.t.sol` / `test/StableLPFactory.t.sol` / `test/FeeRedeemer.t.sol` | deploy script, factory, treasury redeemer |
+| `test/DeployStableLP.t.sol` / `test/LPManagerFactory*.t.sol` / `test/FeeRedeemer.t.sol` | deploy script, factory, treasury redeemer |
+| `test/OpenVolatileLPManager.t.sol` | the hooks-allowed product: gate lifted, gate still shut for Volatile, real ops through an installed hook, the trapped-principal risk |
 | `test/*.fork.t.sol` | live V4 on Base, env-gated by `BASE_RPC` |
 
 ## Task and branch workflow

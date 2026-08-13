@@ -7,6 +7,7 @@ import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {FeeRedeemer} from "../src/FeeRedeemer.sol";
 import {StableLPManager} from "../src/StableLPManager.sol";
 import {VolatileLPManager} from "../src/VolatileLPManager.sol";
+import {OpenVolatileLPManager} from "../src/OpenVolatileLPManager.sol";
 import {LPManagerFactory} from "../src/LPManagerFactory.sol";
 import {UniLens} from "../src/UniLens.sol";
 import {WalletPositionDescriptor} from "../src/WalletPositionDescriptor.sol";
@@ -18,7 +19,7 @@ import {ChainlinkPriceOracle} from "../src/oracle/ChainlinkPriceOracle.sol";
 /// ### Component selection (the `deploy` object)
 /// Each chain entry may carry an optional `deploy` object of per-component booleans:
 ///
-///   "deploy": { "feeRedeemer": false, "stableImpl": true, "volatileImpl": true,
+///   "deploy": { "feeRedeemer": false, "stableImpl": true, "volatileImpl": true, "openImpl": false,
 ///               "factory": false, "lens": false, "descriptor": false, "oracle": true }
 ///
 /// A missing flag defaults to `false`. If the whole `deploy` object is absent, the LEGACY full set is
@@ -71,6 +72,7 @@ contract DeployStableLP is Script {
         bool feeRedeemer;
         bool stableImpl;
         bool volatileImpl;
+        bool openImpl;
         bool factory;
         bool lens;
         bool descriptor;
@@ -83,6 +85,7 @@ contract DeployStableLP is Script {
         address feeRedeemer;
         address impl;
         address volatileImpl;
+        address openImpl;
         address factory;
         address lens;
         address descriptor;
@@ -94,6 +97,7 @@ contract DeployStableLP is Script {
         FeeRedeemer feeRedeemer;
         StableLPManager impl;
         VolatileLPManager volatileImpl;
+        OpenVolatileLPManager openImpl;
         LPManagerFactory factory;
         UniLens lens;
         WalletPositionDescriptor descriptor;
@@ -124,6 +128,7 @@ contract DeployStableLP is Script {
             feeRedeemer: true,
             stableImpl: true,
             volatileImpl: true,
+            openImpl: true,
             factory: true,
             lens: true,
             descriptor: true,
@@ -164,19 +169,24 @@ contract DeployStableLP is Script {
         }
 
         // 2. Manager implementations (need a treasury).
-        if (flags.stableImpl || flags.volatileImpl) {
+        if (flags.stableImpl || flags.volatileImpl || flags.openImpl) {
             if (treasuryAddr == address(0)) revert TreasuryMissing(block.chainid);
         }
         if (flags.stableImpl) d.impl = new StableLPManager(pm, treasuryAddr);
         if (flags.volatileImpl) d.volatileImpl = new VolatileLPManager(pm, treasuryAddr);
+        // Third product: the Volatile model with the hook gate lifted (its own EIP-170 budget).
+        if (flags.openImpl) d.openImpl = new OpenVolatileLPManager(pm, treasuryAddr);
 
         // 3. Factory: build allowlisting available impls, or best-effort allowlist fresh impls on the old one.
         address stableAddr = address(d.impl) != address(0) ? address(d.impl) : existing.impl;
         address volatileAddr = address(d.volatileImpl) != address(0) ? address(d.volatileImpl) : existing.volatileImpl;
+        address openAddr = address(d.openImpl) != address(0) ? address(d.openImpl) : existing.openImpl;
         if (flags.factory) {
-            d.factory = new LPManagerFactory(admin, _implList(stableAddr, volatileAddr));
+            d.factory = new LPManagerFactory(admin, _implList(stableAddr, volatileAddr, openAddr));
         } else {
-            _allowlistFreshImpls(existing.factory, address(d.impl), address(d.volatileImpl), broadcaster);
+            _allowlistFreshImpls(
+                existing.factory, address(d.impl), address(d.volatileImpl), address(d.openImpl), broadcaster
+            );
         }
 
         // 4. Standalone components.
@@ -188,10 +198,15 @@ contract DeployStableLP is Script {
     }
 
     /// @dev Best-effort: bless freshly-deployed impls on an already-deployed factory the broadcaster owns.
-    function _allowlistFreshImpls(address factory, address stableImpl, address volatileImpl, address broadcaster)
-        internal
-    {
-        if (stableImpl == address(0) && volatileImpl == address(0)) return; // no fresh impls ⇒ nothing to bless
+    function _allowlistFreshImpls(
+        address factory,
+        address stableImpl,
+        address volatileImpl,
+        address openImpl,
+        address broadcaster
+    ) internal {
+        // no fresh impls ⇒ nothing to bless
+        if (stableImpl == address(0) && volatileImpl == address(0) && openImpl == address(0)) return;
         if (factory == address(0)) {
             console2.log("WARN: fresh impls deployed but no factory to allowlist them on; set .factory or deploy one");
             return;
@@ -213,16 +228,26 @@ contract DeployStableLP is Script {
             LPManagerFactory(factory).setImplementation(volatileImpl, true);
             console2.log("Allowlisted volatile impl on factory:", volatileImpl);
         }
+        if (openImpl != address(0)) {
+            LPManagerFactory(factory).setImplementation(openImpl, true);
+            console2.log("Allowlisted open (hooked) impl on factory:", openImpl);
+        }
     }
 
-    function _implList(address stableAddr, address volatileAddr) internal pure returns (address[] memory impls) {
+    function _implList(address stableAddr, address volatileAddr, address openAddr)
+        internal
+        pure
+        returns (address[] memory impls)
+    {
         uint256 n;
         if (stableAddr != address(0)) ++n;
         if (volatileAddr != address(0)) ++n;
+        if (openAddr != address(0)) ++n;
         impls = new address[](n);
         uint256 i;
         if (stableAddr != address(0)) impls[i++] = stableAddr;
         if (volatileAddr != address(0)) impls[i++] = volatileAddr;
+        if (openAddr != address(0)) impls[i++] = openAddr;
     }
 
     // ────────── config ──────────
@@ -263,6 +288,7 @@ contract DeployStableLP is Script {
                 feeRedeemer: true,
                 stableImpl: true,
                 volatileImpl: true,
+                openImpl: false, // legacy configs predate this product — never deploy it implicitly
                 factory: true,
                 lens: true,
                 descriptor: true,
@@ -272,6 +298,8 @@ contract DeployStableLP is Script {
         f.feeRedeemer = _optBool(json, string.concat(deployPath, ".feeRedeemer"));
         f.stableImpl = _optBool(json, string.concat(deployPath, ".stableImpl"));
         f.volatileImpl = _optBool(json, string.concat(deployPath, ".volatileImpl"));
+        // Absent ⇒ false, so every existing chain_params entry stays a no-op for this product.
+        f.openImpl = _optBool(json, string.concat(deployPath, ".openImpl"));
         f.factory = _optBool(json, string.concat(deployPath, ".factory"));
         f.lens = _optBool(json, string.concat(deployPath, ".lens"));
         f.descriptor = _optBool(json, string.concat(deployPath, ".descriptor"));
@@ -317,6 +345,7 @@ contract DeployStableLP is Script {
         e.feeRedeemer = _optAddr(json, ".feeRedeemer");
         e.impl = _optAddr(json, ".impl");
         e.volatileImpl = _optAddr(json, ".volatileImpl");
+        e.openImpl = _optAddr(json, ".openImpl");
         e.factory = _optAddr(json, ".factory");
         e.lens = _optAddr(json, ".lens");
         e.descriptor = _optAddr(json, ".descriptor");
@@ -339,6 +368,7 @@ contract DeployStableLP is Script {
         if (f.feeRedeemer) console2.log("FeeRedeemer:   ", address(d.feeRedeemer));
         if (f.stableImpl) console2.log("impl (stable): ", address(d.impl));
         if (f.volatileImpl) console2.log("volatileImpl:  ", address(d.volatileImpl));
+        if (f.openImpl) console2.log("openImpl:      ", address(d.openImpl));
         if (f.factory) console2.log("LPManagerFactory:", address(d.factory));
         if (f.lens) console2.log("UniLens:       ", address(d.lens));
         if (f.descriptor) console2.log("Descriptor:    ", address(d.descriptor));
@@ -354,6 +384,7 @@ contract DeployStableLP is Script {
         if (address(d.feeRedeemer) != address(0)) existing.feeRedeemer = address(d.feeRedeemer);
         if (address(d.impl) != address(0)) existing.impl = address(d.impl);
         if (address(d.volatileImpl) != address(0)) existing.volatileImpl = address(d.volatileImpl);
+        if (address(d.openImpl) != address(0)) existing.openImpl = address(d.openImpl);
         if (address(d.factory) != address(0)) existing.factory = address(d.factory);
         if (address(d.lens) != address(0)) existing.lens = address(d.lens);
         if (address(d.descriptor) != address(0)) existing.descriptor = address(d.descriptor);
@@ -370,6 +401,7 @@ contract DeployStableLP is Script {
         if (existing.feeRedeemer != address(0)) out = vm.serializeAddress(k, "feeRedeemer", existing.feeRedeemer);
         if (existing.impl != address(0)) out = vm.serializeAddress(k, "impl", existing.impl);
         if (existing.volatileImpl != address(0)) out = vm.serializeAddress(k, "volatileImpl", existing.volatileImpl);
+        if (existing.openImpl != address(0)) out = vm.serializeAddress(k, "openImpl", existing.openImpl);
         if (existing.factory != address(0)) out = vm.serializeAddress(k, "factory", existing.factory);
         if (existing.lens != address(0)) out = vm.serializeAddress(k, "lens", existing.lens);
         if (existing.descriptor != address(0)) out = vm.serializeAddress(k, "descriptor", existing.descriptor);

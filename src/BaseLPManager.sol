@@ -227,17 +227,42 @@ abstract contract BaseLPManager is SingletonNFTOwned, V4PositionManager {
         _name = name_;
     }
 
-    /// @dev Register one configured pool: hookless gate, dedup by poolId, push identity, and union its
+    /// @dev Register one configured pool: hook-policy gate, dedup by poolId, push identity, and union its
     /// currencies into the managed-stable set. Ranges (if any) are the product's concern.
-    /// @param key The pool to configure (must be hookless and not already configured).
+    /// @param key The pool to configure (must satisfy {_hooksAllowed} and not already be configured).
     function _registerPool(PoolKey memory key) internal {
-        if (address(key.hooks) != address(0)) revert HookNotAllowed(address(key.hooks));
+        if (!_hooksAllowed() && address(key.hooks) != address(0)) revert HookNotAllowed(address(key.hooks));
         PoolId id = key.toId();
         if (_poolIndexPlusOne[id] != 0) revert DuplicatePool(id); // poolId is a position salt ⇒ must be unique
         pools.push(PoolConfig({key: key}));
         _poolIndexPlusOne[id] = pools.length; // 1-based
         _registerManaged(key.currency0);
         _registerManaged(key.currency1);
+    }
+
+    /// @dev This product's hook policy, consulted once per pool at `initialize` and never again — an
+    /// operator can only ever name a `PoolId` that is already in the configured set, never a raw key.
+    ///
+    /// `false` (hookless-only) is load-bearing rather than merely conservative: the exit path has no
+    /// floor. `_pullLiquidity` discards the caller `BalanceDelta` entirely, `WithdrawStep` carries no
+    /// `amount*Min`, and the only quantitative backstop is the aggregate `AmountNotDelivered` check on
+    /// what reaches the recipient — so a hook holding `AFTER_REMOVE_LIQUIDITY_RETURNS_DELTA` could skim
+    /// principal and `_settleManaged` would net the shortfall silently. That is audit `2026-05-17`
+    /// [H-6], and `2026-07-18` still takes hooklessness as a premise for Stable and Volatile.
+    ///
+    /// A product may widen this, but only by accepting that consequence explicitly — see
+    /// {OpenVolatileLPManager}. Overriding it is the single supported way to change hook policy: there
+    /// is deliberately no setter, so the decision is a property of the implementation a clone points
+    /// at, immutable from init onward (audit `2026-05-17` [H-7] / [M-7] were about a mutable policy).
+    ///
+    /// Shaped as a `pure` predicate rather than a `virtual` gate procedure for a measured reason: solc
+    /// constant-folds it per concrete contract, so `!false && …` compiles back to the original single
+    /// comparison and `!true && …` drops the gate entirely. `StableLPManager` and `VolatileLPManager`
+    /// therefore come out byte-for-byte the size they were (24,094 / 23,718). The equivalent
+    /// `_requireHookAllowed(key)` virtual-procedure form cost both of them 9 bytes, which is not free
+    /// enough when Stable has 482 to spend.
+    function _hooksAllowed() internal pure virtual returns (bool) {
+        return false;
     }
 
     /// @dev Finish the one-shot init: optionally wire the `tokenURI` renderer, mint the singleton NFT

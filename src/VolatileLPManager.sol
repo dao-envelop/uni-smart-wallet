@@ -108,20 +108,20 @@ contract VolatileLPManager is BaseLPManager {
     // ────────── Product identity ──────────
 
     /// @inheritdoc BaseLPManager
-    function ORACLE_TYPE() public pure override returns (uint256) {
+    function ORACLE_TYPE() public pure virtual override returns (uint256) {
         return 3001;
     }
 
     /// @notice The NFT symbol — the shared constant `"eVolLP"` for every clone.
-    function symbol() public pure override returns (string memory) {
+    function symbol() public pure virtual override returns (string memory) {
         return "eVolLP";
     }
 
-    function _productName() internal pure override returns (string memory) {
+    function _productName() internal pure virtual override returns (string memory) {
         return "VolatileLPManager";
     }
 
-    function _defaultName() internal pure override returns (bytes32) {
+    function _defaultName() internal pure virtual override returns (bytes32) {
         return bytes32("Envelop Volatile LP Manager");
     }
 

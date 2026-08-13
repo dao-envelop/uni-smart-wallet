@@ -23,7 +23,7 @@ contract CreateManagerHarness is CreateManager {
         }
         p = StableLPManager.InitParams({
             owner: vm.parseJsonAddress(json, ".owner"),
-            name: _readName(json, false),
+            name: _readName(json, keccak256(bytes("stable"))),
             descriptor: address(0),
             pools: pools
         });
@@ -180,6 +180,17 @@ contract DeployStableLPConfigTest is Test {
         assertFalse(f.oracle, "oracle stays off unless explicitly enabled");
     }
 
+    /// @notice A `deploy` object that omits `openImpl` leaves it off (and an absent object likewise).
+    function test_readFlags_openImplDefaultsOff() public view {
+        DeployStableLP.Flags memory omitted = h.readFlags('{"deploy":{"stableImpl":true,"volatileImpl":true}}', "");
+        assertFalse(omitted.openImpl, "omitted key means off");
+        DeployStableLP.Flags memory legacy =
+            h.readFlags('{"poolManager":"0x0000000000000000000000000000000000000001"}', "");
+        assertFalse(legacy.openImpl, "legacy full set must not gain a third product");
+        DeployStableLP.Flags memory asked = h.readFlags('{"deploy":{"openImpl":true}}', "");
+        assertTrue(asked.openImpl, "explicit true means on");
+    }
+
     /// @notice A `deploy` object enables exactly its true flags; omitted keys default to false.
     function test_subset_onlyOracleAndManagers() public view {
         DeployStableLP.Flags memory f =
@@ -229,6 +240,7 @@ contract DeployStableLPSubsetTest is Test {
             feeRedeemer: feeRedeemer,
             stableImpl: stableImpl,
             volatileImpl: volatileImpl,
+            openImpl: false, // off by default; tests that want it set `.openImpl` on the result
             factory: factory,
             lens: lens,
             descriptor: descriptor,
@@ -301,6 +313,29 @@ contract DeployStableLPSubsetTest is Test {
             _oracle(100),
             new address[](0)
         );
+    }
+
+    /// @notice The third product (hooks allowed) is off unless asked for, and when asked for it is
+    /// deployed with the same treasury/PoolManager wiring and blessed on a factory built this run.
+    function test_openImpl_offByDefault_onWhenRequested() public {
+        DeployStableLP.Flags memory off = _flags(false, true, true, true, false, false, false);
+        DeployStableLP.Deployment memory d0 =
+            deployer.deployComponents(pm, admin, off, treasury, _noExisting(), admin, _oracle(100), new address[](0));
+        assertEq(address(d0.openImpl), address(0), "not deployed unless requested");
+        assertFalse(d0.factory.isImplementation(address(0)), "zero never allowlisted");
+
+        DeployStableLP.Flags memory on = _flags(false, true, true, true, false, false, false);
+        on.openImpl = true;
+        DeployStableLP.Deployment memory d =
+            deployer.deployComponents(pm, admin, on, treasury, _noExisting(), admin, _oracle(100), new address[](0));
+        assertTrue(address(d.openImpl) != address(0), "open impl deployed");
+        assertEq(d.openImpl.ORACLE_TYPE(), 3002, "own oracle type");
+        assertEq(d.openImpl.PROTOCOL_TREASURY(), treasury, "open treasury == fallback");
+        assertEq(address(d.openImpl.POOL_MANAGER()), address(pm), "open impl pm");
+        assertTrue(d.factory.isImplementation(address(d.openImpl)), "open impl allowlisted on a fresh factory");
+        // and the other two are still there — _implList grew rather than replaced
+        assertTrue(d.factory.isImplementation(address(d.impl)), "stable still allowlisted");
+        assertTrue(d.factory.isImplementation(address(d.volatileImpl)), "volatile still allowlisted");
     }
 
     /// @notice A factory deployed this run allowlists impls carried from the existing deployments file.
