@@ -107,20 +107,40 @@ forge script script/DeployStableLP.s.sol --sig "run()" --rpc-url $RPC \
 `script/oracle_feeds.json` holds verified Chainlink **USD aggregator proxies** for the chains that
 currently have a deployed stack — `1` mainnet, `8453` base, `42161` arbitrum, `130` unichain, `1301`
 unichain-sepolia (the only ones with a `deployments/<id>.json`). Structure: `chainId → SYMBOL →
-{ pair, aggregator, feedDecimals, heartbeat }`. Addresses were pulled from Chainlink's official
-`reference-data-directory` (2026-07).
+{ pair, aggregator, feedDecimals, publishedHeartbeat, heartbeat }`. Addresses were pulled from
+Chainlink's official `reference-data-directory` (2026-07); the heartbeats were re-verified against it in
+2026-08 (all 68 rows matched).
 
 Two things to keep in mind when wiring these into the oracle:
 
 - **`setFeed` is keyed by the managed TOKEN address, not by symbol.** The file maps *asset symbol →
   aggregator*; you supply the token's on-chain address (from the manager's pool config) and the token's
   own `decimals` as `tokenDecimals`. One BTC/USD feed serves WBTC, cbBTC, etc.
-- **`heartbeat` is the feed's max staleness; the oracle rejects a reference older than it.** Several
-  feeds have short heartbeats (Arbitrum USDC/USDT `255s`, mainnet BTC/ETH `3600s`). The guard uses
-  `block.timestamp - updatedAt > heartbeat` ⇒ *no opinion* ⇒ operator swaps fail-closed. Consider
-  passing a **padded** heartbeat to `setFeed` (e.g. official × 2–3) so a normal update lag doesn't
-  spuriously block operators. `130` unichain feeds are **18-decimal SVR** variants (BTC/ETH/UNI only as
-  SVR proxies) — review before mainnet use.
+- **The heartbeat written on-chain is padded, and the pad is not optional.** Each row carries two
+  numbers: `publishedHeartbeat` is the directory value verbatim (provenance — never pass it to
+  `setFeed`), and `heartbeat` is what actually goes on-chain,
+
+  ```
+  heartbeat = publishedHeartbeat + min(2 * publishedHeartbeat, 900)
+  ```
+
+  Chainlink's published heartbeat is the interval at which a new round is *triggered*; the resulting
+  `updatedAt` lands ~15s later, after round negotiation, transmission and L2 inclusion. Since the guard
+  is `block.timestamp - updatedAt > heartbeat` ⇒ *no opinion* ⇒ operator swaps fail-closed, a bound set
+  to the published heartbeat is **unreachable by construction** — a feed cannot be fresher than it
+  publishes, so any feed that actually reaches its heartbeat reads stale. That is exactly what happened
+  on Arbitrum: USDC/USDT published `255s`, observed cadence `270s`, ≈5.6 % of operator swaps reverting
+  for no interpretable reason (task_045). Feeds sitting at `86400` never showed it only because they are
+  deviation-driven and publish far more often than their heartbeat.
+
+  The `+900` cap is why the multiplier is bounded rather than a flat × 2–3: padding is not free — a wider
+  window makes the fail-closed guard more permissive, and stale references inflate measured basis by
+  150+ bps (`tasks/oracle_maxdeviation_analysis.md`). Capping keeps the 50 rows at `86400` near 24 h and
+  widens only where the bound was actually tight.
+
+  When adding a network, copy `publishedHeartbeat` from the directory and apply the formula;
+  `test/SetOracleFeeds.t.sol` lints every row and fails the suite on a raw value. `130` unichain feeds
+  are **18-decimal SVR** variants (BTC/ETH/UNI only as SVR proxies) — review before mainnet use.
 - **L2 Sequencer Uptime gate.** The oracle also takes an L2 Sequencer Uptime Feed (`oracleSequencerFeed`
   in `chain_params.json`) + grace period; while the sequencer is down or within the grace window after a
   restart it returns *no opinion* (operator swaps fail-closed). Wired for `8453` base and `42161`
