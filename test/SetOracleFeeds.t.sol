@@ -99,6 +99,54 @@ contract SetOracleFeedsTest is Test {
         }
     }
 
+    /// @dev The staleness bound written on-chain must be the published Chainlink heartbeat *padded*:
+    /// `updatedAt` trails the round-trigger interval by the round + inclusion lag, so a bound equal to the
+    /// published heartbeat is unreachable — any feed that actually reaches its heartbeat reads stale and
+    /// closes the fail-closed operator gate (task_045: Arbitrum USDC published 255s, cadence 270s).
+    /// Walks the feeds file itself rather than the token configs, so a network added with a raw directory
+    /// value fails here even before any token is wired to it.
+    function test_shippedFeeds_heartbeatIsPaddedPublished() public view {
+        string memory feeds = vm.readFile("script/oracle_feeds.json");
+        string[] memory chains = vm.parseJsonKeys(feeds, ".");
+
+        uint256 chainsChecked;
+        for (uint256 i = 0; i < chains.length; ++i) {
+            if (_isMetadataKey(chains[i])) continue;
+            string memory chainPath = string.concat('.["', chains[i], '"]');
+            string[] memory symbols = vm.parseJsonKeys(feeds, chainPath);
+
+            uint256 feedsChecked;
+            for (uint256 j = 0; j < symbols.length; ++j) {
+                if (_isMetadataKey(symbols[j])) continue;
+                string memory base = string.concat(chainPath, ".", symbols[j]);
+                string memory where = string.concat(chains[i], ".", symbols[j]);
+
+                uint256 published = vm.parseJsonUint(feeds, string.concat(base, ".publishedHeartbeat"));
+                uint256 heartbeat = vm.parseJsonUint(feeds, string.concat(base, ".heartbeat"));
+                assertGt(published, 0, string.concat("publishedHeartbeat missing: ", where));
+                assertEq(heartbeat, _pad(published), string.concat("heartbeat not padded: ", where));
+                ++feedsChecked;
+            }
+            assertGt(feedsChecked, 0, string.concat("no feeds walked for chain ", chains[i]));
+            ++chainsChecked;
+        }
+        assertGt(chainsChecked, 0, "no chains walked");
+    }
+
+    /// @dev The padding rule, mirrored from `script/oracle_feeds.json`. The cap keeps the long-heartbeat
+    /// feeds near 24h — a wider staleness window makes the guard more permissive, so the bound is only
+    /// loosened where it was actually tight.
+    function _pad(uint256 published) internal pure returns (uint256) {
+        uint256 slack = 2 * published;
+        return published + (slack < 900 ? slack : 900);
+    }
+
+    /// @dev `_comment` / `_name` / `_note` are documentation keys, not feeds.
+    function _isMetadataKey(string memory key) internal pure returns (bool) {
+        bytes memory b = bytes(key);
+        return b.length > 0 && b[0] == "_";
+    }
+
     function test_resolve_revertsOnUnknownSymbol() public {
         SetOracleFeeds.TokenFeed[] memory tokens = new SetOracleFeeds.TokenFeed[](1);
         tokens[0] = SetOracleFeeds.TokenFeed({token: address(0xDEAD), symbol: "NOPE", decimals: 18});
