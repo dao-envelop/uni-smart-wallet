@@ -102,6 +102,35 @@ contract ChainlinkPriceOracleTest is Test {
         assertFalse(oracle.check(key, true, 1e18, 2000e18), "stale reference => no opinion");
     }
 
+    function test_ageExactlyHeartbeat_stillFresh() public {
+        feed0.set(int256(2000e8), block.timestamp - HEARTBEAT); // the check is `>`, not `>=`
+        assertTrue(oracle.check(key, true, 1e18, 2000e18), "age == heartbeat is still fresh");
+    }
+
+    // ────────── task_045: the published heartbeat is not a usable staleness bound ──────────
+    //
+    // Chainlink's published heartbeat is the interval at which a new round is *triggered*; `updatedAt`
+    // lands ~15s later (round negotiation + transmission + L2 inclusion). Arbitrum USDC/USDT publish at
+    // 255s and land every ~270s, so a bound of 255 refuses a price that is as fresh as the feed can ever
+    // be, and the fail-closed operator gate reverts ≈5.6 % of swaps. The fix is padding in
+    // `script/oracle_feeds.json`, linted by `test/SetOracleFeeds.t.sol`; these two pin the mechanism.
+
+    uint32 internal constant ARB_STABLE_PUBLISHED = 255;
+    uint32 internal constant ARB_STABLE_PADDED = 765; // published + min(2 * published, 900)
+    uint256 internal constant ARB_STABLE_CADENCE = 270; // observed, max 272 over 59 intervals
+
+    function test_publishedHeartbeat_isStaleAtRealCadence() public {
+        oracle.setFeed(c0, address(feed0), ARB_STABLE_PUBLISHED, 18);
+        feed0.set(int256(2000e8), block.timestamp - ARB_STABLE_CADENCE);
+        assertFalse(oracle.check(key, true, 1e18, 2000e18), "unpadded bound rejects a feed at its own cadence");
+    }
+
+    function test_paddedHeartbeat_acceptsRealCadence() public {
+        oracle.setFeed(c0, address(feed0), ARB_STABLE_PADDED, 18);
+        feed0.set(int256(2000e8), block.timestamp - ARB_STABLE_CADENCE);
+        assertTrue(oracle.check(key, true, 1e18, 2000e18), "padded bound accepts a feed at its own cadence");
+    }
+
     function test_unconfiguredCurrency_notEnforced() public view {
         PoolKey memory k2 = key;
         k2.currency1 = Currency.wrap(address(0xCC)); // no feed
