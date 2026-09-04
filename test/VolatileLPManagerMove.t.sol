@@ -17,8 +17,9 @@ import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
-import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
+import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {PoolModifyLiquidityTest} from "@uniswap/v4-core/src/test/PoolModifyLiquidityTest.sol";
+import {PoolSwapTest} from "@uniswap/v4-core/src/test/PoolSwapTest.sol";
 
 /// @notice `VolatileLPManager.moveLiquidity`: free a position in one pool and re-deploy it in another,
 /// inside a single unlock. Two pools over the same pair at different fee tiers — the case the operation
@@ -26,6 +27,7 @@ import {PoolModifyLiquidityTest} from "@uniswap/v4-core/src/test/PoolModifyLiqui
 contract VolatileLPManagerMoveTest is Test {
     PoolManager internal poolManager;
     PoolModifyLiquidityTest internal lpRouter;
+    PoolSwapTest internal swapRouter;
     VolatileLPManager internal mgr;
     MockPriceOracle internal oracle;
 
@@ -42,6 +44,7 @@ contract VolatileLPManagerMoveTest is Test {
     address internal treasury = address(0xFEE5);
     address internal lp = address(0xABCD);
     address internal stranger = address(0xDEAD);
+    address internal trader = address(0x77ADE);
 
     int24 internal constant SPACING = 60;
     uint256 internal constant FUND = 1_000e18;
@@ -52,6 +55,7 @@ contract VolatileLPManagerMoveTest is Test {
     function setUp() public {
         poolManager = new PoolManager(address(this));
         lpRouter = new PoolModifyLiquidityTest(IPoolManager(address(poolManager)));
+        swapRouter = new PoolSwapTest(IPoolManager(address(poolManager)));
         oracle = new MockPriceOracle();
 
         Currency a = Currency.wrap(address(new MockERC20()));
@@ -83,6 +87,32 @@ contract VolatileLPManagerMoveTest is Test {
 
         vm.prank(owner);
         mgr.setOperator(bot, true);
+
+        MockERC20(Currency.unwrap(c0)).mint(trader, 10_000e18);
+        MockERC20(Currency.unwrap(c1)).mint(trader, 10_000e18);
+        vm.startPrank(trader);
+        MockERC20(Currency.unwrap(c0)).approve(address(swapRouter), type(uint256).max);
+        MockERC20(Currency.unwrap(c1)).approve(address(swapRouter), type(uint256).max);
+        vm.stopPrank();
+    }
+
+    /// @dev Trade both ways through `k` so an in-range position there actually accrues fees. One
+    /// direction would move the price out from under the position; the round trip leaves it in range.
+    function _tradeThrough(PoolKey memory k) internal {
+        for (uint256 i = 0; i < 2; ++i) {
+            bool zeroForOne = i == 0;
+            vm.prank(trader);
+            swapRouter.swap(
+                k,
+                SwapParams({
+                    zeroForOne: zeroForOne,
+                    amountSpecified: -1e18,
+                    sqrtPriceLimitX96: zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
+                }),
+                PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}),
+                ""
+            );
+        }
     }
 
     function _seed(PoolKey memory k) internal {
@@ -296,6 +326,7 @@ contract VolatileLPManagerMoveTest is Test {
 
     function test_move_reportsTheFeesItRealised() public {
         uint128 liq = _openInA(SALT_A, 100e18);
+        _tradeThrough(keyA); // the position earns something worth reporting
 
         // The pull realises whatever the source accrued; the amounts must be announced, not swallowed
         // (finding 2026-08-22-recenter-erases-lifetime-fees).
@@ -303,13 +334,39 @@ contract VolatileLPManagerMoveTest is Test {
         vm.prank(bot);
         mgr.moveLiquidity(SALT_A, liq, _leg(poolB, SALT_B, -60, 60, 90e18));
 
+        (uint256 seen, uint256 f0, uint256 f1) = _feesReported(SALT_A);
+        assertEq(seen, 1, "the pull announced its realised fees exactly once");
+        assertTrue(f0 > 0 || f1 > 0, "and announced a non-zero amount");
+    }
+
+    /// @notice The other half of the same rule: a pull that realised nothing says nothing. Without the
+    /// zero guard, `recenter`, `reinvest` and every allocate into a fresh salt would each emit an empty
+    /// `FeesCollected` — a second, meaningless event per transaction that an indexer cannot tell from a
+    /// real collection of zero.
+    function test_move_withNothingAccrued_emitsNoFeeEvent() public {
+        uint128 liq = _openInA(SALT_A, 100e18);
+
+        vm.recordLogs();
+        vm.prank(bot);
+        mgr.moveLiquidity(SALT_A, liq, _leg(poolB, SALT_B, -60, 60, 90e18));
+
+        (uint256 seenA,,) = _feesReported(SALT_A);
+        (uint256 seenB,,) = _feesReported(SALT_B);
+        assertEq(seenA, 0, "nothing accrued on the source, nothing announced");
+        assertEq(seenB, 0, "a fresh destination position has no fees to announce");
+    }
+
+    /// @dev How many `FeesCollected` this manager emitted for `salt` in the recorded logs, and the
+    /// amounts of the last one.
+    function _feesReported(bytes32 salt) internal returns (uint256 seen, uint256 fees0, uint256 fees1) {
         bytes32 topic = keccak256("FeesCollected(bytes32,uint256,uint256)");
-        uint256 seen;
         Vm.Log[] memory logs = vm.getRecordedLogs();
         for (uint256 i = 0; i < logs.length; ++i) {
-            if (logs[i].emitter == address(mgr) && logs[i].topics[0] == topic && logs[i].topics[1] == SALT_A) ++seen;
+            if (logs[i].emitter == address(mgr) && logs[i].topics[0] == topic && logs[i].topics[1] == salt) {
+                ++seen;
+                (fees0, fees1) = abi.decode(logs[i].data, (uint256, uint256));
+            }
         }
-        assertEq(seen, 1, "the pull announced its realised fees exactly once");
     }
 
     function test_move_emitsLiquidityMoved() public {

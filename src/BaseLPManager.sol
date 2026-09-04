@@ -42,8 +42,16 @@ abstract contract BaseLPManager is SingletonNFTOwned, V4PositionManager {
     function ORACLE_TYPE() public view virtual returns (uint256);
     /// @dev Product type name embedded in the `EnvelopV2OracleType` event (e.g. "StableLPManager").
     function _productName() internal pure virtual returns (string memory);
-    /// @notice Upper bound on configured pools — caps allocate/settle loop costs.
-    uint8 public constant MAX_POOLS = 8;
+    /// @notice Upper bound on configured pools.
+    /// @dev Measured, not guessed (`test/PoolCountScaling.t.sol`). Two costs bound it. The one nobody
+    /// can split: every unlock runs `_settleManaged` over the whole managed-currency union, which costs
+    /// **~1.35 k gas per configured pool** even for an operation that touches none of them (a one-leg
+    /// allocate is 398 k at 1 pool, 440 k at 32). The one that must fit a single transaction:
+    /// `initialize` at ~145 k/pool, so 32 pools cost ~4.8 M — 3.5x under Ethereum's per-transaction cap
+    /// (EIP-7825, 2^24). Deploying into all of them at once is ~10.6 M and still fits, and an operator
+    /// can split that call anyway. What binds first above this number is not the manager but the
+    /// read side: `tokenURI` concatenates JSON per position and is quadratic.
+    uint8 public constant MAX_POOLS = 32;
     /// @notice Protocol fee skimmed from every realized fee accrual, in basis points (10%).
     uint16 public constant PROTOCOL_FEE_BPS = 1000;
     /// @dev Fallback NFT name (product-specific) used when the init name is empty (`bytes32(0)`).
@@ -486,11 +494,7 @@ abstract contract BaseLPManager is SingletonNFTOwned, V4PositionManager {
             }),
             ""
         );
-        _skimFees(key, fees);
-        // Removing liquidity realizes the accrued fees, exactly as `claimFees` does — so report the same
-        // gross amounts here. Without this the counter silently resets on every pull (finding
-        // `2026-08-22-recenter-erases-lifetime-fees`, task_047).
-        emit FeesCollected(salt, _pos(fees.amount0()), _pos(fees.amount1()));
+        _skimFees(key, salt, fees);
         _positions[salt].liquidity -= liq;
         if (_positions[salt].liquidity == 0) {
             _removeSalt(salt);
@@ -607,10 +611,26 @@ abstract contract BaseLPManager is SingletonNFTOwned, V4PositionManager {
     }
 
     /// @dev Skim the protocol fee (`PROTOCOL_FEE_BPS` of the just-realized accrued fees) of both
-    /// pool currencies straight to the treasury via the v4-native `take`, inside the active unlock.
-    function _skimFees(PoolKey memory key, BalanceDelta feesAccrued) internal {
+    /// pool currencies straight to the treasury via the v4-native `take`, inside the active unlock —
+    /// and report the gross amounts.
+    ///
+    /// The event lives here because this is the one point every realization path goes through. In v4
+    /// **any** `modifyLiquidity` realizes what the position accrued, not only the `liquidityDelta == 0`
+    /// call, so fees are realized on five paths — explicit claim, top-up of an open position,
+    /// `reinvest`, `recenter` and `withdraw` — while `FeesCollected` used to be emitted on one. Every
+    /// other path silently reset the position's counters, which is why lifetime fees read as zero for
+    /// any position an operator loop had ever touched (finding
+    /// `2026-08-22-recenter-erases-lifetime-fees`, task_047).
+    ///
+    /// The zero guard is correctness, not thrift: `recenter` and `reinvest` call this twice in one
+    /// transaction (realize on the old range, then add on the new one, where nothing has accrued yet),
+    /// and every allocate into a fresh salt would otherwise emit an empty event.
+    function _skimFees(PoolKey memory key, bytes32 salt, BalanceDelta feesAccrued) internal {
         _skimFee(key.currency0, feesAccrued.amount0());
         _skimFee(key.currency1, feesAccrued.amount1());
+        uint256 f0 = _pos(feesAccrued.amount0());
+        uint256 f1 = _pos(feesAccrued.amount1());
+        if ((f0 | f1) != 0) emit FeesCollected(salt, f0, f1);
     }
 
     /// @dev Skim via ERC-6909 claims (not an ERC-20 transfer): a token blocklist/pause on the
