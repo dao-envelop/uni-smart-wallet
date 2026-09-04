@@ -32,6 +32,7 @@ contract VolatileLPManager is BaseLPManager {
     // Volatile op codes extend the base set (0–3 canonical + base OP_WITHDRAW_TO = 5); ≥ 7 here.
     uint8 internal constant OP_ALLOCATE_V = 7;
     uint8 internal constant OP_RECENTER = 8;
+    uint8 internal constant OP_MOVE = 9;
 
     /// @notice Init parameters for a volatile manager clone — pools are keys only (ranges are per-call,
     /// so there is no pool-level range to configure).
@@ -87,6 +88,13 @@ contract VolatileLPManager is BaseLPManager {
     /// @param liquidity Liquidity re-added at the new range.
     event Recentered(bytes32 indexed salt, int24 newTickLower, int24 newTickUpper, uint128 liquidity);
 
+    /// @notice Emitted when liquidity is moved from one position to another, possibly in a different pool.
+    /// @param fromSalt The position it was freed from.
+    /// @param toSalt The position it was deployed into (may be new or an existing top-up).
+    /// @param liquidityPulled Liquidity removed from the source; what arrives at the destination depends
+    /// on the destination range and the optional pre-swap, and is in the v4 `ModifyLiquidity` log.
+    event LiquidityMoved(bytes32 indexed fromSalt, bytes32 indexed toSalt, uint128 liquidityPulled);
+
     /// @param poolManager_ The Uniswap V4 PoolManager shared by every clone.
     /// @param treasury_ The immutable protocol-fee recipient (non-zero; typically a {FeeRedeemer}).
     constructor(IPoolManager poolManager_, address treasury_) BaseLPManager(poolManager_, treasury_) {}
@@ -131,6 +139,7 @@ contract VolatileLPManager is BaseLPManager {
         if (op == uint8(Op.POKE)) return _handleClaim(payload); // claimFees (with protocol fee)
         if (op == OP_ALLOCATE_V) return _handleAllocateV(payload);
         if (op == OP_RECENTER) return _handleRecenter(payload);
+        if (op == OP_MOVE) return _handleMove(payload);
         return super._dispatchExtraOp(op, payload); // withdraw (op 5) handled by the base
     }
 
@@ -193,15 +202,31 @@ contract VolatileLPManager is BaseLPManager {
     function _allocateLegV(VolatileAllocLeg memory leg, bool byOwner) internal {
         PoolKey memory key = pools[_indexOf(leg.poolId)].key;
         if (leg.swapAmountIn > 0) {
-            BalanceDelta sd = _swap(key, leg.zeroForOne, -int256(leg.swapAmountIn), leg.swapPriceLimit);
-            int128 inDelta = leg.zeroForOne ? sd.amount0() : sd.amount1();
-            // Full-fill guard: a partial fill (swapPriceLimit hit) leaves |inDelta| < requested input.
-            if (uint256(uint128(-inDelta)) < leg.swapAmountIn) revert SwapSlippage(leg.poolId);
-            int128 outDelta = leg.zeroForOne ? sd.amount1() : sd.amount0();
-            if (uint256(uint128(outDelta)) < leg.minAmountOut) revert SwapMinOut(leg.poolId);
-            _guardSwap(byOwner, key, leg.zeroForOne, uint256(uint128(-inDelta)), uint256(uint128(outDelta)));
+            _guardedSwap(key, leg.zeroForOne, leg.swapAmountIn, leg.swapPriceLimit, leg.minAmountOut, byOwner);
         }
         _addLiquidityV(leg, key);
+    }
+
+    /// @dev The product's one swap path: exactIn, with the canonical Uniswap pair of guards —
+    /// `priceLimit` (marginal-price ceiling) and `minOut` (total-output floor) — plus a full-fill
+    /// requirement, because a partial swap would leave the sides unbalanced for whatever comes next.
+    /// On top of those, the caller-asymmetric oracle guard: the owner swaps freely, an operator only
+    /// at a price the oracle vouches for. Allocate, recenter and move all route through here.
+    function _guardedSwap(
+        PoolKey memory key,
+        bool zeroForOne,
+        uint256 amountIn,
+        uint160 priceLimit,
+        uint256 minOut,
+        bool byOwner
+    ) internal {
+        BalanceDelta sd = _swap(key, zeroForOne, -int256(amountIn), priceLimit);
+        int128 inDelta = zeroForOne ? sd.amount0() : sd.amount1();
+        // Full-fill guard: a partial fill (priceLimit hit) leaves |inDelta| < requested input.
+        if (uint256(uint128(-inDelta)) < amountIn) revert SwapSlippage(key.toId());
+        int128 outDelta = zeroForOne ? sd.amount1() : sd.amount0();
+        if (uint256(uint128(outDelta)) < minOut) revert SwapMinOut(key.toId());
+        _guardSwap(byOwner, key, zeroForOne, uint256(uint128(-inDelta)), uint256(uint128(outDelta)));
     }
 
     /// @dev Size L from desired amounts at the live price, add at the caller's range under `salt`,
@@ -292,7 +317,9 @@ contract VolatileLPManager is BaseLPManager {
         }
 
         // 2. Optional rebalancing swap toward the new range.
-        if (p.swapAmountIn > 0) _rebalanceSwap(key, p, byOwner);
+        if (p.swapAmountIn > 0) {
+            _guardedSwap(key, p.zeroForOne, p.swapAmountIn, p.swapPriceLimit, p.minAmountOut, byOwner);
+        }
 
         // 3. Re-add at the new range, sized from the freed (positive) deltas.
         uint128 L = _addLiquidityAt(
@@ -319,15 +346,56 @@ contract VolatileLPManager is BaseLPManager {
         return "";
     }
 
-    /// @dev The rebalancing swap for recenter: exactIn, partial-fill guard + `minAmountOut` floor, plus
-    /// the caller-asymmetric oracle guard (owner: free; operator: oracle-vouched only).
-    function _rebalanceSwap(PoolKey memory key, RecenterParams memory p, bool byOwner) internal {
-        BalanceDelta sd = _swap(key, p.zeroForOne, -int256(p.swapAmountIn), p.swapPriceLimit);
-        int128 inDelta = p.zeroForOne ? sd.amount0() : sd.amount1();
-        if (uint256(uint128(-inDelta)) < p.swapAmountIn) revert SwapSlippage(key.toId());
-        int128 outDelta = p.zeroForOne ? sd.amount1() : sd.amount0();
-        if (uint256(uint128(outDelta)) < p.minAmountOut) revert SwapMinOut(key.toId());
-        _guardSwap(byOwner, key, p.zeroForOne, uint256(uint128(-inDelta)), uint256(uint128(outDelta)));
+    // ────────── moveLiquidity ──────────
+
+    /// @notice Move liquidity from one or more pools into others in a single unlock. Owner-or-operator.
+    ///
+    /// `recenter` already does free → swap → re-add atomically, but only inside one pool. This lifts that
+    /// restriction: v4 keys deltas by (address, currency) rather than by pool, and `unlock` checks exactly
+    /// one thing on exit — that no non-zero delta remains — so touching several pools in one callback is
+    /// legal. Doing so saves the second transaction's intrinsic gas and its extra settlement pass, and
+    /// removes the window in which the capital sits idle between closing one position and opening another.
+    ///
+    /// What this deliberately does NOT promise: the operator picks the destination range and may leave
+    /// part of the freed capital idle instead of re-deploying it. That is degradation of yield, not theft —
+    /// nothing leaves the manager. The operation widens the operator's radius (`recenter` moves within one
+    /// pool, this moves between pools of the owner-fixed set), not the class of things it may do.
+    ///
+    /// One source, one destination. The array form (many pulls, many adds) does not fit the EIP-170
+    /// budget: arrays of structs need their own calldata-to-memory encoder and memory decoder, and the
+    /// pair costs more than the manager has left. Moving one position is also the case that exists —
+    /// an operator repeats the call to move several.
+    /// @param fromSalt The open position to free.
+    /// @param liquidity How much of it to pull; the whole amount closes the position.
+    /// @param add Where the proceeds go — an ordinary allocate leg, with its own pool, range, optional
+    /// pre-swap and floors. May be a fresh salt or a top-up of an existing position.
+    function moveLiquidity(bytes32 fromSalt, uint128 liquidity, VolatileAllocLeg calldata add)
+        external
+        onlyAuthorized
+        nonReentrant
+        fixEtherBalance
+    {
+        // `_pullLiquidity` returns silently on a zero pull, which would turn this into a plain allocate
+        // funded from whatever happens to sit on the balance. Reject it here, where the revert is clear.
+        if (liquidity == 0) revert ZeroLiquidity();
+        POOL_MANAGER.unlock(abi.encode(OP_MOVE, abi.encode(_isOwnerCall(), fromSalt, liquidity, add)));
+        emit LiquidityMoved(fromSalt, add.salt, liquidity);
+        emit IERC4906.MetadataUpdate(TOKEN_ID);
+    }
+
+    /// @dev Free, then re-deploy, then settle once. Both halves reuse the paths the product already has:
+    /// `_pullLiquidity` (fee skim, registry decrement, close-on-zero, realized-fee event) and
+    /// `_allocateLegV` (pre-swap with its full-fill and `minAmountOut` guards, the oracle check for
+    /// operators, and the add with its `minLiquidity` floor). The single `_settleManaged` at the end is
+    /// what makes this cheaper than two transactions: settlement walks the managed currency union once,
+    /// no matter how many pools were touched.
+    function _handleMove(bytes memory payload) internal returns (bytes memory) {
+        (bool byOwner, bytes32 fromSalt, uint128 liquidity, VolatileAllocLeg memory add) =
+            abi.decode(payload, (bool, bytes32, uint128, VolatileAllocLeg));
+        _pullLiquidity(fromSalt, liquidity);
+        _allocateLegV(add, byOwner);
+        _settleManaged();
+        return "";
     }
 
     /// @dev The manager's positive credit of `c` in the active unlock (0 if it owes or is flat).
