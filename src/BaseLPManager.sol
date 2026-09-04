@@ -42,8 +42,16 @@ abstract contract BaseLPManager is SingletonNFTOwned, V4PositionManager {
     function ORACLE_TYPE() public view virtual returns (uint256);
     /// @dev Product type name embedded in the `EnvelopV2OracleType` event (e.g. "StableLPManager").
     function _productName() internal pure virtual returns (string memory);
-    /// @notice Upper bound on configured pools — caps allocate/settle loop costs.
-    uint8 public constant MAX_POOLS = 8;
+    /// @notice Upper bound on configured pools.
+    /// @dev Measured, not guessed (`test/PoolCountScaling.t.sol`). Two costs bound it. The one nobody
+    /// can split: every unlock runs `_settleManaged` over the whole managed-currency union, which costs
+    /// **~1.35 k gas per configured pool** even for an operation that touches none of them (a one-leg
+    /// allocate is 398 k at 1 pool, 440 k at 32). The one that must fit a single transaction:
+    /// `initialize` at ~145 k/pool, so 32 pools cost ~4.8 M — 3.5x under Ethereum's per-transaction cap
+    /// (EIP-7825, 2^24). Deploying into all of them at once is ~10.6 M and still fits, and an operator
+    /// can split that call anyway. What binds first above this number is not the manager but the
+    /// read side: `tokenURI` concatenates JSON per position and is quadratic.
+    uint8 public constant MAX_POOLS = 32;
     /// @notice Protocol fee skimmed from every realized fee accrual, in basis points (10%).
     uint16 public constant PROTOCOL_FEE_BPS = 1000;
     /// @dev Fallback NFT name (product-specific) used when the init name is empty (`bytes32(0)`).

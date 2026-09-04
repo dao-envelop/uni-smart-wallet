@@ -27,9 +27,9 @@ import {PoolModifyLiquidityTest} from "@uniswap/v4-core/src/test/PoolModifyLiqui
 /// positions in one call, plus the two views the UI depends on (`tokenURI`, `UniLens.positions`).
 /// No contract changes; the numbers are printed, not asserted, so the run is a measurement.
 ///
-/// As committed it stops at the live `MAX_POOLS = 8`. The n > 8 columns in the write-up were taken
-/// by raising that constant in `src/BaseLPManager.sol` for the duration of the run (and with
-/// `FOUNDRY_GAS_LIMIT` raised past foundry's 2^30 default, which the n = 96 row hits first).
+/// It runs up to the live `MAX_POOLS` (32 since task_052 — this table is what raised it). Rows beyond
+/// that need the constant raised in `src/BaseLPManager.sol` for the duration of the run, and
+/// `FOUNDRY_GAS_LIMIT` raised past foundry's 2^30 default, which the n = 96 row hits first.
 contract PoolCountScalingTest is Test {
     address internal owner = address(0xA11CE);
     address internal lp = address(0xABCD);
@@ -50,12 +50,78 @@ contract PoolCountScalingTest is Test {
         UniLens lens;
     }
 
+    /// @notice Gas budget for the read paths at the cap. They are the ones with no upper bound in the
+    /// contracts and no way for a caller to split the work: `tokenURI` is called by wallets and
+    /// marketplaces, `managerConfig` / `oracleStatus` by every manager screen. 30 M is half an L1 block
+    /// and well under geth's default `rpc.gascap` of 50 M.
+    uint256 internal constant READ_BUDGET = 30_000_000;
+
+    /// @notice The cap itself: a manager with exactly `MAX_POOLS` pools works end to end.
+    function test_atMaxPools_everyWritePathWorks() public {
+        uint256 n = 32;
+        (Ctx memory c,) = _build(n);
+        assertEq(uint256(c.mgr.MAX_POOLS()), n, "MAX_POOLS moved - re-measure before trusting this test");
+        assertEq(c.mgr.poolCount(), n, "every pool configured");
+        assertEq(c.mgr.managedStablesCount(), n + 1, "the shared quote plus one pair per pool");
+
+        vm.prank(owner);
+        c.mgr.allocate(_legs(c, n));
+        assertEq(c.mgr.openPositionCount(), n, "a position in every pool");
+
+        vm.prank(owner);
+        c.mgr.claimFees(PoolId.unwrap(c.keys[0].toId()));
+
+        // Build the params BEFORE pranking: `_withdrawAll` reads `positionOf`, and that external call
+        // would consume the prank.
+        BaseLPManager.WithdrawToParams memory wp = _withdrawAll(c, n);
+        vm.prank(owner);
+        c.mgr.withdrawTo(wp);
+        assertEq(c.mgr.openPositionCount(), 0, "and all of them close in one call");
+    }
+
+    /// @notice What actually binds above the cap is the read side, so hold it to a number. `tokenURI`
+    /// concatenates JSON per position and is quadratic; the lens aggregators fan out two staticcalls per
+    /// managed currency and two per pool.
+    function test_atMaxPools_readsStayWithinBudget() public {
+        (Ctx memory c,) = _build(32);
+        vm.prank(owner);
+        c.mgr.allocate(_legs(c, 32));
+
+        uint256 g = gasleft();
+        c.mgr.tokenURI(1);
+        uint256 gUri = g - gasleft();
+
+        g = gasleft();
+        c.lens.managerConfig(address(c.mgr), new address[](0));
+        uint256 gCfg = g - gasleft();
+
+        g = gasleft();
+        c.lens.oracleStatus(address(c.mgr));
+        uint256 gOracle = g - gasleft();
+
+        g = gasleft();
+        c.lens.positions(address(c.mgr));
+        uint256 gPos = g - gasleft();
+
+        console2.log("at 32 pools: tokenURI", gUri);
+        console2.log("at 32 pools: managerConfig", gCfg);
+        console2.log("at 32 pools: oracleStatus", gOracle);
+        console2.log("at 32 pools: positions", gPos);
+
+        assertLt(gUri, READ_BUDGET, "tokenURI over budget");
+        assertLt(gCfg, READ_BUDGET, "managerConfig over budget");
+        assertLt(gOracle, READ_BUDGET, "oracleStatus over budget");
+        assertLt(gPos, READ_BUDGET, "positions over budget");
+    }
+
     function test_gasByPoolCount() public {
         console2.log("n,init,allocate,withdraw,tokenURI,lensPositions");
         _row(1);
         _row(2);
         _row(4);
         _row(8);
+        _row(16);
+        _row(32);
     }
 
     /// @notice The tax every operation pays for a pool it does NOT touch: one leg allocated on a
@@ -67,6 +133,8 @@ contract PoolCountScalingTest is Test {
         _row1(2);
         _row1(4);
         _row1(8);
+        _row1(16);
+        _row1(32);
     }
 
     function _row1(uint256 n) internal {

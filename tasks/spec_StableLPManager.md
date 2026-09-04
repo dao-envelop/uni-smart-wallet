@@ -13,7 +13,7 @@
 ## Concept
 
 A **clone-deployed, NFT-owned position manager** for **stable liquidity** across an **arbitrary,
-configurable set of hookless Uniswap V4 pools** (1..`MAX_POOLS = 8`; *no* common hub/quote stable
+configurable set of hookless Uniswap V4 pools** (1..`MAX_POOLS = 32`; *no* common hub/quote stable
 required). An EOA mints an instance from `StableLPFactory`, supplying the pool set at `initialize`.
 Thereafter:
 
