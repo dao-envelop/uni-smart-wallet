@@ -487,6 +487,10 @@ abstract contract BaseLPManager is SingletonNFTOwned, V4PositionManager {
             ""
         );
         _skimFees(key, fees);
+        // Removing liquidity realizes the accrued fees, exactly as `claimFees` does — so report the same
+        // gross amounts here. Without this the counter silently resets on every pull (finding
+        // `2026-08-22-recenter-erases-lifetime-fees`, task_047).
+        emit FeesCollected(salt, _pos(fees.amount0()), _pos(fees.amount1()));
         _positions[salt].liquidity -= liq;
         if (_positions[salt].liquidity == 0) {
             _removeSalt(salt);
