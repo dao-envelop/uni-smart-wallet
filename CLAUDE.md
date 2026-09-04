@@ -75,7 +75,8 @@ The repo implements **NFT-owned Uniswap V4 LP managers** that interact with the 
 - **`VolatileLPManager`** (`src/VolatileLPManager.sol`) — arbitrary/volatile pairs. **`salt ≠ poolId`**:
   a pool holds **many positions** (each a caller-chosen salt) at **per-call ranges**; the position
   records its `poolId`. Adds `minAmountOut` on the balancing pre-swap, `recenter` (single-call
-  remove→swap→re-add), and an external `IPriceOracle` guard (`setPriceOracle`) that gates **operator**
+  remove→swap→re-add within one pool), `moveLiquidity` (the same across two pools, task_051), and an
+  external `IPriceOracle` guard (`setPriceOracle`) that gates **operator**
   swaps fail-closed (owner swaps bypass; see Authorization model). Like Stable,
   the add is sized from desired amounts with a `minLiquidity` floor — no `amount*Max` (owed ≤ desired
   by construction). `InitParams.pools` is `PoolKey[]` (keys only — ranges are per-call). Cloned through
@@ -138,8 +139,9 @@ procedure form cost each of them 9 B, which is too much at 482 B of headroom.
 
 `unlockCallback` enforces `msg.sender == POOL_MANAGER`, decodes a leading `(uint8 op, bytes payload)`,
 and forwards to the product's `_dispatchExtraOp`. Canonical `Op.POKE` (= claimFees) plus product op
-codes: Stable `ALLOCATE=4 / WITHDRAW_TO=5 / REINVEST=6`; Volatile `ALLOCATE_V=7 / RECENTER=8 /
-WITHDRAW_TO_V=9`. `_pokeFromConfig(salt)` (in `BaseLPManager`) reconstructs the pool key from config and
+codes: Stable `ALLOCATE=4 / REINVEST=6`; Volatile `ALLOCATE_V=7 / RECENTER=8 / MOVE=9`. `WITHDRAW_TO=5`
+is owned by the base for both products (task_029) — there is no `WITHDRAW_TO_V`, and this file used to
+say otherwise (audit `2026-07-18` I-DOC-1). `_pokeFromConfig(salt)` (in `BaseLPManager`) reconstructs the pool key from config and
 routes `Op.POKE` to the product handler. `PositionMath` (`src/lib/PositionMath.sol`) does tick-range
 validation + `liquidityFromAmounts`.
 
