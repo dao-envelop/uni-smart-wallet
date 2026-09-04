@@ -2,6 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {Test} from "forge-std/Test.sol";
+import {Vm} from "forge-std/Vm.sol";
 import {Clones} from "@openzeppelin/contracts/proxy/Clones.sol";
 
 import {VolatileLPManager} from "../src/VolatileLPManager.sol";
@@ -222,6 +223,37 @@ contract VolatileLPManagerAllocateTest is Test {
 
         assertEq(mgr.positionOf(salt).tickLower, int24(-120), "moved");
         assertGt(mgr.positionOf(salt).liquidity, 0, "re-added after rebalance");
+    }
+
+    /// Path 4 of the five that realize fees (task_047). `recenter` pulls the whole position to move it,
+    /// which hands back everything it accrued; before the event moved into `_skimFees` this path took the
+    /// fees and reported only `Recentered`, with no amounts — so an operator loop reset the position's
+    /// lifetime earnings on every run.
+    function test_recenter_reportsRealisedFees() public {
+        bytes32 salt = bytes32(uint256(7));
+        vm.prank(owner);
+        mgr.allocate(_one(_leg(salt, -60, 60, 500e18)));
+        _tradeToAccrueFees();
+
+        vm.recordLogs();
+        vm.prank(owner);
+        mgr.recenter(_recenter(salt, -120, 120));
+
+        bytes32 topic = keccak256("FeesCollected(bytes32,uint256,uint256)");
+        uint256 seen;
+        uint256 f0;
+        uint256 f1;
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        for (uint256 i = 0; i < logs.length; ++i) {
+            if (logs[i].emitter == address(mgr) && logs[i].topics[0] == topic && logs[i].topics[1] == salt) {
+                ++seen;
+                (f0, f1) = abi.decode(logs[i].data, (uint256, uint256));
+            }
+        }
+        // Once, not twice: recenter calls `_skimFees` a second time when it re-adds at the new range,
+        // where nothing has accrued — the zero guard keeps that one silent.
+        assertEq(seen, 1, "recenter announced the fees it realized, exactly once");
+        assertTrue(f0 > 0 || f1 > 0, "and the amount is real");
     }
 
     function test_recenter_unknownPosition_reverts() public {

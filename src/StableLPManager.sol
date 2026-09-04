@@ -224,7 +224,7 @@ contract StableLPManager is BaseLPManager {
             }),
             ""
         );
-        _skimFees(key, fees); // protocol fee on any accrued fees realized by a top-up
+        _skimFees(key, salt, fees); // protocol fee + event on any accrued fees realized by a top-up
 
         if (_positions[salt].liquidity == 0) {
             _positions[salt] = StoredPosition({
@@ -255,10 +255,9 @@ contract StableLPManager is BaseLPManager {
             ModifyLiquidityParams({tickLower: r.tickLower, tickUpper: r.tickUpper, liquidityDelta: 0, salt: r.salt}),
             ""
         );
-        _skimFees(r.key, fees);
+        _skimFees(r.key, r.salt, fees); // emits FeesCollected
         _settleCurrency(r.key.currency0);
         _settleCurrency(r.key.currency1);
-        emit FeesCollected(r.salt, _pos(fees.amount0()), _pos(fees.amount1()));
         return "";
     }
 
@@ -284,7 +283,7 @@ contract StableLPManager is BaseLPManager {
             ModifyLiquidityParams({tickLower: rg.tickLower, tickUpper: rg.tickUpper, liquidityDelta: 0, salt: salt}),
             ""
         );
-        _skimFees(key, fees);
+        _skimFees(key, salt, fees);
 
         if (leg.swapAmountIn > 0) {
             BalanceDelta sd = _swap(key, leg.zeroForOne, -int256(leg.swapAmountIn), leg.swapPriceLimit);

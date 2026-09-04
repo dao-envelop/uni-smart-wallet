@@ -161,10 +161,9 @@ contract VolatileLPManager is BaseLPManager {
             ModifyLiquidityParams({tickLower: r.tickLower, tickUpper: r.tickUpper, liquidityDelta: 0, salt: r.salt}),
             ""
         );
-        _skimFees(r.key, fees);
+        _skimFees(r.key, r.salt, fees); // emits FeesCollected
         _settleCurrency(r.key.currency0);
         _settleCurrency(r.key.currency1);
-        emit FeesCollected(r.salt, _pos(fees.amount0()), _pos(fees.amount1()));
         return "";
     }
 
@@ -283,7 +282,7 @@ contract VolatileLPManager is BaseLPManager {
             ModifyLiquidityParams({tickLower: tl, tickUpper: tu, liquidityDelta: int256(uint256(L)), salt: salt}),
             ""
         );
-        _skimFees(key, fees);
+        _skimFees(key, salt, fees);
     }
 
     // ────────── recenter ──────────
@@ -313,7 +312,7 @@ contract VolatileLPManager is BaseLPManager {
                 }),
                 ""
             );
-            _skimFees(key, fees);
+            _skimFees(key, p.salt, fees);
         }
 
         // 2. Optional rebalancing swap toward the new range.
