@@ -8,6 +8,9 @@ import {VolatileLPManager} from "../src/VolatileLPManager.sol";
 import {V4PositionManager} from "../src/abstract/V4PositionManager.sol";
 import {PositionState} from "../src/lib/PositionState.sol";
 import {MockERC20} from "./helpers/Mocks.sol";
+import {BaseLPManager} from "../src/BaseLPManager.sol";
+import {ChainlinkPriceOracle} from "../src/oracle/ChainlinkPriceOracle.sol";
+import {MockAggregator} from "./ChainlinkPriceOracle.t.sol";
 
 import {PoolManager} from "@uniswap/v4-core/src/PoolManager.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
@@ -21,12 +24,19 @@ import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/Pool
 import {PoolModifyLiquidityTest} from "@uniswap/v4-core/src/test/PoolModifyLiquidityTest.sol";
 import {PoolSwapTest} from "@uniswap/v4-core/src/test/PoolSwapTest.sol";
 
-/// @notice Audit 2026-09-04, H-1 PoC. A compromised operator extracts principal WITHOUT any manager
-/// swap: it skews a configured pool's spot price with its own capital, re-deploys the manager's
-/// principal at that price through a swapless `moveLiquidity` / `recenter` (neither consults the
-/// oracle when `swapAmountIn == 0`), then trades the price back through the manager's freshly
-/// concentrated liquidity. The manager buys the pumped token at the pumped price; the attacker pockets
-/// the difference. Same mechanism as the Gamma Strategies (2024-01) and Beefy CLM (Cyfrin) findings.
+/// @notice Audit 2026-09-04, H-1 — kept as a regression after task_053 closed it.
+///
+/// The attack: a compromised operator extracts principal WITHOUT any manager swap. It skews a configured
+/// pool's spot price with its own capital, re-deploys the manager's principal at that price through a
+/// swapless `moveLiquidity` / `recenter`, then trades the price back through the manager's freshly
+/// concentrated liquidity — the manager buys the pumped token at the pumped price and the attacker
+/// pockets the difference (measured here at -22.4% and -44.5% of the portfolio before the fix). Same
+/// mechanism as the Gamma Strategies (2024-01) and Beefy CLM (Cyfrin) findings.
+///
+/// What made it work was that a swapless op never reached the oracle: `_guardSwap` sat on the swap paths
+/// only, and the add sized L from `getSlot0` with no reference. These tests now assert the two ways that
+/// is shut: no oracle ⇒ an operator cannot add at all, and with one wired the skewed pool is refused. The
+/// unskewed control keeps the gate honest — it must not simply block every operator op.
 contract Audit20260904SwaplessDrainPoC is Test {
     using StateLibrary for IPoolManager;
 
@@ -83,7 +93,8 @@ contract Audit20260904SwaplessDrainPoC is Test {
 
         vm.prank(owner);
         mgr.setOperator(bot, true);
-        // NOTE: no price oracle is needed for the attack — no manager swap ever runs.
+        // No price oracle is wired here: that is the pre-task_053 world the attack was found in, and the
+        // first two tests below pin what it costs an operator now. `_wireOracle` opts into the fixed one.
 
         MockERC20(Currency.unwrap(c0)).mint(bot, 10_000e18);
         MockERC20(Currency.unwrap(c1)).mint(bot, 10_000e18);
@@ -95,53 +106,63 @@ contract Audit20260904SwaplessDrainPoC is Test {
 
     // ────────── the attack, through moveLiquidity (task_051) ──────────
 
-    function test_H1_operatorDrainsPrincipal_swaplessMoveIntoSkewedPool() public {
+    function test_H1_swaplessMoveIntoSkewedPool_isRejected() public {
         uint128 liq = _open(poolA, SALT_A, -60, 60, 500e18);
         uint256 mgrBefore = _managerValue();
-        uint256 botBefore = _balance(bot);
 
         // 1. Pump the thin configured pool with the attacker's own capital (no manager involvement).
         _swap(keyB, false, PUMP_TICK);
         (, int24 tick,,) = IPoolManager(address(poolManager)).getSlot0(poolB);
         assertGe(tick, PUMP_TICK - 1, "pool B skewed");
 
-        // 2. Operator moves the whole principal into a narrow range AT the skewed price. No swap ⇒ no
-        //    oracle check; `minLiquidity = 0` and the range are operator-chosen.
+        // 2. The move that used to deploy the whole principal at the skewed price. With no oracle the
+        //    operator cannot add at all; the owner still can (they accept their own slippage).
         vm.prank(bot);
+        vm.expectRevert(BaseLPManager.OperatorSwapGuardRequired.selector);
         mgr.moveLiquidity(SALT_A, liq, _leg(poolB, SALT_B, PUMP_TICK - 60, PUMP_TICK + 60, 499e18));
-        assertGt(mgr.positionOf(SALT_B).liquidity, 0, "principal now sits at the skewed price");
 
-        // 3. Trade the price back through the manager's concentrated liquidity.
-        _swap(keyB, true, 0);
-        (, tick,,) = IPoolManager(address(poolManager)).getSlot0(poolB);
-        assertLe(tick, 1, "pool B restored to 1:1");
+        // 3. With the oracle wired it is the skew itself that is refused, not the missing reference.
+        _wireOracle();
+        vm.prank(bot);
+        vm.expectPartialRevert(ChainlinkPriceOracle.SpotPriceOutOfBounds.selector);
+        mgr.moveLiquidity(SALT_A, liq, _leg(poolB, SALT_B, PUMP_TICK - 60, PUMP_TICK + 60, 499e18));
 
-        uint256 mgrAfter = _managerValue();
-        uint256 botAfter = _balance(bot);
-        console2.log("manager value before / after (1:1 units):", mgrBefore, mgrAfter);
-        console2.log("manager loss bps:", (mgrBefore - mgrAfter) * 10_000 / mgrBefore);
-        console2.log("attacker profit:", botAfter - botBefore);
-        assertLt(mgrAfter, mgrBefore, "manager lost principal");
-        assertGt(botAfter, botBefore, "operator profited");
-        assertGt((mgrBefore - mgrAfter) * 10_000 / mgrBefore, 1_000, "loss exceeds 10% of the portfolio");
+        assertEq(mgr.positionOf(SALT_B).liquidity, 0, "no principal was deployed at the skewed price");
+        assertEq(_managerValue(), mgrBefore, "portfolio untouched");
     }
 
     // ────────── the same, in-pool, through recenter (pre-existing surface) ──────────
 
-    function test_H1_operatorDrainsPrincipal_swaplessRecenterAtSkewedPrice() public {
+    function test_H1_swaplessRecenterAtSkewedPrice_isRejected() public {
         _open(poolB, SALT_B, -60, 60, 500e18);
-        uint256 mgrBefore = _managerValue();
-        uint256 botBefore = _balance(bot);
 
         _swap(keyB, false, PUMP_TICK);
+        // Measured after the pump: it traded through the manager's own position, which is ordinary LP
+        // toxic flow and not what this test is about. What must not happen is the *re-deployment* at the
+        // skewed price that turned that flow into an extraction.
+        uint256 mgrAfterPump = _managerValue();
+        _wireOracle();
+
+        vm.prank(bot);
+        vm.expectPartialRevert(ChainlinkPriceOracle.SpotPriceOutOfBounds.selector);
+        mgr.recenter(_skewedRecenter());
+
+        assertEq(mgr.positionOf(SALT_B).tickLower, int24(-60), "position stayed at its original range");
+        assertEq(_managerValue(), mgrAfterPump, "nothing was re-deployed at the skewed price");
+    }
+
+    /// @dev The control: the same operator, the same call, on an unskewed pool. The gate bounds the price
+    /// an operator may deploy at — it does not take recentering away from the bot.
+    function test_H1_operatorRecenter_unskewedPool_stillWorks() public {
+        _open(poolB, SALT_B, -60, 60, 500e18);
+        _wireOracle();
+
         vm.prank(bot);
         mgr.recenter(
             VolatileLPManager.RecenterParams({
                 salt: SALT_B,
-                // The freed position is single-sided (all token1 after the pump), so the new range sits
-                // entirely below the skewed price: it holds only token1 and buys token0 on the way down.
-                newTickLower: PUMP_TICK - 120,
-                newTickUpper: PUMP_TICK - 60,
+                newTickLower: -120,
+                newTickUpper: 120,
                 zeroForOne: false,
                 swapAmountIn: 0,
                 swapPriceLimit: 0,
@@ -149,13 +170,34 @@ contract Audit20260904SwaplessDrainPoC is Test {
                 minLiquidity: 0
             })
         );
-        _swap(keyB, true, 0);
+        assertEq(mgr.positionOf(SALT_B).tickLower, int24(-120), "operator recenter at a sane price");
+    }
 
-        uint256 mgrAfter = _managerValue();
-        console2.log("recenter: manager loss bps:", (mgrBefore - mgrAfter) * 10_000 / mgrBefore);
-        console2.log("recenter: attacker profit:", _balance(bot) - botBefore);
-        assertLt(mgrAfter, mgrBefore, "manager lost principal");
-        assertGt(_balance(bot), botBefore, "operator profited");
+    /// @dev Wire the real oracle: both currencies at $1, so a 1:1 pool sits exactly on the reference and
+    /// the +6000-tick pump (~+82%) is far outside the 50 bps spot tolerance.
+    function _wireOracle() internal {
+        ChainlinkPriceOracle oracle =
+            new ChainlinkPriceOracle(address(this), IPoolManager(address(poolManager)), 100, 50, address(0), 0);
+        oracle.setFeed(c0, address(new MockAggregator(8, int256(1e8), block.timestamp)), 365 days, 18);
+        oracle.setFeed(c1, address(new MockAggregator(8, int256(1e8), block.timestamp)), 365 days, 18);
+        vm.prank(owner);
+        mgr.setPriceOracle(address(oracle));
+    }
+
+    /// @dev The recenter the attack used: the freed position is single-sided (all token1 after the pump),
+    /// so the new range sits entirely below the skewed price — it holds only token1 and buys token0 on
+    /// the way down.
+    function _skewedRecenter() internal pure returns (VolatileLPManager.RecenterParams memory) {
+        return VolatileLPManager.RecenterParams({
+            salt: SALT_B,
+            newTickLower: PUMP_TICK - 120,
+            newTickUpper: PUMP_TICK - 60,
+            zeroForOne: false,
+            swapAmountIn: 0,
+            swapPriceLimit: 0,
+            minAmountOut: 0,
+            minLiquidity: 0
+        });
     }
 
     // ────────── helpers ──────────

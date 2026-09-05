@@ -180,20 +180,83 @@ contract VolatileLPManagerOperatorSwapGuardTest is Test {
         mgr.allocate(_one(l));
     }
 
-    // ────────── operator: swapless ops stay unrestricted ──────────
+    // ────────── operator: swapless ops are gated too (audit 2026-09-04, H-1) ──────────
+    //
+    // task_031 assumed a swapless op could not lose value, because L is sized from the desired amounts
+    // and `owed <= desired` holds by construction. That bounds the quantity deployed, not the price it is
+    // deployed at: an operator can skew a thin pool, deploy principal into a narrow range at the skewed
+    // price and trade back through it. So the add path consults the oracle for its spot price, and the
+    // same fail-closed rules apply as for a swap.
 
-    function test_operatorSwaplessRecenter_noOracle_succeeds() public {
+    function test_operatorSwaplessRecenter_noOracle_reverts() public {
         VolatileLPManager.RecenterParams memory rp = _drainRecenter();
-        rp.swapAmountIn = 0; // no swap ⇒ no value-loss vector ⇒ no guard
+        rp.swapAmountIn = 0; // no swap — but the re-add still deploys principal at the pool's spot price
         vm.prank(bot);
+        vm.expectRevert(BaseLPManager.OperatorSwapGuardRequired.selector);
         mgr.recenter(rp);
-        assertEq(mgr.positionOf(SALT).tickLower, int24(-120), "swapless recenter allowed for operator");
     }
 
-    function test_operatorSwaplessAllocate_noOracle_succeeds() public {
+    function test_operatorSwaplessAllocate_noOracle_reverts() public {
+        vm.prank(bot);
+        vm.expectRevert(BaseLPManager.OperatorSwapGuardRequired.selector);
+        mgr.allocate(_one(_leg(bytes32(uint256(3)), -60, 60, 50e18)));
+    }
+
+    function test_operatorSwaplessAllocate_notEnforcedOracle_reverts() public {
+        vm.prank(owner);
+        mgr.setPriceOracle(address(oracle)); // default mode: NotEnforced (no fresh reference)
+        vm.prank(bot);
+        vm.expectRevert(abi.encodeWithSelector(BaseLPManager.OperatorSwapUnverified.selector, poolId));
+        mgr.allocate(_one(_leg(bytes32(uint256(3)), -60, 60, 50e18)));
+    }
+
+    function test_operatorSwaplessAllocate_inBoundsOracle_succeeds() public {
+        vm.prank(owner);
+        mgr.setPriceOracle(address(oracle));
+        oracle.setMode(MockPriceOracle.Mode.Pass);
         vm.prank(bot);
         mgr.allocate(_one(_leg(bytes32(uint256(3)), -60, 60, 50e18)));
-        assertGt(mgr.positionOf(bytes32(uint256(3))).liquidity, 0, "swapless allocate allowed for operator");
+        assertGt(mgr.positionOf(bytes32(uint256(3))).liquidity, 0, "swapless allocate under a vouching oracle");
+    }
+
+    function test_operatorSwaplessRecenter_inBoundsOracle_succeeds() public {
+        vm.prank(owner);
+        mgr.setPriceOracle(address(oracle));
+        oracle.setMode(MockPriceOracle.Mode.Pass);
+        VolatileLPManager.RecenterParams memory rp = _drainRecenter();
+        rp.swapAmountIn = 0;
+        vm.prank(bot);
+        mgr.recenter(rp);
+        assertEq(mgr.positionOf(SALT).tickLower, int24(-120), "swapless recenter under a vouching oracle");
+    }
+
+    /// @dev The add path must ask about the *spot* price, not merely call something. `RejectSpot` passes
+    /// swaps and reverts only on `amountIn == 0`, so this fails if the guard is dropped or moved onto the
+    /// swap arm — which an argument-blind mock would happily let through.
+    function test_operatorSwaplessAllocate_consultsTheOracleOnSpot() public {
+        vm.prank(owner);
+        mgr.setPriceOracle(address(oracle));
+        oracle.setMode(MockPriceOracle.Mode.RejectSpot);
+        vm.prank(bot);
+        vm.expectRevert(MockPriceOracle.MockSpotChecked.selector);
+        mgr.allocate(_one(_leg(bytes32(uint256(3)), -60, 60, 50e18)));
+    }
+
+    function test_operatorSwaplessRecenter_consultsTheOracleOnSpot() public {
+        vm.prank(owner);
+        mgr.setPriceOracle(address(oracle));
+        oracle.setMode(MockPriceOracle.Mode.RejectSpot);
+        VolatileLPManager.RecenterParams memory rp = _drainRecenter();
+        rp.swapAmountIn = 0;
+        vm.prank(bot);
+        vm.expectRevert(MockPriceOracle.MockSpotChecked.selector);
+        mgr.recenter(rp);
+    }
+
+    function test_ownerSwaplessAllocate_noOracle_succeeds() public {
+        vm.prank(owner);
+        mgr.allocate(_one(_leg(bytes32(uint256(3)), -60, 60, 50e18)));
+        assertGt(mgr.positionOf(bytes32(uint256(3))).liquidity, 0, "owner add bypasses the spot gate");
     }
 
     // ────────── owner: full freedom (bypasses the guard) ──────────

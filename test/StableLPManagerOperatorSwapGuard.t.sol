@@ -154,9 +154,9 @@ contract StableLPManagerOperatorSwapGuardTest is StableLPTestBase {
         mgr.allocate(_swapLeg()); // owner bypasses the operator guard
     }
 
-    // ────────── operator: swapless allocate stays unrestricted ──────────
+    // ────────── operator: swapless allocate is gated too (audit 2026-09-04, H-1) ──────────
 
-    function test_operatorSwaplessAllocate_noOracle_succeeds() public {
+    function test_operatorSwaplessAllocate_noOracle_reverts() public {
         // Fund both sides so a no-swap add settles; the leg carries swapAmountIn == 0 ⇒ no guard.
         MockERC20(Currency.unwrap(poolKeys[P].currency0)).mint(address(mgr), 100e18);
         MockERC20(Currency.unwrap(poolKeys[P].currency1)).mint(address(mgr), 100e18);
@@ -171,6 +171,29 @@ contract StableLPManagerOperatorSwapGuardTest is StableLPTestBase {
             minLiquidity: 0
         });
         vm.prank(bot);
-        mgr.allocate(legs); // no swap ⇒ operator allowed without an oracle
+        // No swap, but the add still deploys at the pool's spot price — fail-closed without an oracle.
+        vm.expectRevert(BaseLPManager.OperatorSwapGuardRequired.selector);
+        mgr.allocate(legs);
+    }
+
+    function test_operatorSwaplessAllocate_inBoundsOracle_succeeds() public {
+        MockERC20(Currency.unwrap(poolKeys[P].currency0)).mint(address(mgr), 100e18);
+        MockERC20(Currency.unwrap(poolKeys[P].currency1)).mint(address(mgr), 100e18);
+        BaseLPManager.AllocLeg[] memory legs = new BaseLPManager.AllocLeg[](1);
+        legs[0] = BaseLPManager.AllocLeg({
+            poolId: poolKeys[P].toId(),
+            zeroForOne: false,
+            swapAmountIn: 0,
+            swapPriceLimit: 0,
+            amount0Desired: 10e18,
+            amount1Desired: 10e18,
+            minLiquidity: 0
+        });
+        vm.prank(owner);
+        mgr.setPriceOracle(address(oracle));
+        oracle.setMode(MockPriceOracle.Mode.Pass);
+        vm.prank(bot);
+        mgr.allocate(legs);
+        assertGt(mgr.positionOf(_saltFor(P)).liquidity, 0, "swapless allocate under a vouching oracle");
     }
 }

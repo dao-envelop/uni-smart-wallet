@@ -87,7 +87,7 @@ uint256, а не ноль.
 * `Ownable` → `Ownable2Step` (`:31,78`). `owner()` сохраняется, поэтому
   `script/SetOracleFeeds.s.sol:61-62` не ломается; ручная передача владения становится двухшаговой —
   отметить в `script/README.md`;
-* константный потолок `MAX_DEVIATION_CAP = 1_000` (1 %) — проверять **в обоих** сеттерах допусков
+* константный потолок `MAX_DEVIATION_CAP = 1_000` (10 %) — проверяется **в обоих** сеттерах допусков
   вместо `< 10_000`.
 
 **1.4 L-3 — minAnswer/maxAnswer.** При flash-crash ниже `minAnswer` фид отдаёт floor вместо реальной
@@ -143,51 +143,68 @@ theft — nothing leaves the manager»: верно буквально, неве�
 
 ### 3. Размеры (EIP-170) — гейт задачи
 
-База на `audit/2026-09-04` (замерено `forge build --sizes`):
+Замерено `forge build --sizes` (лимит 24 576):
 
 | Контракт | До | После | Δ |
 |---|---|---|---|
-| StableLPManager | 24 098 (478 B) | — | — |
-| VolatileLPManager | 24 355 (221 B) | — | — |
-| OpenVolatileLPManager | 24 295 (281 B) | — | — |
-| ChainlinkPriceOracle | 3 465 | — | — |
+| StableLPManager | 24 098 (478 B) | **24 117** (459 B) | +19 |
+| VolatileLPManager | 24 355 (221 B) | **24 379** (197 B) | +24 |
+| OpenVolatileLPManager | 24 295 (281 B) | **24 319** (257 B) | +24 |
+| ChainlinkPriceOracle | 3 465 | **5 901** | +2 436 (не лимитирован) |
 
-Ожидание по замеру аудита: +24 B на Volatile/Open (запас 197 / 257 B). Оракул не лимитирован.
-Заполнить колонку «После» фактическими числами. Если не влезает — перечислить кандидатов на трим
-отдельным списком, а не «оптимизировать по ходу».
+Volatile и Open — ровно те +24 B, что мерил аудит.
+
+**Две правки, которых в плане не было — обе из-за `stack too deep` (`via_ir = false`):**
+
+1. `StableLPManager._addLiquidity` принимает `Range memory rg` вместо пары `int24 tickLower,
+   tickUpper`. Восьмой параметр (`byOwner`) переполнял стек; структура в памяти — один слот вместо
+   двух. Значение то же, вызовов два (`_allocateLeg`, `_handleReinvest`).
+2. В `_handleReinvest` расчёт `d0`/`d1` убран в свой блок — та же причина, тот же приём, что уже
+   применён в `VolatileLPManager._addLiquidityAt`.
+
+`ChainlinkPriceOracle._checkSpot` по той же причине **читает фиды сам** (`_read(key.currency0)` /
+`_read(key.currency1)`), а не принимает семь значений из `check`. Заодно честнее: стороны названы по
+порядку валют пула, а не по направлению свопа, которого в spot-ветке нет. Своп-путь свои `_read`
+делает после ветвления, так что лишних чтений ни у кого нет.
 
 ## Тесты
 
-**Ломаются намеренно** (утверждают ровно то поведение, которое убирает H-1) — инвертировать:
+Итог: **293 passed, 0 failed, 4 skipped** (скипы — форк-тесты без `BASE_RPC`).
 
-* `test/VolatileLPManagerOperatorSwapGuard.t.sol:185-191` `test_operatorSwaplessRecenter_noOracle_succeeds`
-  и `:193-197` `..._swaplessAllocate_noOracle_succeeds` ⇒ теперь `OperatorSwapGuardRequired`;
-* `test/StableLPManagerOperatorSwapGuard.t.sol:159` (swapless allocate allowed) ⇒ то же.
+**Инвертировано** (утверждали ровно то поведение, которое убирает H-1):
+`test_operatorSwaplessRecenter_noOracle_succeeds` и `test_operatorSwaplessAllocate_noOracle_succeeds`
+в `test/VolatileLPManagerOperatorSwapGuard.t.sol`, `test_operatorSwaplessAllocate_noOracle_succeeds`
+в `test/StableLPManagerOperatorSwapGuard.t.sol` ⇒ теперь `_reverts` с `OperatorSwapGuardRequired`.
+Рядом добавлены положительные кейсы: `notEnforcedOracle_reverts` (`OperatorSwapUnverified`),
+`inBoundsOracle_succeeds` и владельческий обход.
 
-**`test/Audit20260904SwaplessDrainPoC.t.sol` не удалять** — переписать ожидания на `vm.expectRevert`
-(`OperatorSwapUnverified`: оракул в PoC не задан) и оставить как регрессию сценария.
+**`test/Audit20260904SwaplessDrainPoC.t.sol` остался** — сценарий тот же, утверждения перевёрнуты:
+без оракула операторский `moveLiquidity` падает `OperatorSwapGuardRequired`; с настоящим оракулом
+(обе валюты $1, пул накачан на +6000 тиков) — `SpotPriceOutOfBounds`, позиция не переехала, стоимость
+портфеля не изменилась. Третий тест — контроль: тот же оператор, тот же `recenter`, ненакачанный пул —
+**проходит**. Без него гейт нельзя отличить от «запретили операторам всё».
+Замер стоимости в recenter-кейсе снимается **после** накачки: накачка проходит через собственную
+позицию менеджера, и это обычный toxic flow, а не то, что чинит эта задача.
 
-**Ломаются механически** (новый аргумент конструктора оракула): `test/ChainlinkPriceOracle.t.sol:76`,
-`test/UniLensOperatorsOracle.t.sol:149,188`, `test/SetOracleFeeds.t.sol:30`,
-`test/DeployStableLP.t.sol:253,282-285`, `test/GasCompareVolatile.fork.t.sol:394-397`.
+**`test/VolatileLPManagerMove.t.sol`** (10 тестов) — гоняли move от оператора без оракула. В `setUp`
+подключён поручающийся оракул; `test_move_operatorSwap_noOracle_reverts` его снимает у себя.
 
-**Новое:**
+**Ломались механически** (новый аргумент конструктора): `test/ChainlinkPriceOracle.t.sol`,
+`test/UniLensOperatorsOracle.t.sol`, `test/SetOracleFeeds.t.sol`, `test/DeployStableLP.t.sol`,
+`test/GasCompareVolatile.fork.t.sol`. Первым трём PoolManager не нужен (spot-ветку они не трогают) —
+передан `IPoolManager(address(0))`; форк-тест получил настоящий и второй допуск отдельным аргументом.
 
-* `test/ChainlinkPriceOracleSpot.t.sol` — существующий oracle-suite работает на **фиктивных адресах
-  валют без пула** (`ChainlinkPriceOracle.t.sol:71-81`), а spot-ветке нужен настоящий `PoolManager` с
-  инициализированным пулом; отдельный файл чище, чем ломать старый. Кейсы: цена в коридоре / ровно на
-  границе ±d / за коридором в обе стороны / неинициализированный пул / stale-фид / секвенсер в grace /
-  пара с разными decimals (6 vs 18). `MockAggregator`/`MockSequencer` импортировать из
-  `ChainlinkPriceOracle.t.sol:12-55` — так уже делают `UniLensOperatorsOracle.t.sol:8` и
-  `SetOracleFeeds.t.sol:7`;
-* `MockPriceOracle` (`test/helpers/Mocks.sol:65-84`) **игнорирует аргументы**, поэтому все тесты в
-  режиме `Mode.Pass` молча пропустят новый вызов с `amountIn == 0` и «потерю» гейта при рефакторинге
-  никто не заметит. Добавить счётчик/режим, фиксирующий, что spot-проверка действительно была вызвана
-  на add-пути, и утверждать это в тестах allocate/recenter/move;
-* сквозной сценарий на **настоящем** оракуле: накачанный пул ⇒ операторский `recenter` ревертит
-  `SpotPriceOutOfBounds`; тот же `recenter` от владельца проходит (`byOwner ⇒ return`);
-* M-1/L-3: `InvalidBps` при 1 001 на обоих сеттерах; двухшаговая передача владения; ответ на
-  `minAnswer`/`maxAnswer` ⇒ `ok = false` ⇒ операторский путь fail-closed.
+**Новое — `test/ChainlinkPriceOracleSpot.t.sol` (20 тестов).** Старый oracle-suite работает на
+фиктивных адресах валют без пула, а spot-ветке нужен настоящий `PoolManager`; отдельный файл чище,
+чем ломать существующий. Обе валюты по $1, так что тик пула = всё отклонение целиком: коридор ±40 bps,
+за коридором ±80 bps, PoC-накачка +6000, неинициализированный пул, отсутствующий фид, stale, секвенсер
+(down и в grace), несовпадающие decimals токенов (6 vs 18) и фидов (8 vs 18), потолок допусков,
+двухшаговая передача владения, ответ на `minAnswer`.
+
+**`MockPriceOracle` (`test/helpers/Mocks.sol`) — новый режим `RejectSpot`.** Счётчик вызовов сделать
+нельзя: `IPriceOracle.check` объявлен `view`. Вместо него режим, который пропускает свопы и ревертит
+ровно на `amountIn == 0` — тест `..._consultsTheOracleOnSpot` падает, если гейт убрать или перевесить
+на своп-ветку. Арг-слепой мок такое пропустил бы молча.
 
 ## Деплой
 
@@ -198,8 +215,7 @@ theft — nothing leaves the manager»: верно буквально, неве�
 * `script/DeployStableLP.s.sol`: в `OracleParams` (`:63-67`) новое поле `maxSpotDeviationBps`;
   конструктор (`:195-197`) получает `c.poolManager` (уже читается, `:273`) и новый порог; `_readOracle`
   (`:309-319`) — ключ `oracleMaxSpotDeviationBps`, дефолт 50;
-* `script/chain_params.json`: `deploy.oracle` → `true` на всех пяти сетях (сейчас `false` на 1 и 130) +
-  новый ключ;
+* `script/chain_params.json`: `deploy.oracle` → `true` на всех пяти сетях прогона + `oracleMaxSpotDeviationBps: 50`;
 * `script/RUNBOOK-2026-09-05.md`: `ChainlinkPriceOracle` переезжает из «не деплоим» в «деплоим»,
   добавляется шаг `setPriceOracle` на существующих менеджерах. **Порядок обязателен:** оракул →
   `SetOracleFeeds` → `setPriceOracle` → новые имплементации. В обратном порядке новые имплементации

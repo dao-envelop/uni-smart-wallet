@@ -393,8 +393,8 @@ contract GasCompareVolatileForkTest is Test {
 
     /// @dev Deploy the real {ChainlinkPriceOracle} wired to the live Base ETH/USD + USDC/USD feeds. A
     /// large heartbeat keeps the fork-block answers "fresh" so `check` returns `enforced = true`.
-    function _chainlinkOracle(uint16 maxDevBps) internal returns (ChainlinkPriceOracle oracle) {
-        oracle = new ChainlinkPriceOracle(address(this), maxDevBps, address(0), 3600);
+    function _chainlinkOracle(uint16 maxDevBps, uint16 maxSpotDevBps) internal returns (ChainlinkPriceOracle oracle) {
+        oracle = new ChainlinkPriceOracle(address(this), POOL_MANAGER, maxDevBps, maxSpotDevBps, address(0), 3600);
         oracle.setFeed(Currency.wrap(WETH), ETH_USD_FEED, 365 days, 18);
         oracle.setFeed(Currency.wrap(USDC), USDC_USD_FEED, 365 days, 6);
     }
@@ -425,7 +425,7 @@ contract GasCompareVolatileForkTest is Test {
         uint256 gOwner = g - gasleft();
 
         // Wire the real Chainlink oracle (5% tolerance) + an operator bot.
-        ChainlinkPriceOracle oracle = _chainlinkOracle(500);
+        ChainlinkPriceOracle oracle = _chainlinkOracle(500, 500);
         vm.startPrank(owner);
         mgr.setPriceOracle(address(oracle));
         mgr.setOperator(bot, true);
@@ -466,7 +466,7 @@ contract GasCompareVolatileForkTest is Test {
         if (!forkActive) return;
         bytes32 s = bytes32(uint256(1));
         VolatileLPManager mgr = _freshManagerWithPosition(s);
-        ChainlinkPriceOracle oracle = _chainlinkOracle(10); // 0.10% tolerance
+        ChainlinkPriceOracle oracle = _chainlinkOracle(10, 500); // 0.10% swap tolerance; the spot branch is not what this case is about
         vm.startPrank(owner);
         mgr.setPriceOracle(address(oracle));
         mgr.setOperator(bot, true);

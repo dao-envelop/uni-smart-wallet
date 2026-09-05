@@ -10,6 +10,7 @@ import {MockAggregator} from "./ChainlinkPriceOracle.t.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 
 /// @notice The read paths added in #42: on-chain operator enumeration (`operatorCount`/`operatorList`,
 /// aggregated by `UniLens.operators`), the stable position-bounds getter, and the one-call operator-swap
@@ -146,7 +147,8 @@ contract UniLensOperatorsOracleTest is StableLPTestBase {
     }
 
     function test_oracleStatus_chainlinkOracle_reportsConfigAndPerCurrencyFeeds() public {
-        ChainlinkPriceOracle oracle = new ChainlinkPriceOracle(address(this), 150, address(0), 0);
+        ChainlinkPriceOracle oracle =
+            new ChainlinkPriceOracle(address(this), IPoolManager(address(0)), 150, 50, address(0), 0);
         MockAggregator agg = new MockAggregator(8, 1e8, block.timestamp);
         // Configure a feed for exactly one managed currency; the rest must report as unconfigured.
         Currency configured = mgr.managedStables(0);
@@ -185,7 +187,8 @@ contract UniLensOperatorsOracleTest is StableLPTestBase {
     }
 
     function test_oracleStatus_sequencerConfigSurfaced() public {
-        ChainlinkPriceOracle oracle = new ChainlinkPriceOracle(address(this), 100, address(0x5E9), 3600);
+        ChainlinkPriceOracle oracle =
+            new ChainlinkPriceOracle(address(this), IPoolManager(address(0)), 100, 50, address(0x5E9), 3600);
         vm.prank(owner);
         mgr.setPriceOracle(address(oracle));
 

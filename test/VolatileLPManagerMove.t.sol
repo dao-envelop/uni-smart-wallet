@@ -87,6 +87,11 @@ contract VolatileLPManagerMoveTest is Test {
 
         vm.prank(owner);
         mgr.setOperator(bot, true);
+        // Every operator op now needs the oracle, the swapless ones included (task_053): wire a vouching
+        // one so the cases below test move mechanics rather than the guard. The guard has its own section.
+        vm.prank(owner);
+        mgr.setPriceOracle(address(oracle));
+        oracle.setMode(MockPriceOracle.Mode.Pass);
 
         MockERC20(Currency.unwrap(c0)).mint(trader, 10_000e18);
         MockERC20(Currency.unwrap(c1)).mint(trader, 10_000e18);
@@ -273,6 +278,8 @@ contract VolatileLPManagerMoveTest is Test {
 
     function test_move_operatorSwap_noOracle_reverts() public {
         uint128 liq = _openInA(SALT_A, 100e18);
+        vm.prank(owner);
+        mgr.setPriceOracle(address(0)); // undo the setUp wiring: this case is about having no oracle
         vm.prank(bot);
         vm.expectRevert(BaseLPManager.OperatorSwapGuardRequired.selector);
         mgr.moveLiquidity(SALT_A, liq, _legWithSwap(poolB, SALT_B, 50e18));

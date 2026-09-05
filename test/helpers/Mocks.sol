@@ -57,28 +57,37 @@ contract Echo {
     }
 }
 
-/// @notice Configurable {IPriceOracle} for the operator-swap-guard tests.
-/// - `NotEnforced` ⇒ `check` returns false (no fresh reference): operator swaps are rejected
-///   (`OperatorSwapUnverified`), owner swaps still pass.
-/// - `Pass` ⇒ `check` returns true (in-bounds reference): operator swaps are allowed.
+/// @notice Configurable {IPriceOracle} for the operator-guard tests.
+/// - `NotEnforced` ⇒ `check` returns false (no fresh reference): operator ops are rejected
+///   (`OperatorSwapUnverified`), owner ops still pass.
+/// - `Pass` ⇒ `check` returns true (in-bounds reference): operator ops are allowed.
 /// - `Revert` ⇒ `check` reverts (out-of-bounds price), like a real oracle rejecting an adverse swap.
+/// - `RejectSpot` ⇒ swaps pass, but the `amountIn == 0` spot check reverts {MockSpotChecked}. This is how
+///   a test proves the add path really consulted the oracle: `check` is `view`, so the mock cannot count
+///   calls, and a mock that ignores its arguments would let the guard be refactored away unnoticed.
 contract MockPriceOracle is IPriceOracle {
     enum Mode {
         NotEnforced,
         Pass,
-        Revert
+        Revert,
+        RejectSpot
     }
 
     Mode public mode;
 
     error MockPriceOutOfBounds();
+    error MockSpotChecked();
 
     function setMode(Mode m) external {
         mode = m;
     }
 
-    function check(PoolKey calldata, bool, uint256, uint256) external view returns (bool) {
+    function check(PoolKey calldata, bool, uint256 amountIn, uint256) external view returns (bool) {
         if (mode == Mode.Revert) revert MockPriceOutOfBounds();
+        if (mode == Mode.RejectSpot) {
+            if (amountIn == 0) revert MockSpotChecked();
+            return true;
+        }
         return mode == Mode.Pass;
     }
 }

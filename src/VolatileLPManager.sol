@@ -203,7 +203,7 @@ contract VolatileLPManager is BaseLPManager {
         if (leg.swapAmountIn > 0) {
             _guardedSwap(key, leg.zeroForOne, leg.swapAmountIn, leg.swapPriceLimit, leg.minAmountOut, byOwner);
         }
-        _addLiquidityV(leg, key);
+        _addLiquidityV(leg, key, byOwner);
     }
 
     /// @dev The product's one swap path: exactIn, with the canonical Uniswap pair of guards —
@@ -231,9 +231,16 @@ contract VolatileLPManager is BaseLPManager {
     /// @dev Size L from desired amounts at the live price, add at the caller's range under `salt`,
     /// skim the protocol fee, and record/merge the position. A fresh salt opens a new range; an
     /// existing salt must top up the SAME pool + range.
-    function _addLiquidityV(VolatileAllocLeg memory leg, PoolKey memory key) internal {
+    function _addLiquidityV(VolatileAllocLeg memory leg, PoolKey memory key, bool byOwner) internal {
         uint128 L = _addLiquidityAt(
-            key, leg.tickLower, leg.tickUpper, leg.salt, leg.amount0Desired, leg.amount1Desired, leg.minLiquidity
+            key,
+            leg.tickLower,
+            leg.tickUpper,
+            leg.salt,
+            leg.amount0Desired,
+            leg.amount1Desired,
+            leg.minLiquidity,
+            byOwner
         );
         StoredPosition memory ex = _positions[leg.salt];
         if (ex.liquidity == 0) {
@@ -256,10 +263,14 @@ contract VolatileLPManager is BaseLPManager {
     }
 
     /// @dev Size L from desired amounts at the live price, add under `salt` at [tl,tu], skim the
-    /// protocol fee. `minLiq` is the slippage floor: L is sized from `amount0`/`amount1` via
-    /// `getLiquidityForAmounts` (L rounded down), so owed ≤ the desired amounts by construction and no
-    /// separate owed-cap is needed. Registry bookkeeping is the caller's job. Shared by allocate and
-    /// recenter (kept in its own frame — the stack is tight without via-ir).
+    /// protocol fee. `minLiq` is the slippage floor on the quantity: L is sized from `amount0`/`amount1`
+    /// via `getLiquidityForAmounts` (L rounded down), so owed ≤ the desired amounts by construction.
+    /// That bounds *how much* is deployed and says nothing about *at what price* — which is why an
+    /// operator's add is additionally gated on the oracle's view of the pool's spot price (audit
+    /// 2026-09-04, H-1: without it an operator skewed a thin pool, deployed principal into a narrow
+    /// range at the skewed price and traded back through it). The owner bypasses, as everywhere.
+    /// Registry bookkeeping is the caller's job. Shared by allocate and recenter (kept in its own frame —
+    /// the stack is tight without via-ir).
     function _addLiquidityAt(
         PoolKey memory key,
         int24 tl,
@@ -267,12 +278,14 @@ contract VolatileLPManager is BaseLPManager {
         bytes32 salt,
         uint256 amount0,
         uint256 amount1,
-        uint128 minLiq
+        uint128 minLiq,
+        bool byOwner
     ) internal returns (uint128 L) {
         PositionMath.requireValidTickRange(tl, tu, key.tickSpacing);
         {
             (uint160 sqrtP,,,) = POOL_MANAGER.getSlot0(key.toId());
             if (sqrtP == 0) revert PoolUninitialized();
+            _guardSwap(byOwner, key, true, 0, 0); // `amountIn == 0` ⇒ spot check against the reference
             L = PositionMath.liquidityFromAmounts(sqrtP, tl, tu, amount0, amount1);
         }
         if (L < minLiq) revert MinLiquidityNotMet(L, minLiq);
@@ -328,7 +341,8 @@ contract VolatileLPManager is BaseLPManager {
             p.salt,
             _posDelta(key.currency0),
             _posDelta(key.currency1),
-            p.minLiquidity
+            p.minLiquidity,
+            byOwner
         );
 
         // 4. Repoint the registry entry to the new range/liquidity (same salt + pool, keep openedAt).
