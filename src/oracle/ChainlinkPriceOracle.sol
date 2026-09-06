@@ -91,8 +91,12 @@ contract ChainlinkPriceOracle is IPriceOracle, Ownable2Step {
     /// @notice The v4 `PoolManager` whose `slot0` the spot branch reads.
     IPoolManager public immutable POOL_MANAGER;
 
-    /// @notice Upper bound on `tokenDecimals` accepted by {setFeed}. Keeps `10 ** (feedDecimals +
-    /// tokenDecimals)` in {check} well under `uint256` max (feed decimals come from the aggregator).
+    /// @notice Upper bound on `tokenDecimals` accepted by {setFeed}, so that every power of ten these
+    /// decimals reach stays well inside `uint256`: `10 ** (feedDecimals + tokenDecimals)` in the swap
+    /// branch, which leaves room up to a combined 77, and `Q96 * 10 ** tokenDecimals` in the spot one,
+    /// which is the binding constraint — `2**96` eats 29 orders of magnitude, leaving room up to 48.
+    /// Raise this and the spot branch is what breaks first. Feed decimals come from the aggregator and
+    /// are not bounded here; the owner picks the aggregator.
     uint8 internal constant MAX_TOKEN_DECIMALS = 36;
 
     /// @notice Hard ceiling on both tolerances. Without it the oracle owner could raise a tolerance to
@@ -223,11 +227,22 @@ contract ChainlinkPriceOracle is IPriceOracle, Ownable2Step {
         // L2 sequencer gate: a down or recently-restarted sequencer ⇒ no opinion (operator fail-closed).
         if (!_sequencerUp()) return false;
 
-        // `amountIn == 0` is the spot sentinel: no swap happened, so there is no realized price to
-        // judge — check the pool's own price instead. Nothing else reaches this with a zero input: the
-        // swap paths call the guard only for `swapAmountIn > 0`, and their full-fill check already
-        // rejects an under-filled swap. `zeroForOne` plays no part there — a skewed pool is skewed for
-        // both directions of a subsequent add.
+        // `amountIn == 0` is the spot sentinel: nothing was swapped, so `amountOut / amountIn` is 0/0 —
+        // there is no realized price to judge, and the pool's own price is what the caller is about to
+        // act on instead. A dedicated `checkSpot` would say this in the signature rather than in a
+        // magic argument, but it costs a new `IPriceOracle` method and puts `VolatileLPManager` over
+        // EIP-170; this costs 24 bytes.
+        //
+        // What makes the sentinel safe is that no real swap can wear it, guarded twice over: the swap
+        // paths reach `_guardSwap` only inside `if (swapAmountIn > 0)`, and what they pass is the
+        // *realized* input, which their full-fill check has already required to be no smaller than the
+        // requested one. Were that not so, a swap would silently receive the spot check instead of the
+        // execution check and pass unjudged.
+        //
+        // `zeroForOne` is ignored below. A swap can only lose in one direction — too little of the
+        // output currency — hence its one-sided floor; an add has no direction at all, so a pool skewed
+        // either way misprices it, and the deviation is measured symmetrically. The parameter stays in
+        // the signature for the swap branch alone: `_addLiquidityAt` passes `true` arbitrarily.
         if (amountIn == 0) return _checkSpot(key);
 
         Currency inC = zeroForOne ? key.currency0 : key.currency1;
@@ -235,8 +250,10 @@ contract ChainlinkPriceOracle is IPriceOracle, Ownable2Step {
 
         (uint256 answerIn, uint8 fdIn, uint8 tdIn, bool okIn) = _read(inC);
         (uint256 answerOut, uint8 fdOut, uint8 tdOut, bool okOut) = _read(outC);
-        // No fresh reference for either side ⇒ express no opinion (fail-open here; the manager
-        // fail-closes this for operators).
+        // `false` means "no opinion", not "the price is bad": with nothing to compare against, the
+        // oracle declines to judge rather than blocking — it never blocks anything itself. The block
+        // belongs to the caller, and `BaseLPManager._guardSwap` reads a declined answer as a refusal for
+        // an operator (fail-closed) while letting the owner past untouched.
         if (!okIn || !okOut) return false;
 
         // Fair output at the reference price (both feeds USD-quoted):
@@ -253,8 +270,9 @@ contract ChainlinkPriceOracle is IPriceOracle, Ownable2Step {
 
     /// @dev The spot half of {check}: the pool's `slot0` price vs the reference-implied one, both as
     /// currency1-per-currency0 scaled by 1e18, compared **symmetrically**. Reads its own references
-    /// instead of taking the swap path's in/out pair — that keeps the sides named after the pool's own
-    /// ordering, and the swap path's reads are skipped for a spot check anyway.
+    /// rather than taking the swap path's in/out pair, so the sides stay named after the pool's own
+    /// ordering. That costs nothing: the swap path reads its own only after the branch above, so `_read`
+    /// runs exactly twice per call either way.
     /// @return enforced True when the pool price is within `maxSpotDeviationBps` of the reference; false
     /// when either side lacks a fresh reference, the pool is uninitialized, or a price degenerates to
     /// zero (no opinion — the manager fail-closes that for operators).
