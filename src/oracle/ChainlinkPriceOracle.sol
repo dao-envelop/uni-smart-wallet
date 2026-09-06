@@ -9,6 +9,7 @@ import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {Ownable2Step, Ownable} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {IPriceOracle} from "../interfaces/IPriceOracle.sol";
+import {FixedPoint96} from "@uniswap/v4-core/src/libraries/FixedPoint96.sol";
 
 /// @dev Minimal Chainlink aggregator surface (subset of `AggregatorV3Interface`).
 interface IAggregatorV3 {
@@ -99,7 +100,7 @@ contract ChainlinkPriceOracle is IPriceOracle, Ownable2Step {
     uint16 internal constant MAX_DEVIATION_CAP = 1_000; // 10%
 
     uint256 internal constant WAD = 1e18;
-    uint256 internal constant Q96 = 0x1000000000000000000000000; // 2**96
+    uint256 internal constant Q96 = FixedPoint96.Q96; // 2**96
 
     /// @notice Optional L2 Sequencer Uptime Feed (Chainlink). Zero on L1 or on L2s Chainlink does not
     /// publish one for (e.g. Unichain) — then the sequencer gate is skipped. When set, {check} treats a
