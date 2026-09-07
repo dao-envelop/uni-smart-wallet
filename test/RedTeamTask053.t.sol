@@ -105,7 +105,7 @@ abstract contract RedTeamBase is Test {
         mgr.setOperator(bot, true);
 
         // The REAL oracle: both currencies at $1, swap tolerance 100 bps, spot tolerance 50 bps.
-        oracle = new ChainlinkPriceOracle(address(this), IPoolManager(address(pm)), 100, 50, address(0), 0);
+        oracle = new ChainlinkPriceOracle(address(this), IPoolManager(address(pm)), 100, 50, 10, address(0), 0);
         oracle.setFeed(c0, address(new MockAggregator(8, int256(1e8), block.timestamp)), 365 days, 18);
         oracle.setFeed(c1, address(new MockAggregator(8, int256(1e8), block.timestamp)), 365 days, 18);
         vm.prank(owner);

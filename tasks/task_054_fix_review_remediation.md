@@ -56,7 +56,46 @@ TVL волатильных списков — **79 % на Unichain**, **67 % н�
 
 Все три вместе стоят **0 байт** у `VolatileLPManager` в частях 1 и 3; байты тратит только часть 2.
 
-## Часть 1 — R-2а: правило соотношения в оракуле
+## Вторая итерация (2026-09-07): правило по `tickSpacing` снято, вместо него — гейт на смещение
+
+Правило `tickSpacing ≥ maxSpotDeviationBps` было реализовано и **измерено на живых сетях** — и оказалось
+слишком грубым. Свежий базис (`PriceDeviation.s.sol`, публичные RPC) против spacing пулов:
+
+| Сеть | пул | spacing | базис | окно `basis < d ≤ spacing` |
+|---|---|---|---|---|
+| 1 | ETH/USDC 0,3 % / USDC/BTC 0,3 % | 60 | 10 / 34 | 11…60 / 35…60 |
+| 1 | ETH/USDC, ETH/USDT 0,05 % | 10 | 6 / 5 | 7…10 / 6…10 |
+| 1 | ETH/BTC, BTC/USDC 0,05 %; USDC/USDT `fee 7` | 10; 1 | 12; 1 | **нет решения** |
+| 130 | ETH/USDC, ETH/BTC 0,05 % | 10 | 0 / 4 | 1…10 / 5…10 |
+| 130 | ETH/UNI 0,3 % | 60 | **86** | **нет решения** |
+| 8453 | четыре из шести | 1–10 | 0–19 | 1…1 / нет решения |
+| 42161 | пять из семи | 1–10 | 0–6 | узкие / 1…1 |
+
+При `d = 50` оператору недоступно большинство пулов везде и **все три на Unichain**; шесть пулов не
+спасает никакое `d`. Правило было правилом *ширины* в маскировке — оно выносило пулы, чтобы косвенно
+запретить узкую позицию.
+
+**Точная величина.** Убыток за операцию ≈ расстояние от **середины** позиции до референса минус
+комиссия: свипая цену сквозь диапазон, менеджер обменивает капитал по его средней цене. Отсюда гейт
+`|mid − R| ≤ θ` и **линейный** остаток `take ≈ θ − fee`, независимый от `tickSpacing` и ширины.
+**Измерено** (`test_R2_takeIsThetaMinusFee`, пул `fee 100 / spacing 1`): θ=5 → 3 bps, θ=10 → 8,
+θ=20 → 18 — ровно `θ − fee − ½ тика`. Широкий диапазон с серединой в θ даёт ≤ 2 bps
+(`test_R2_wideRangeAtThetaTakesNothing`).
+
+**Реализация.** `IPriceOracle.checkOp(key, zeroForOne, amountIn, amountOut, tickLower, tickUpper)` —
+один метод, чтобы у менеджера был **один** внешний вызов: второй энкодер `PoolKey` не влезал в EIP-170
+(два вызова: Volatile −47 B, Open −109 B; один: Volatile 24 468 / 108 B, Open 24 530 / 46 B). `check`
+остаётся для уже задеплоенных менеджеров и для Stable (диапазон фиксирован — нужна только spot-часть,
+и никакого `ORACLE_TYPE`-зонда). В оракуле — `maxMidOffsetBps` (θ, дефолт 10), `PositionOffReference`.
+`SpacingFinerThanTolerance`, `IProductId`, `_isFixedRangeProduct` и `PoolOperatorInfo` в лензе удалены.
+
+**Продуктовая плата, честно:** операторская позиция обязана быть центрирована на референсе в пределах
+θ. Намеренная асимметрия ограничена θ; после реального движения рынка освобождённый капитал
+односторонний, и честный поток — пре-своп (гейтится) + центрированный re-add
+(`test_R2_honestRecenterAfterMarketMove_passesOnSpacingOne`); swapless односторонний re-add шире 2θ
+отвергается — геометрически это и есть парковка.
+
+## Часть 1 (устарело, см. выше) — R-2а: правило соотношения в оракуле
 
 `src/oracle/ChainlinkPriceOracle.sol`, в `_checkSpot` (`:279-300`). Оракул уже получает
 `PoolKey calldata key` и знает собственный `maxSpotDeviationBps` (`:87`) — оба операнда под рукой, и
@@ -184,7 +223,7 @@ NOT on that list … re-entrancy» — это прямо опровергает�
 задокументировать sentinel в `IPriceOracle`, выправить «operator swaps» в `BaseLPManager`, добавить
 `maxSpotDeviationBps` в `UniLens.OracleStatus`; **R-14** предупреждение про `setApprovalForAll`; плюс
 новое — пометка пула как operator-unsafe по критерию `basis_p99 < d ≤ s` (данные у визарда уже есть:
-`tickSpacing`, `fee`, `tvlUsd`) и понятные тексты для `SpacingFinerThanTolerance` и `OperatorOpsPerTx`.
+`tickSpacing`, `fee`, `tvlUsd`) и понятные тексты для `PositionOffReference` и `OperatorOpsPerTx`.
 
 ## Размеры (EIP-170)
 
@@ -193,10 +232,13 @@ NOT on that list … re-entrancy» — это прямо опровергает�
 
 | Контракт | До | После | Δ |
 |---|---|---|---|
-| StableLPManager | 24 117 (459 B) | **24 072** (504 B) | **−45** |
-| VolatileLPManager | 24 379 (197 B) | **24 386** (190 B) | +7 |
-| OpenVolatileLPManager | 24 319 (257 B) | **24 448** (128 B) | +129 |
-| ChainlinkPriceOracle | 5 901 | **6 728** | +827 (не лимитирован) |
+| StableLPManager | 24 117 (459 B) | **24 114** (462 B) | −3 |
+| VolatileLPManager | 24 379 (197 B) | **24 468** (108 B) | +89 |
+| OpenVolatileLPManager | 24 319 (257 B) | **24 530** (46 B) | +211 |
+| ChainlinkPriceOracle | 5 901 | **8 047** | +2 146 (не лимитирован) |
+| UniLens | 14 532 | **14 800** | +268 (не лимитирован) |
+
+(вторая итерация; Open — самый тесный, 46 B)
 
 Два измерения, которых план не предвидел:
 
@@ -220,7 +262,7 @@ forge test --match-path 'test/RedTeam*' -vvv
 #   T2  должен ревертить вместо 44,997 %
 forge test --match-path 'test/ChainlinkPriceOracleSpotFuzz.t.sol' -vvv   # 6 красных → зелёные
 
-forge test --match-test "SpacingFinerThanTolerance|OperatorOpsPerTx|consultsTheOracleOnSpot" -vvv
+forge test --match-test "PositionOffReference|takeIsThetaMinusFee|honestRecenter|OperatorOpsPerTx|consultsTheOracleOnSpot" -vvv
 
 # гейт R-9: мутация обязана ломать тесты
 sed -i '215s/true, 0, 0/true, 1, 0/' src/StableLPManager.sol && forge test | tail -2

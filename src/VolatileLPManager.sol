@@ -225,7 +225,7 @@ contract VolatileLPManager is BaseLPManager {
         if (uint256(uint128(-inDelta)) < amountIn) revert SwapSlippage(key.toId());
         int128 outDelta = zeroForOne ? sd.amount1() : sd.amount0();
         if (uint256(uint128(outDelta)) < minOut) revert SwapMinOut(key.toId());
-        _guardSwap(byOwner, key, zeroForOne, uint256(uint128(-inDelta)), uint256(uint128(outDelta)));
+        _guardOp(byOwner, key, zeroForOne, uint256(uint128(-inDelta)), uint256(uint128(outDelta)), 0, 0);
     }
 
     /// @dev Size L from desired amounts at the live price, add at the caller's range under `salt`,
@@ -287,7 +287,7 @@ contract VolatileLPManager is BaseLPManager {
         {
             (uint160 sqrtP,,,) = POOL_MANAGER.getSlot0(key.toId());
             if (sqrtP == 0) revert PoolUninitialized();
-            _guardSwap(byOwner, key, true, 0, 0); // `amountIn == 0` ⇒ spot check against the reference
+            _guardOp(byOwner, key, true, 0, 0, tl, tu); // spot on the reference, and the range centred near it
             L = PositionMath.liquidityFromAmounts(sqrtP, tl, tu, amount0, amount1);
         }
         if (L < minLiq) revert MinLiquidityNotMet(L, minLiq);

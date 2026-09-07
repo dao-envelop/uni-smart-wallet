@@ -90,6 +90,16 @@ contract MockPriceOracle is IPriceOracle {
         }
         return mode == Mode.Pass;
     }
+
+    /// @dev The add half of the op call is the spot check of the add path, so `RejectSpot` fires there.
+    function checkOp(PoolKey calldata, bool, uint256 amountIn, uint256, int24, int24) external view returns (bool) {
+        if (mode == Mode.Revert) revert MockPriceOutOfBounds();
+        if (mode == Mode.RejectSpot) {
+            if (amountIn == 0) revert MockSpotChecked();
+            return true;
+        }
+        return mode == Mode.Pass;
+    }
 }
 
 /// @notice A no-op hook that only observes the add/remove-liquidity calls, for the

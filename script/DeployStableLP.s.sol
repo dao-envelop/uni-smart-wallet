@@ -58,6 +58,11 @@ contract DeployStableLP is Script {
     /// realized output), a spot-vs-reference comparison does not. Live basis was 0-3 bps on stable pairs
     /// and ~33 bps on ETH/WBTC when `PriceDeviation.s.sol` was last run (tasks/oracle_maxdeviation_analysis.md).
     uint16 internal constant DEFAULT_ORACLE_MAX_SPOT_DEVIATION_BPS = 50; // 0.5%
+    /// @dev The per-operation residual an operator can still extract by parking a range: its loss is the
+    /// midpoint's distance from the reference minus the pool fee, so this is that distance's ceiling.
+    /// 10 bps leaves room for a reasonably asymmetric honest position and caps the take at ~9 bps on a
+    /// 0.01% pool (audit 2026-09-04, R-2).
+    uint16 internal constant DEFAULT_ORACLE_MAX_MID_OFFSET_BPS = 10; // 0.1%
     uint32 internal constant DEFAULT_SEQUENCER_GRACE_PERIOD = 3600; // 1h (Chainlink L2 best practice)
 
     error ChainConfigMissing(uint256 chainId);
@@ -68,6 +73,7 @@ contract DeployStableLP is Script {
     struct OracleParams {
         uint16 maxDeviationBps;
         uint16 maxSpotDeviationBps; // tolerance on a pool's spot price vs the reference (operator adds)
+        uint16 maxMidOffsetBps; // tolerance on an operator position's midpoint vs the reference
         address sequencerFeed; // L2 Sequencer Uptime Feed; zero ⇒ no sequencer gate (L1 / unsupported)
         uint32 gracePeriod;
     }
@@ -142,6 +148,7 @@ contract DeployStableLP is Script {
         OracleParams memory oracle = OracleParams({
             maxDeviationBps: DEFAULT_ORACLE_MAX_DEVIATION_BPS,
             maxSpotDeviationBps: DEFAULT_ORACLE_MAX_SPOT_DEVIATION_BPS,
+            maxMidOffsetBps: DEFAULT_ORACLE_MAX_MID_OFFSET_BPS,
             sequencerFeed: address(0),
             gracePeriod: DEFAULT_SEQUENCER_GRACE_PERIOD
         });
@@ -200,7 +207,13 @@ contract DeployStableLP is Script {
         if (flags.descriptor) d.descriptor = new WalletPositionDescriptor(stablecoins);
         if (flags.oracle) {
             d.oracle = new ChainlinkPriceOracle(
-                admin, pm, oracle.maxDeviationBps, oracle.maxSpotDeviationBps, oracle.sequencerFeed, oracle.gracePeriod
+                admin,
+                pm,
+                oracle.maxDeviationBps,
+                oracle.maxSpotDeviationBps,
+                oracle.maxMidOffsetBps,
+                oracle.sequencerFeed,
+                oracle.gracePeriod
             );
         }
     }
@@ -324,6 +337,10 @@ contract DeployStableLP is Script {
         o.maxSpotDeviationBps = vm.keyExistsJson(json, spotPath)
             ? uint16(vm.parseJsonUint(json, spotPath))
             : DEFAULT_ORACLE_MAX_SPOT_DEVIATION_BPS;
+        string memory midPath = string.concat(base, ".oracleMaxMidOffsetBps");
+        o.maxMidOffsetBps = vm.keyExistsJson(json, midPath)
+            ? uint16(vm.parseJsonUint(json, midPath))
+            : DEFAULT_ORACLE_MAX_MID_OFFSET_BPS;
         o.sequencerFeed = _optAddr(json, string.concat(base, ".oracleSequencerFeed"));
         string memory gpPath = string.concat(base, ".oracleGracePeriod");
         o.gracePeriod =

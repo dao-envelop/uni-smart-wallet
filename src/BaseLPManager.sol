@@ -352,10 +352,40 @@ abstract contract BaseLPManager is SingletonNFTOwned, V4PositionManager {
         internal
         view
     {
-        if (byOwner) return; // owner: full freedom
-        address o = priceOracle;
-        if (o == address(0)) revert OperatorSwapGuardRequired();
+        address o = _operatorOracle(byOwner);
+        if (o == address(0)) return; // owner: full freedom
         if (!IPriceOracle(o).check(key, zeroForOne, amountIn, amountOut)) revert OperatorSwapUnverified(key.toId());
+    }
+
+    /// @dev The single oracle call for products where the operator chooses the range: a swap
+    /// (`amountIn > 0`) is judged like {_guardSwap}; an add (`amountIn == 0`) must also have its range
+    /// centred near the reference, since an operator's loss from a range parked at a skewed price is
+    /// the midpoint's distance from the reference (audit 2026-09-04, R-2). One call site rather than
+    /// two because each encodes the whole `PoolKey`, and a second encoder did not fit EIP-170. Same
+    /// caller asymmetry and the same fail-closed reading of a declined answer as {_guardSwap}.
+    function _guardOp(
+        bool byOwner,
+        PoolKey memory key,
+        bool zeroForOne,
+        uint256 amountIn,
+        uint256 amountOut,
+        int24 tickLower,
+        int24 tickUpper
+    ) internal view {
+        address o = _operatorOracle(byOwner);
+        if (o == address(0)) return;
+        if (!IPriceOracle(o).checkOp(key, zeroForOne, amountIn, amountOut, tickLower, tickUpper)) {
+            revert OperatorSwapUnverified(key.toId());
+        }
+    }
+
+    /// @dev The oracle an operator call must satisfy, or zero when the caller is the owner and nothing
+    /// applies. Reverts {OperatorSwapGuardRequired} for an operator with no oracle wired — the shared
+    /// half of both guards, kept in one place so the two cannot drift.
+    function _operatorOracle(bool byOwner) internal view returns (address o) {
+        if (byOwner) return address(0);
+        o = priceOracle;
+        if (o == address(0)) revert OperatorSwapGuardRequired();
     }
 
     /// @notice On-chain metadata for the singleton ownership token. Delegates to the configured

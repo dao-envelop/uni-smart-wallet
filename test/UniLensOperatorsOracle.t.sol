@@ -148,7 +148,7 @@ contract UniLensOperatorsOracleTest is StableLPTestBase {
 
     function test_oracleStatus_chainlinkOracle_reportsConfigAndPerCurrencyFeeds() public {
         ChainlinkPriceOracle oracle =
-            new ChainlinkPriceOracle(address(this), IPoolManager(address(0)), 150, 50, address(0), 0);
+            new ChainlinkPriceOracle(address(this), IPoolManager(address(0)), 150, 50, 10, address(0), 0);
         MockAggregator agg = new MockAggregator(8, 1e8, block.timestamp);
         // Configure a feed for exactly one managed currency; the rest must report as unconfigured.
         Currency configured = mgr.managedStables(0);
@@ -162,6 +162,7 @@ contract UniLensOperatorsOracleTest is StableLPTestBase {
         assertTrue(st.isChainlinkLike, "probe succeeded");
         assertEq(st.maxDeviationBps, 150, "swap tolerance");
         assertEq(st.maxSpotDeviationBps, 50, "spot tolerance, what gates operator adds");
+        assertEq(st.maxMidOffsetBps, 10, "midpoint tolerance, the per-operation residual");
         assertEq(st.sequencerUptimeFeed, address(0), "no sequencer gate on this chain");
         assertEq(st.sequencerGracePeriod, 0);
 
@@ -187,40 +188,9 @@ contract UniLensOperatorsOracleTest is StableLPTestBase {
         assertEq(withFeed, 1, "exactly the currency we configured");
     }
 
-    /// @dev The per-pool verdict a UI needs to grey out a pool before the user spends gas on a revert.
-    /// This fixture is a Stable manager, which the rule exempts — its ranges are fixed at `initialize`,
-    /// so an operator cannot park one, and most stable pools are spacing 1.
-    function test_oracleStatus_stableProductReportsEveryPoolUsable() public {
-        ChainlinkPriceOracle oracle =
-            new ChainlinkPriceOracle(address(this), IPoolManager(address(0)), 100, 1_000, address(0), 0);
-        vm.prank(owner);
-        mgr.setPriceOracle(address(oracle));
-
-        UniLens.OracleStatus memory st = lens.oracleStatus(address(mgr));
-        assertEq(st.pools.length, mgr.poolCount(), "one verdict per configured pool");
-        for (uint256 i = 0; i < st.pools.length; ++i) {
-            assertTrue(st.pools[i].operatorMayAdd, "a fixed-range product is exempt at any spacing");
-            assertGt(st.pools[i].tickSpacing, int24(0), "spacing surfaced");
-        }
-    }
-
-    /// @dev An oracle predating the spot branch has no such tolerance; zero must read as "no rule", not
-    /// as "every pool refused".
-    function test_oracleStatus_oracleWithoutSpotBranch_leavesPoolsUsable() public {
-        MockPriceOracle old = new MockPriceOracle(); // no maxSpotDeviationBps()
-        vm.prank(owner);
-        mgr.setPriceOracle(address(old));
-
-        UniLens.OracleStatus memory st = lens.oracleStatus(address(mgr));
-        assertEq(st.maxSpotDeviationBps, 0, "absent probe leaves it zero");
-        for (uint256 i = 0; i < st.pools.length; ++i) {
-            assertTrue(st.pools[i].operatorMayAdd, "no spot branch means no pool rule");
-        }
-    }
-
     function test_oracleStatus_sequencerConfigSurfaced() public {
         ChainlinkPriceOracle oracle =
-            new ChainlinkPriceOracle(address(this), IPoolManager(address(0)), 100, 50, address(0x5E9), 3600);
+            new ChainlinkPriceOracle(address(this), IPoolManager(address(0)), 100, 50, 10, address(0x5E9), 3600);
         vm.prank(owner);
         mgr.setPriceOracle(address(oracle));
 

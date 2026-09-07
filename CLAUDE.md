@@ -102,13 +102,14 @@ swaps bypass the oracle. (Stable has no operator-callable principal-removal path
 was idle+fees, not principal; Volatile's `recenter` frees principal, hence the HIGH there.)
 
 Since task_053 the same guard covers operator **liquidity adds**, not only swaps (audit `2026-09-04`
-[H-1]); since task_054 two further bounds sit alongside it. The oracle refuses a pool whose
-`tickSpacing` is finer than its own `maxSpotDeviationBps`, because a finer lattice lets an operator park
-principal inside the accepted corridor and extract on every operation — scoped to the products where an
-operator picks the range, which is why Stable, whose ranges are fixed at `initialize`, is exempt. And an
-operator gets **one authorized call per transaction** (a transient flag on `onlyAuthorized`): the price
-guard bounds one operation, and sixty of them in a single transaction removed 24.84% of a portfolio.
-Neither applies to the owner.
+[H-1]); since task_054 two further bounds sit alongside it. For the products where an operator
+picks the range (Volatile, Open) the oracle's `checkOp` also refuses an add whose range midpoint sits
+further than `maxMidOffsetBps` from the reference — an operator's loss from a range parked at a skewed
+price *is* that distance minus the pool fee, so bounding it bounds the loss without taking any pool
+away; Stable, whose ranges are fixed at `initialize`, keeps using `check` (spot only). And an operator
+gets **one authorized call per transaction** (a transient flag on `onlyAuthorized`): the price guard
+bounds one operation, and sixty of them in a single transaction removed 24.84% of a portfolio. Neither
+applies to the owner.
 
 ### Hook policy
 

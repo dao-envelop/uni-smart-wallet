@@ -252,7 +252,11 @@ contract DeployStableLPSubsetTest is Test {
 
     function _oracle(uint16 bps) internal pure returns (DeployStableLP.OracleParams memory) {
         return DeployStableLP.OracleParams({
-            maxDeviationBps: bps, maxSpotDeviationBps: 50, sequencerFeed: address(0), gracePeriod: 3600
+            maxDeviationBps: bps,
+            maxSpotDeviationBps: 50,
+            maxMidOffsetBps: 10,
+            sequencerFeed: address(0),
+            gracePeriod: 3600
         });
     }
 

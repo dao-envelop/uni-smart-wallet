@@ -10,6 +10,7 @@ import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {Ownable2Step, Ownable} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {IPriceOracle} from "../interfaces/IPriceOracle.sol";
 import {FixedPoint96} from "@uniswap/v4-core/src/libraries/FixedPoint96.sol";
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 
 /// @dev Minimal Chainlink aggregator surface (subset of `AggregatorV3Interface`).
 interface IAggregatorV3 {
@@ -18,13 +19,6 @@ interface IAggregatorV3 {
         external
         view
         returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound);
-}
-
-/// @dev The product-identity probe. `ORACLE_TYPE` is the Envelop oracle discriminator every manager
-/// already publishes (3000 Stable, 3001 Volatile, 3002 Open); the spot branch reads it to decide whether
-/// the tick-spacing rule applies. A manager that lies about it only weakens its own guard.
-interface IProductId {
-    function ORACLE_TYPE() external view returns (uint256);
 }
 
 /// @dev Circuit-breaker surface. `minAnswer`/`maxAnswer` live on the *underlying* aggregator, not on the
@@ -47,8 +41,10 @@ interface IAggregatorBounds {
 /// The spot branch is what gates operator liquidity *adds* (audit 2026-09-04, H-1): sizing L from
 /// `getSlot0` bounds the quantity deployed but not the price it is deployed at, so an operator could
 /// skew a thin pool, deploy principal into a narrow range at the skewed price and trade back through it.
-/// The two tolerances are separate on purpose: the swap one folds in the pool fee (it compares a realized
-/// output), a spot comparison does not, so it is set tighter.
+/// - **add** ({checkOp} with `amountIn == 0`): the spot bound above, plus the position's midpoint within
+///   `maxMidOffsetBps` of the reference — the bound that stops a range parked at a skewed price.
+/// The tolerances are separate on purpose: the swap one folds in the pool fee (it compares a realized
+/// output), a spot comparison does not, and the midpoint one is the per-operation residual itself.
 /// @dev Returns `false` (no opinion) when either side lacks a fresh reference (unconfigured, stale, a
 /// non-positive answer, an answer pinned at the aggregator's `minAnswer`/`maxAnswer`, or a zero/future
 /// timestamp), when the pool is uninitialized, or when the optional L2 Sequencer Uptime Feed reports the
@@ -96,9 +92,13 @@ contract ChainlinkPriceOracle is IPriceOracle, Ownable2Step {
     /// @dev The deviation is normalized by the reference, so the two directions are not exactly equal
     /// widths measured against the pool's own price: at 50 bps the gap is 1.03x and immaterial, at the
     /// 1000 bps cap a pool skewed down may sit 1.22x further out than one skewed up (audit R-15).
-    /// It also gates which pools an operator may touch at all — see {SpacingFinerThanTolerance}, and
-    /// note that *raising* this narrows that set.
     uint16 public maxSpotDeviationBps;
+
+    /// @notice Allowed distance, in bps, between an operator position's midpoint and the reference
+    /// price (see {checkOp}). An operator's loss per parked-range operation is that distance minus the
+    /// pool fee, so this is the residual the product accepts — linearly, and independent of tick
+    /// spacing or range width (audit 2026-09-04, R-2). Set it well under `maxSpotDeviationBps`.
+    uint16 public maxMidOffsetBps;
 
     /// @notice The v4 `PoolManager` whose `slot0` the spot branch reads.
     IPoolManager public immutable POOL_MANAGER;
@@ -148,15 +148,17 @@ contract ChainlinkPriceOracle is IPriceOracle, Ownable2Step {
     event MaxDeviationSet(uint16 bps);
     /// @notice Emitted when the spot deviation tolerance changes.
     event MaxSpotDeviationSet(uint16 bps);
+    /// @notice Emitted when the position-midpoint tolerance changes.
+    event MaxMidOffsetSet(uint16 bps);
     /// @notice Emitted when the sequencer uptime feed / grace period changes.
     event SequencerFeedSet(address feed, uint32 gracePeriod);
 
     error InvalidBps(uint16 bps);
     error PriceOutOfBounds(uint256 amountOut, uint256 minOut);
     error SpotPriceOutOfBounds(uint256 poolPrice, uint256 referencePrice);
-    /// @notice The pool's tick lattice is finer than the spot tolerance, so an operator could park
-    /// principal inside the accepted corridor and extract on every operation (audit 2026-09-04, R-2).
-    error SpacingFinerThanTolerance(int24 tickSpacing, uint16 maxSpotDeviationBps);
+    /// @notice The position's midpoint sits further from the reference than {maxMidOffsetBps} allows —
+    /// the shape of a range parked at a skewed price (audit 2026-09-04, R-2).
+    error PositionOffReference(uint256 midPrice, uint256 referencePrice);
     error FeedDecimalsTooLarge(uint8 feedDecimals);
     error TokenDecimalsTooLarge(uint8 tokenDecimals);
 
@@ -165,6 +167,8 @@ contract ChainlinkPriceOracle is IPriceOracle, Ownable2Step {
     /// @param maxDeviationBps_ Initial swap tolerance (must be ≤ {MAX_DEVIATION_CAP}).
     /// @param maxSpotDeviationBps_ Initial spot tolerance (must be ≤ {MAX_DEVIATION_CAP}); set it tighter
     /// than the swap one — it compares prices, not fee-bearing outputs.
+    /// @param maxMidOffsetBps_ Initial position-midpoint tolerance (must be ≤ {MAX_DEVIATION_CAP}); this
+    /// is the per-operation residual an operator can still extract, so keep it small.
     /// @param sequencerUptimeFeed_ L2 Sequencer Uptime Feed (zero ⇒ no sequencer gate; use on L1 or when
     /// none is published for the chain).
     /// @param sequencerGracePeriod_ Grace period (seconds) after a sequencer restart (Chainlink suggests 3600).
@@ -173,12 +177,14 @@ contract ChainlinkPriceOracle is IPriceOracle, Ownable2Step {
         IPoolManager poolManager_,
         uint16 maxDeviationBps_,
         uint16 maxSpotDeviationBps_,
+        uint16 maxMidOffsetBps_,
         address sequencerUptimeFeed_,
         uint32 sequencerGracePeriod_
     ) Ownable(owner_) {
         POOL_MANAGER = poolManager_;
         _setMaxDeviation(maxDeviationBps_);
         _setMaxSpotDeviation(maxSpotDeviationBps_);
+        _setMaxMidOffset(maxMidOffsetBps_);
         _setSequencerFeed(sequencerUptimeFeed_, sequencerGracePeriod_);
     }
 
@@ -230,6 +236,11 @@ contract ChainlinkPriceOracle is IPriceOracle, Ownable2Step {
         _setMaxSpotDeviation(bps);
     }
 
+    /// @notice Update the position-midpoint tolerance (bps, ≤ {MAX_DEVIATION_CAP}). Owner-only.
+    function setMaxMidOffsetBps(uint16 bps) external onlyOwner {
+        _setMaxMidOffset(bps);
+    }
+
     /// @notice Set (or clear, with `feed == address(0)`) the L2 Sequencer Uptime Feed + grace period. Owner-only.
     function setSequencerFeed(address feed, uint32 gracePeriod) external onlyOwner {
         _setSequencerFeed(feed, gracePeriod);
@@ -251,6 +262,12 @@ contract ChainlinkPriceOracle is IPriceOracle, Ownable2Step {
         if (bps > MAX_DEVIATION_CAP) revert InvalidBps(bps);
         maxSpotDeviationBps = bps;
         emit MaxSpotDeviationSet(bps);
+    }
+
+    function _setMaxMidOffset(uint16 bps) internal {
+        if (bps > MAX_DEVIATION_CAP) revert InvalidBps(bps);
+        maxMidOffsetBps = bps;
+        emit MaxMidOffsetSet(bps);
     }
 
     /// @dev Best-effort read of an aggregator's circuit-breaker bounds. They live on the underlying
@@ -277,25 +294,36 @@ contract ChainlinkPriceOracle is IPriceOracle, Ownable2Step {
     {
         // L2 sequencer gate: a down or recently-restarted sequencer ⇒ no opinion (operator fail-closed).
         if (!_sequencerUp()) return false;
-
-        // `amountIn == 0` is the spot sentinel: nothing was swapped, so `amountOut / amountIn` is 0/0 —
-        // there is no realized price to judge, and the pool's own price is what the caller is about to
-        // act on instead. A dedicated `checkSpot` would say this in the signature rather than in a
-        // magic argument, but it costs a new `IPriceOracle` method and puts `VolatileLPManager` over
-        // EIP-170; this costs 24 bytes.
-        //
-        // What makes the sentinel safe is that no real swap can wear it, guarded twice over: the swap
-        // paths reach `_guardSwap` only inside `if (swapAmountIn > 0)`, and what they pass is the
-        // *realized* input, which their full-fill check has already required to be no smaller than the
-        // requested one. Were that not so, a swap would silently receive the spot check instead of the
-        // execution check and pass unjudged.
-        //
-        // `zeroForOne` is ignored below. A swap can only lose in one direction — too little of the
-        // output currency — hence its one-sided floor; an add has no direction at all, so a pool skewed
-        // either way misprices it, and the deviation is measured symmetrically. The parameter stays in
-        // the signature for the swap branch alone: `_addLiquidityAt` passes `true` arbitrarily.
+        // `amountIn == 0` is the spot sentinel: no swap happened, so there is no realized price to
+        // judge — the pool's own price is what the caller is about to act on instead. Kept for managers
+        // deployed before {checkOp} existed and for the fixed-range product, whose operator cannot
+        // choose a range and so needs the spot half alone. Nothing else arrives with a zero input: the
+        // swap paths reach the guard only under `swapAmountIn > 0`, and what they pass is the realized
+        // input their full-fill check has already floored at the requested one.
         if (amountIn == 0) return _checkSpot(key);
+        return _checkSwap(key, zeroForOne, amountIn, amountOut);
+    }
 
+    /// @inheritdoc IPriceOracle
+    function checkOp(
+        PoolKey calldata key,
+        bool zeroForOne,
+        uint256 amountIn,
+        uint256 amountOut,
+        int24 tickLower,
+        int24 tickUpper
+    ) external view returns (bool enforced) {
+        if (!_sequencerUp()) return false;
+        if (amountIn == 0) return _checkAdd(key, tickLower, tickUpper);
+        return _checkSwap(key, zeroForOne, amountIn, amountOut);
+    }
+
+    /// @dev The swap half: fair output at the reference price, floored by `maxDeviationBps`.
+    function _checkSwap(PoolKey calldata key, bool zeroForOne, uint256 amountIn, uint256 amountOut)
+        internal
+        view
+        returns (bool enforced)
+    {
         Currency inC = zeroForOne ? key.currency0 : key.currency1;
         Currency outC = zeroForOne ? key.currency1 : key.currency0;
 
@@ -319,66 +347,74 @@ contract ChainlinkPriceOracle is IPriceOracle, Ownable2Step {
         return true;
     }
 
-    /// @dev The spot half of {check}: the pool's `slot0` price vs the reference-implied one, both as
-    /// currency1-per-currency0 scaled by 1e18, compared **symmetrically**. Reads its own references
-    /// rather than taking the swap path's in/out pair, so the sides stay named after the pool's own
-    /// ordering. That costs nothing: the swap path reads its own only after the branch above, so `_read`
-    /// runs exactly twice per call either way.
-    /// @return enforced True when the pool price is within `maxSpotDeviationBps` of the reference; false
-    /// when either side lacks a fresh reference, the pool is uninitialized, or a price degenerates to
-    /// zero (no opinion — the manager fail-closes that for operators).
+    /// @dev The spot half of {check}: the pool's `slot0` price vs the reference-implied one. Reads its
+    /// own references rather than taking the swap path's in/out pair, so the sides stay named after the
+    /// pool's own ordering; that costs nothing, because the swap path reads its own only after the
+    /// branch above, so `_read` runs exactly twice per call either way.
     function _checkSpot(PoolKey calldata key) internal view returns (bool enforced) {
-        // A pool whose tick lattice is finer than the tolerance lets an operator park principal wholly
-        // inside the corridor between the reference and the edge of the band, and extract
-        // `tolerance − tickSpacing/2 − poolFee` on every operation, repeatably (audit 2026-09-04, R-2).
-        // Once `tickSpacing >= tolerance` no aligned range fits in that corridor at all.
-        //
-        // Scoped to the products that let an operator choose the range: `StableLPManager` writes
-        // `rangeOf` only in `initialize` and has no operator path that frees principal, so the parking
-        // attack cannot reach it — and most stable pools are spacing 1, which this rule would otherwise
-        // put out of reach for no gain. A caller that misreports its type only weakens its own guard.
-        if (key.tickSpacing < int24(uint24(maxSpotDeviationBps)) && !_isFixedRangeProduct(msg.sender)) {
-            revert SpacingFinerThanTolerance(key.tickSpacing, maxSpotDeviationBps);
-        }
+        (enforced,,,) = _spot(key);
+    }
 
-        (uint256 a0, uint8 fd0, uint8 td0, bool ok0) = _read(key.currency0);
-        (uint256 a1, uint8 fd1, uint8 td1, bool ok1) = _read(key.currency1);
-        if (!ok0 || !ok1) return false;
-
-        (uint160 sqrtP,,,) = POOL_MANAGER.getSlot0(key.toId());
-        if (sqrtP == 0) return false; // uninitialized pool ⇒ no opinion (operator fail-closed upstream)
-
-        // Pool price, currency1 per currency0, decimal-adjusted, 1e18-scaled. Split across two mulDiv
-        // steps: `sqrtP * sqrtP / 2**192` in one expression overflows.
-        uint256 priceX96 = FullMath.mulDiv(uint256(sqrtP), uint256(sqrtP), Q96);
-        uint256 poolPrice = FullMath.mulDiv(priceX96, WAD * (10 ** td0), Q96 * (10 ** td1));
-        // Reference price implied by the two USD feeds: usd0/usd1, same units.
-        // `a1` is a live feed answer: keep it inside `mulDiv`'s 512-bit intermediate rather than
-        // multiplying it out first, so an absurd answer declines instead of panicking (audit R-11).
-        uint256 refPrice = FullMath.mulDiv(FullMath.mulDiv(a0, 10 ** fd1, a1), WAD, 10 ** fd0);
-        // Below the resolution floor the integer grid these prices sit on is coarser than the tolerance
-        // being applied to them, so the verdict would be noise in either direction (audit R-3).
-        if (priceX96 < MIN_PRICE_RESOLUTION || poolPrice < MIN_PRICE_RESOLUTION || refPrice < MIN_PRICE_RESOLUTION) {
-            return false;
-        }
-
-        uint256 diff = poolPrice > refPrice ? poolPrice - refPrice : refPrice - poolPrice;
-        if (FullMath.mulDiv(diff, 10_000, refPrice) > maxSpotDeviationBps) {
-            revert SpotPriceOutOfBounds(poolPrice, refPrice);
-        }
+    /// @dev The add half of {checkOp}: the spot bound, then the position centred near the reference.
+    /// The second is measured in price space through the same arithmetic as the first — the midpoint
+    /// tick becomes a `sqrtPrice`, then a decimal-adjusted price — so it needs no square root and
+    /// inherits the resolution floor. The reference follows the market and the pool follows its last
+    /// swap: an honest recenter around a market that really moved passes (`mid ≈ pool ≈ reference`),
+    /// a range around a skewed pool does not (`pool` left, `reference` stayed).
+    function _checkAdd(PoolKey calldata key, int24 tickLower, int24 tickUpper) internal view returns (bool enforced) {
+        if (!_sequencerUp()) return false;
+        (bool ok, uint256 refPrice, uint8 td0, uint8 td1) = _spot(key);
+        if (!ok) return false;
+        // int24 arithmetic: |tick| ≤ 887,272, so the sum stays far inside int24.
+        int24 mid = (tickLower + tickUpper) / 2;
+        uint256 midPrice = _price(TickMath.getSqrtPriceAtTick(mid), td0, td1);
+        if (midPrice == 0) return false;
+        if (_deviationBps(midPrice, refPrice) > maxMidOffsetBps) revert PositionOffReference(midPrice, refPrice);
         return true;
     }
 
-    /// @dev Whether the caller is a product whose ranges are fixed at initialization, and which is
-    /// therefore out of reach of the parking attack the tick-spacing rule exists to stop. `try` because
-    /// `check` is also called by things that are not managers at all — tests, the lens, a router.
-    /// @param caller The address that called {check}; the manager, in production.
-    function _isFixedRangeProduct(address caller) internal view returns (bool) {
-        try IProductId(caller).ORACLE_TYPE() returns (uint256 t) {
-            return t == 3000; // StableLPManager
-        } catch {
-            return false; // not a manager, or one that will not say ⇒ the rule applies
+    /// @dev Shared by both add-side checks: the two references, the pool's `slot0`, and the spot bound.
+    /// @return ok False when there is no fresh reference or the pool is uninitialized (no opinion).
+    /// @return refPrice The reference-implied price, currency1 per currency0, 1e18-scaled.
+    /// @return td0 currency0's token decimals, for pricing a tick the same way.
+    /// @return td1 currency1's token decimals.
+    function _spot(PoolKey calldata key) internal view returns (bool ok, uint256 refPrice, uint8 td0, uint8 td1) {
+        {
+            (uint256 a0, uint8 fd0, uint8 t0, bool ok0) = _read(key.currency0);
+            (uint256 a1, uint8 fd1, uint8 t1, bool ok1) = _read(key.currency1);
+            if (!ok0 || !ok1) return (false, 0, 0, 0);
+            // Reference price implied by the two USD feeds: usd0/usd1. `a1` is a live feed answer: keep
+            // it inside `mulDiv`'s 512-bit intermediate rather than multiplying it out first, so an
+            // absurd answer declines instead of panicking (audit R-11).
+            refPrice = FullMath.mulDiv(FullMath.mulDiv(a0, 10 ** fd1, a1), WAD, 10 ** fd0);
+            (td0, td1) = (t0, t1);
         }
+        if (refPrice < MIN_PRICE_RESOLUTION) return (false, 0, 0, 0);
+
+        (uint160 sqrtP,,,) = POOL_MANAGER.getSlot0(key.toId());
+        if (sqrtP == 0) return (false, 0, 0, 0); // uninitialized pool ⇒ no opinion
+        uint256 poolPrice = _price(sqrtP, td0, td1);
+        if (poolPrice == 0) return (false, 0, 0, 0);
+
+        if (_deviationBps(poolPrice, refPrice) > maxSpotDeviationBps) revert SpotPriceOutOfBounds(poolPrice, refPrice);
+        ok = true;
+    }
+
+    /// @dev A `sqrtPriceX96` as currency1 per currency0, decimal-adjusted, 1e18-scaled — or 0 when either
+    /// intermediate sits under the resolution floor, where the integer grid is coarser than any
+    /// tolerance applied to it and a verdict would be noise (audit R-3). Split across two mulDiv steps:
+    /// `sqrtP * sqrtP / 2**192` in one expression overflows.
+    function _price(uint160 sqrtP, uint8 td0, uint8 td1) internal pure returns (uint256 p) {
+        uint256 priceX96 = FullMath.mulDiv(uint256(sqrtP), uint256(sqrtP), Q96);
+        if (priceX96 < MIN_PRICE_RESOLUTION) return 0;
+        p = FullMath.mulDiv(priceX96, WAD * (10 ** td0), Q96 * (10 ** td1));
+        if (p < MIN_PRICE_RESOLUTION) return 0;
+    }
+
+    /// @dev |a − ref| / ref in bps, floored.
+    function _deviationBps(uint256 a, uint256 ref) internal pure returns (uint256) {
+        uint256 diff = a > ref ? a - ref : ref - a;
+        return FullMath.mulDiv(diff, 10_000, ref);
     }
 
     /// @dev Read a currency's reference: (answer, feedDecimals, tokenDecimals, fresh?).

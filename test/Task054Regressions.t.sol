@@ -8,6 +8,7 @@ import {SingletonNFTOwned} from "../src/abstract/SingletonNFTOwned.sol";
 import {ChainlinkPriceOracle} from "../src/oracle/ChainlinkPriceOracle.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {UniLens} from "../src/UniLens.sol";
+import {MockAggregator} from "./ChainlinkPriceOracle.t.sol";
 
 /// @notice Regressions for task_054, against the two HIGH findings of the fix review.
 ///
@@ -18,15 +19,14 @@ import {UniLens} from "../src/UniLens.sol";
 /// unaffected, or the guards would be indistinguishable from switching operators off.
 contract Task054Regressions is RedTeamBase {
     /// @dev The drain cycle needs a range parked between the reference and the edge of the tolerance
-    /// band. On a spacing-1 pool the lattice offers one; the oracle now refuses the pool outright.
-    function test_R2_spacingFinerThanTolerance_refusesTheDrainPool() public {
+    /// band. Its midpoint is then ~49 bps from the reference, and that distance is exactly what the
+    /// oracle now refuses — on any pool, at any tick spacing, without taking the pool away.
+    function test_R2_positionOffReference_refusesTheParkedRange() public {
         _boot(100, 1, 4_000e18, 0, 1_000e18);
         _openAsOwner(-1, 0, 1_000e18); // the owner may still work the pool
 
         _swapTo(49); // skew to the edge of the 50 bps band, as the exploit did
-        vm.expectRevert(
-            abi.encodeWithSelector(ChainlinkPriceOracle.SpacingFinerThanTolerance.selector, int24(1), uint16(50))
-        );
+        vm.expectPartialRevert(ChainlinkPriceOracle.PositionOffReference.selector);
         _recenterAsBot(48, 49);
     }
 
@@ -36,7 +36,7 @@ contract Task054Regressions is RedTeamBase {
         _boot(3000, 60, 4_000e18, 1_000e18, 1_000e18);
         _openAsOwner(-60, 60, 500e18);
 
-        _recenterAsBot(-120, 0);
+        _recenterAsBot(-120, 120);
         assertEq(mgr.positionOf(SALT).tickLower, int24(-120), "one operator recenter goes through");
     }
 
@@ -46,9 +46,9 @@ contract Task054Regressions is RedTeamBase {
         _boot(3000, 60, 4_000e18, 1_000e18, 1_000e18);
         _openAsOwner(-60, 60, 500e18);
 
-        _recenterAsBot(-120, 0);
+        _recenterAsBot(-120, 120);
         vm.expectRevert(SingletonNFTOwned.OperatorOpsPerTx.selector);
-        _recenterAsBot(0, 120);
+        _recenterAsBot(-180, 180);
     }
 
     /// @dev The owner is not rate-limited — the limit is about a delegated key, not about the manager.
@@ -79,23 +79,87 @@ contract Task054Regressions is RedTeamBase {
         assertLt(lostBps, 100, "a single operation cannot take a percent");
     }
 
-    /// @dev The same verdict a UI reads before offering a pool: on a Volatile manager the rule applies,
-    /// so a lattice finer than the tolerance is reported unusable rather than discovered by a revert.
-    function test_R2_lensReportsThePoolVerdict() public {
-        _boot(100, 1, 4_000e18, 0, 1_000e18); // spacing 1 against a 50 bps tolerance
+    /// @dev What a UI reads to explain a refusal: both tolerances, from the same call.
+    function test_R2_lensSurfacesBothTolerances() public {
+        _boot(100, 1, 4_000e18, 0, 1_000e18);
         UniLens lens = new UniLens();
-
         UniLens.OracleStatus memory st = lens.oracleStatus(address(mgr));
-        assertEq(st.maxSpotDeviationBps, 50, "the tolerance a UI needs is surfaced");
-        assertEq(st.pools.length, 1, "one verdict per configured pool");
-        assertEq(st.pools[0].tickSpacing, int24(1), "spacing surfaced");
-        assertFalse(st.pools[0].operatorMayAdd, "spacing 1 under a 50 bps tolerance is refused");
+        assertEq(st.maxSpotDeviationBps, 50, "spot tolerance");
+        assertEq(st.maxMidOffsetBps, 10, "midpoint tolerance");
+    }
 
-        // And the verdict tracks the tolerance, since that is what the rule is written against.
+    /// @dev The product win the midpoint rule buys over a tick-spacing ban: on the very pool the drain
+    /// used — spacing 1 — an honest operator recenter after a REAL market move goes through. Both the
+    /// reference and the pool moved, so a range centred on the new price is centred on the reference.
+    /// The freed capital is one-sided after such a move, so the honest flow rebalances with the
+    /// (oracle-gated) pre-swap and re-adds two-sided; a swapless one-sided re-add wider than 2*theta
+    /// is refused, since by geometry it is the parked range the rule exists to stop.
+    function test_R2_honestRecenterAfterMarketMove_passesOnSpacingOne() public {
+        _boot(100, 1, 4_000e18, 1_000e18, 1_000e18);
+        _openAsOwner(-60, 60, 500e18);
+
+        // The market moves +3%: the reference follows (currency0 now worth $1.03), and so does the pool.
         vm.prank(oracle.owner());
-        oracle.setMaxSpotDeviationBps(1);
-        st = lens.oracleStatus(address(mgr));
-        assertTrue(st.pools[0].operatorMayAdd, "at a 1 bps tolerance the same pool is usable");
+        oracle.setFeed(c0, address(new MockAggregator(8, int256(1.03e8), block.timestamp)), 365 days, 18);
+        _swapTo(296); // ln(1.03)/ln(1.0001) ~ 295.6
+
+        // Operator: rebalance the freed currency1 into currency0 at the (fair) pool price, then re-add
+        // centred on the new price. Both halves are oracle-vouched.
+        // A small rebalance: the harness pool is thin (4_000e18 of liquidity). 20e18 already moved the
+        // pool ~1% and tripped the SPOT gate on the operation's own pre-swap — the self-lockout the
+        // review named R-7, working as designed. 5e18 keeps the impact inside the band.
+        _recenterWithSwap(bot, 236, 356, false, 5e18);
+        assertEq(mgr.positionOf(SALT).tickLower, int24(236), "operator recentred on the moved market");
+    }
+
+    /// @dev Step 0 of the plan: the formula behind the gate, measured. With the midpoint bounded at
+    /// theta, the attacker's best legal parking is a razor whose midpoint sits exactly theta from the
+    /// reference; sweeping the price through it converts the principal at that price. Expected loss:
+    /// `theta - fee`, minus half a tick of lattice rounding. Independent of tick spacing and width.
+    function test_R2_takeIsThetaMinusFee() public {
+        uint16[3] memory thetas = [uint16(5), uint16(10), uint16(20)];
+        for (uint256 i = 0; i < thetas.length; ++i) {
+            uint256 snap = vm.snapshotState();
+            uint256 lost = _measureTake(thetas[i]);
+            console2.log("theta (bps)", thetas[i], "measured take (bps)", lost);
+            // theta - fee(1) - lattice(0.5), floored: 3, 8, 18
+            assertGe(lost, uint256(thetas[i]) - 2, "take at least theta - fee - lattice");
+            assertLe(lost, uint256(thetas[i]), "take never above theta");
+            vm.revertToState(snap);
+        }
+    }
+
+    /// @dev Width buys the attacker nothing under the midpoint rule: a wide range centred at theta is
+    /// two-sided at the skewed price, and the sweep converts its middle at the fair price.
+    function test_R2_wideRangeAtThetaTakesNothing() public {
+        _boot(100, 1, 4_000e18, 1_000e18, 1_000e18);
+        _openAsOwner(-60, 60, 500e18);
+        vm.prank(oracle.owner());
+        oracle.setMaxMidOffsetBps(10);
+
+        uint256 before = _managerValue();
+        _swapTo(49);
+        _recenterAsBot(-90, 110); // mid = +10 = theta, width 200, two-sided at the skewed price
+        _swapTo(-49);
+        uint256 after_ = _managerValue();
+        uint256 lost = before > after_ ? (before - after_) * 10_000 / before : 0;
+        console2.log("wide range at theta - manager loss (bps)", lost);
+        assertLe(lost, 2, "a wide centred range converts at the fair price");
+    }
+
+    function _measureTake(uint16 theta) internal returns (uint256 lostBps) {
+        _boot(100, 1, 4_000e18, 0, 1_000e18); // 0.01% fee, spacing 1, thin pool
+        _openAsOwner(-1, 0, 1_000e18);
+        vm.prank(oracle.owner());
+        oracle.setMaxMidOffsetBps(theta);
+
+        uint256 before = _managerValue();
+        _swapTo(49); // inside the 50 bps spot band: the oracle vouches for the pool
+        int24 t = int24(uint24(theta));
+        _recenterAsBot(t - 1, t); // razor whose midpoint is theta - 0.5 from the reference
+        _swapTo(-49); // drag the price through it
+        uint256 after_ = _managerValue();
+        lostBps = before > after_ ? (before - after_) * 10_000 / before : 0;
     }
 
     function _ownerRecenter(int24 tl, int24 tu) internal pure returns (VolatileLPManager.RecenterParams memory) {

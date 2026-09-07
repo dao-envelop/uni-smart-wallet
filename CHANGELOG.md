@@ -10,12 +10,15 @@ All notable changes to this project are documented here. The format is based on
 
 - **Operator drain rate is bounded** (task_054, audit `2026-09-04` R-2) — the spot gate bounded one
   operation and nothing bounded a transaction: sixty in-tolerance operations removed 24.84% of a
-  portfolio in one. Two changes close it. The oracle refuses a pool whose `tickSpacing` is finer than
-  its own `maxSpotDeviationBps`, since a finer lattice is what lets an operator park principal inside
-  the accepted corridor (`SpacingFinerThanTolerance`); `StableLPManager` is exempt, its ranges being
-  fixed at `initialize`. And an operator gets **one authorized call per transaction**, enforced by a
-  transient flag (`OperatorOpsPerTx`). Neither applies to the owner. **Raising `maxSpotDeviationBps`
-  now narrows the set of pools an operator may touch.**
+  portfolio in one. Two changes close it. `IPriceOracle` gains `checkOp`, the single call a
+  range-choosing product makes for every operator operation; for an add the oracle refuses a range whose
+  midpoint sits further than `maxMidOffsetBps` from the reference (`PositionOffReference`) — an
+  operator's loss from a parked range is exactly that distance minus the pool fee, so the residual is
+  `maxMidOffsetBps - fee` per operation, independent of tick spacing or width, and **no pool is taken
+  away**. `check` stays for already-deployed managers and for `StableLPManager`, whose ranges are fixed.
+  And an operator gets **one authorized call per transaction**, enforced by a transient flag
+  (`OperatorOpsPerTx`). Neither applies to the owner. Operators must rebalance (pre-swap) into a centred
+  range after a real market move; a swapless one-sided re-add wider than twice the tolerance is refused.
 - **A hooked add cannot outspend its leg** (task_054, audit `2026-09-04` R-1) — v4 runs
   `beforeAddLiquidity` while the lock is open, so a hook could move the price after the oracle vouched
   for it, let the add be priced against the moved price, and restore it before returning: 44.997% of a
@@ -45,11 +48,9 @@ All notable changes to this project are documented here. The format is based on
 - `StableLPManager._addLiquidity` takes the pool's `Range` struct instead of two loose ticks (stack
   budget, no behaviour change).
 - **`UniLens.oracleStatus` answers the operator question, not just the swap one** (task_054) — it now
-  surfaces `maxSpotDeviationBps` alongside the swap tolerance, and a `PoolOperatorInfo` per configured
-  pool saying whether an operator may add there at all. That verdict needs both halves and neither is
-  in the pool: `tickSpacing` comes from the manager's configuration, the tolerance from the oracle. A
-  UI can grey out a pool instead of letting a bot discover it through a revert. **`OracleStatus` gains
-  two fields — an ABI change for anyone decoding the struct.**
+  surfaces `maxSpotDeviationBps` and `maxMidOffsetBps` alongside the swap tolerance, so a UI can
+  explain a `PositionOffReference` refusal and size a range before spending gas on it.
+  **`OracleStatus` gains two fields — an ABI change for anyone decoding the struct.**
 - **Oracle hardening** (task_054) — `MAX_TOKEN_DECIMALS` drops to 24, above which the spot branch's own
   result overflows at ticks inside `MAX_TICK`; aggregator decimals are bounded at registration; the
   reference price keeps a live feed answer inside `mulDiv`; prices below a resolution floor decline

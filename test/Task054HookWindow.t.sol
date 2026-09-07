@@ -179,7 +179,7 @@ contract Task054HookWindow is Test {
         vm.prank(owner);
         mgr.setOperator(bot, true);
 
-        oracle = new ChainlinkPriceOracle(address(this), IPoolManager(address(pm)), 100, 50, address(0), 0);
+        oracle = new ChainlinkPriceOracle(address(this), IPoolManager(address(pm)), 100, 50, 10, address(0), 0);
         oracle.setFeed(c0, address(new MockAggregator(8, int256(1e8), block.timestamp)), 365 days, 18);
         oracle.setFeed(c1, address(new MockAggregator(8, int256(1e8), block.timestamp)), 365 days, 18);
         vm.prank(owner);
@@ -206,13 +206,14 @@ contract Task054HookWindow is Test {
 
         hook.arm(PUMP, 0); // pump inside beforeAddLiquidity, dump back inside afterAddLiquidity
 
-        // A perfectly ordinary-looking operator allocate: a range above spot, funded from currency0.
-        // 100e18 of currency0 sized at the honest price; ~1_000e18 of currency1 charged at the warped
-        // one — which is exactly what the spend cap now refuses. Re-reading the price afterwards would
+        // A perfectly ordinary-looking operator allocate: a range centred on the reference (so the
+        // midpoint rule passes), sized two-sided at the honest price. The hook then warps the price
+        // inside modifyLiquidity, v4 bills that L single-sided at the warped price — far more currency1
+        // than offered — and that is what the spend cap refuses. Re-reading the price afterwards would
         // NOT have caught this: the hook puts the price back before it returns.
         vm.prank(bot);
         vm.expectRevert(OpenVolatileLPManager.OwedExceedsDesired.selector);
-        mgr.allocate(_legs(PUMP - 60, PUMP, 100e18, 0));
+        mgr.allocate(_legs(-60, 60, 100e18, 100e18));
 
         assertEq(_managerValue(), m0, "portfolio untouched");
         assertEq(_hookValue(), h0, "the hook took nothing");
@@ -224,7 +225,7 @@ contract Task054HookWindow is Test {
         int24 PUMP = 23_040;
         uint256 m0 = _managerValue();
         vm.prank(bot);
-        mgr.allocate(_legs(PUMP - 60, PUMP, 100e18, 0));
+        mgr.allocate(_legs(-60, 60, 100e18, 100e18));
         console2.log("--- T2 control: identical call, hook not armed ---");
         console2.log("manager value before        ", m0);
         console2.log("manager value after         ", _managerValue());
@@ -241,7 +242,7 @@ contract Task054HookWindow is Test {
         hook.arm(PUMP, 0);
         vm.prank(bot);
         vm.expectRevert(OpenVolatileLPManager.OwedExceedsDesired.selector);
-        mgr.allocate(_legs(PUMP - 60, PUMP, 100e18, 0)); // amount1Desired == 0
+        mgr.allocate(_legs(-60, 60, 100e18, 100e18)); // amount1Desired == 0
         assertEq(MockERC20(Currency.unwrap(c1)).balanceOf(address(mgr)), bal1Before, "no currency1 left");
     }
 
@@ -256,7 +257,7 @@ contract Task054HookWindow is Test {
 
         vm.prank(bot);
         vm.expectRevert(OpenVolatileLPManager.OwedExceedsDesired.selector);
-        mgr.allocate(_legs(PUMP - 60, PUMP, 45e18, 0));
+        mgr.allocate(_legs(-60, 60, 45e18, 45e18));
 
         hook.arm(0, 0); // disarm: an ordinary allocate now
         vm.prank(bot);

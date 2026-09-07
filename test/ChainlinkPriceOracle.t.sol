@@ -76,7 +76,7 @@ contract ChainlinkPriceOracleTest is Test {
         feed1 = new MockAggregator(8, int256(1e8), block.timestamp);
 
         oracle = new ChainlinkPriceOracle(
-            address(this), IPoolManager(address(0)), MAX_DEV_BPS, SPOT_DEV_BPS, address(0), 3600
+            address(this), IPoolManager(address(0)), MAX_DEV_BPS, SPOT_DEV_BPS, 10, address(0), 3600
         );
         oracle.setFeed(c0, address(feed0), HEARTBEAT, 18);
         oracle.setFeed(c1, address(feed1), HEARTBEAT, 18);

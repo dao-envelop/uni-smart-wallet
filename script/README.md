@@ -197,14 +197,20 @@ consequences for an operator run:
   high percentile of the measured basis with `PriceDeviation.s.sol` (0-3 bps on stable pairs, ~33 bps on
   mainnet ETH/WBTC, 72 bps on Unichain ETH/UNI), per chain rather than globally.
 
-**`maxSpotDeviationBps` also selects which pools an operator may touch, and raising it NARROWS that set.**
-Since task_054 the oracle refuses a pool whose `tickSpacing` is finer than the tolerance
-(`SpacingFinerThanTolerance`): a finer lattice lets an operator park principal inside the accepted
-corridor and take `tolerance - tickSpacing/2 - poolFee` on every operation, repeatably, while the oracle
-approves each one. At `tickSpacing >= tolerance` no aligned range fits in that corridor at all. So a pool
-is both usable and safe exactly when `basis_p99 < maxSpotDeviationBps <= tickSpacing` — pick the two
-together with the pool set, not separately. `StableLPManager` is exempt (it fixes ranges at
-`initialize`, so an operator cannot park one), which is why its spacing-1 stable pools remain available.
+**A third tolerance, `maxMidOffsetBps`, bounds where an operator may place a range** (task_054). An
+operator's loss from a range parked at a skewed price is the distance from the range's midpoint to the
+reference minus the pool fee, so the oracle refuses an add whose midpoint sits further than this from
+the reference (`PositionOffReference`, via `checkOp`). That leaves the residual per operation at
+`maxMidOffsetBps - poolFee` — linear, and independent of tick spacing or range width, so **no pool is
+taken away**: a narrow range *at* the fair price is legal on a spacing-1 pool. The reference follows the
+market and the pool follows its last swap, so an honest recenter around a market that really moved
+passes while a range around a skewed pool does not. Two consequences for operators: deliberately
+asymmetric ranges are bounded by this tolerance, and after a real move the freed capital is one-sided,
+so the honest flow rebalances with the (oracle-gated) pre-swap and re-adds centred — a swapless
+one-sided re-add wider than twice the tolerance is, by geometry, the parked range the rule stops.
+`StableLPManager` keeps using `check` (spot only): its ranges are fixed at `initialize`, so an operator
+cannot park one. Size `maxSpotDeviationBps` from the basis alone — `basis_p99 < d` — and
+`maxMidOffsetBps` from the residual you accept; the two no longer constrain each other.
 
 An operator also gets **one authorized call per transaction** (`OperatorOpsPerTx`). A multi-leg
 `allocate` is one call; batching two different operations into one transaction is not possible. This

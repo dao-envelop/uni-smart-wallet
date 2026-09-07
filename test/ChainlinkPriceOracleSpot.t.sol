@@ -38,15 +38,6 @@ contract MockBounds {
     }
 }
 
-/// @notice Stands in for a manager: all the oracle asks of one is its Envelop product discriminator.
-contract MockProduct {
-    uint256 public immutable ORACLE_TYPE;
-
-    constructor(uint256 t) {
-        ORACLE_TYPE = t;
-    }
-}
-
 /// @notice The spot half of {ChainlinkPriceOracle.check} (`amountIn == 0`), which gates operator
 /// liquidity adds after audit 2026-09-04 H-1, plus the M-1 / L-3 hardening shipped with it.
 ///
@@ -78,7 +69,7 @@ contract ChainlinkPriceOracleSpotTest is Test {
         key = PoolKey({currency0: c0, currency1: c1, fee: 3000, tickSpacing: SPACING, hooks: IHooks(address(0))});
 
         oracle = new ChainlinkPriceOracle(
-            address(this), IPoolManager(address(poolManager)), SWAP_DEV_BPS, SPOT_DEV_BPS, address(0), 3600
+            address(this), IPoolManager(address(poolManager)), SWAP_DEV_BPS, SPOT_DEV_BPS, 10, address(0), 3600
         );
         oracle.setFeed(c0, address(new MockAggregator(8, int256(1e8), block.timestamp)), 3600, 18);
         oracle.setFeed(c1, address(new MockAggregator(8, int256(1e8), block.timestamp)), 3600, 18);
@@ -182,73 +173,71 @@ contract ChainlinkPriceOracleSpotTest is Test {
         assertTrue(oracle.check(key, true, 0, 0), "feed decimals normalized");
     }
 
-    // ────────── R-2: the tick-spacing rule ──────────
+    // ────────── R-2: the position-midpoint rule (checkOp with amountIn == 0) ──────────
 
-    /// @dev A pool whose lattice is finer than the tolerance lets an operator park principal inside the
-    /// accepted corridor and extract on every operation. Once spacing >= tolerance, nothing fits.
-    function test_spacing_finerThanTolerance_reverts() public {
+    /// @dev A razor at the reference is legal on the finest lattice: the rule is about where a range
+    /// sits, not how narrow it is or what pool it is in.
+    function test_op_razorAtReference_enforced() public {
         PoolKey memory fine = _keyWith(1);
         poolManager.initialize(fine, TickMath.getSqrtPriceAtTick(0));
-        vm.expectRevert(
-            abi.encodeWithSelector(ChainlinkPriceOracle.SpacingFinerThanTolerance.selector, int24(1), SPOT_DEV_BPS)
-        );
-        oracle.check(fine, true, 0, 0);
+        assertTrue(oracle.checkOp(fine, true, 0, 0, -1, 0), "midpoint half a tick from the reference");
     }
 
-    function test_spacing_atTolerance_allowed() public {
-        PoolKey memory atEdge = _keyWith(int24(uint24(SPOT_DEV_BPS))); // spacing == tolerance
-        poolManager.initialize(atEdge, TickMath.getSqrtPriceAtTick(0));
-        assertTrue(oracle.check(atEdge, true, 0, 0), "spacing == tolerance leaves no room to park");
-    }
-
-    /// @dev The rule follows the tolerance, so raising the tolerance NARROWS the set of usable pools.
-    function test_spacing_ruleFollowsTheTolerance() public {
-        PoolKey memory k10 = _keyWith(10);
-        poolManager.initialize(k10, TickMath.getSqrtPriceAtTick(0));
-        oracle.setMaxSpotDeviationBps(10);
-        assertTrue(oracle.check(k10, true, 0, 0), "spacing 10 is fine at a 10 bps tolerance");
-        oracle.setMaxSpotDeviationBps(11);
-        vm.expectRevert(
-            abi.encodeWithSelector(ChainlinkPriceOracle.SpacingFinerThanTolerance.selector, int24(10), uint16(11))
-        );
-        oracle.check(k10, true, 0, 0);
-    }
-
-    /// @dev The swap branch is unaffected: it judges a realized price, and no range is being placed.
-    function test_spacing_ruleDoesNotTouchTheSwapBranch() public {
+    /// @dev The drain's parking: pool skewed to the edge of the spot band, range parked just under it.
+    /// The spot half passes (49 < 50); the midpoint half refuses (48.5 > 10).
+    function test_op_rangeParkedAtSkewedPrice_reverts() public {
         PoolKey memory fine = _keyWith(1);
-        poolManager.initialize(fine, TickMath.getSqrtPriceAtTick(0));
-        assertTrue(oracle.check(fine, true, 1e18, 1e18), "a swap in a fine-spacing pool is still judged");
+        poolManager.initialize(fine, TickMath.getSqrtPriceAtTick(49));
+        vm.expectPartialRevert(ChainlinkPriceOracle.PositionOffReference.selector);
+        oracle.checkOp(fine, true, 0, 0, 48, 49);
     }
 
-    /// @dev StableLPManager fixes its ranges at initialization, so an operator cannot park one and the
-    /// rule would only cost it pools — most stable pairs are spacing 1.
-    function test_spacing_fixedRangeProductIsExempt() public {
+    /// @dev A market that really moved: the reference follows it, so a range centred on the new price
+    /// is centred on the reference and passes — the case a tick-spacing ban could not distinguish.
+    function test_op_recenterAfterRealMarketMove_enforced() public {
         PoolKey memory fine = _keyWith(1);
-        poolManager.initialize(fine, TickMath.getSqrtPriceAtTick(0));
-        MockProduct stable = new MockProduct(3000);
-        vm.prank(address(stable));
-        assertTrue(oracle.check(fine, true, 0, 0), "a fixed-range product is exempt");
-
-        MockProduct volatile_ = new MockProduct(3001);
-        vm.prank(address(volatile_));
-        vm.expectRevert(
-            abi.encodeWithSelector(ChainlinkPriceOracle.SpacingFinerThanTolerance.selector, int24(1), SPOT_DEV_BPS)
-        );
-        oracle.check(fine, true, 0, 0);
+        oracle.setFeed(c0, address(new MockAggregator(8, int256(1.03e8), block.timestamp)), 3600, 18);
+        poolManager.initialize(fine, TickMath.getSqrtPriceAtTick(296)); // ~ +3%
+        assertTrue(oracle.checkOp(fine, true, 0, 0, 236, 356), "centred on the moved reference");
+        vm.expectPartialRevert(ChainlinkPriceOracle.PositionOffReference.selector);
+        oracle.checkOp(fine, true, 0, 0, -60, 60); // still centred on the OLD price
     }
 
-    /// @dev A caller that is not a manager at all gets the rule, not an exemption.
-    function test_spacing_nonManagerCallerGetsTheRule() public {
-        PoolKey memory fine = _keyWith(1);
-        poolManager.initialize(fine, TickMath.getSqrtPriceAtTick(0));
-        vm.expectRevert(
-            abi.encodeWithSelector(ChainlinkPriceOracle.SpacingFinerThanTolerance.selector, int24(1), SPOT_DEV_BPS)
-        );
-        oracle.check(fine, true, 0, 0); // this test contract has no ORACLE_TYPE
+    /// @dev Asymmetry is bounded by theta, not forbidden: widen the tolerance and the same range passes.
+    function test_op_asymmetricRange_boundedByTheta() public {
+        _initAt(0);
+        vm.expectPartialRevert(ChainlinkPriceOracle.PositionOffReference.selector);
+        oracle.checkOp(key, true, 0, 0, 0, 600); // mid +300 vs theta 10
+        oracle.setMaxMidOffsetBps(310); // 300 ticks compound to 304.5 bps
+        assertTrue(oracle.checkOp(key, true, 0, 0, 0, 600), "mid +300 ticks at theta 310 bps");
     }
 
-    /// @dev Same pair, a different lattice — a fresh pool, since tickSpacing is part of the PoolKey.
+    /// @dev The spot half still runs first: a pool outside the band is refused for that.
+    function test_op_spotBoundStillApplies() public {
+        _initAt(6000);
+        vm.expectPartialRevert(ChainlinkPriceOracle.SpotPriceOutOfBounds.selector);
+        oracle.checkOp(key, true, 0, 0, 5940, 6060);
+    }
+
+    /// @dev With a swap input the ticks are ignored and the call is the swap check.
+    function test_op_swapInputIgnoresTicks() public {
+        _initAt(0);
+        assertTrue(oracle.checkOp(key, true, 1e18, 1e18, 5000, 6000), "a swap is judged as a swap");
+    }
+
+    function test_op_noOpinionCases() public {
+        assertFalse(oracle.checkOp(key, true, 0, 0, -60, 60), "uninitialized pool");
+        _initAt(0);
+        oracle.setFeed(c1, address(0), 0, 0);
+        assertFalse(oracle.checkOp(key, true, 0, 0, -60, 60), "missing feed");
+    }
+
+    function test_midOffsetCap() public {
+        vm.expectRevert(abi.encodeWithSelector(ChainlinkPriceOracle.InvalidBps.selector, uint16(1_001)));
+        oracle.setMaxMidOffsetBps(1_001);
+    }
+
+    /// @dev Same pair, a different lattice: a fresh pool, since tickSpacing is part of the PoolKey.
     function _keyWith(int24 spacing) internal view returns (PoolKey memory) {
         return PoolKey({currency0: c0, currency1: c1, fee: 3000, tickSpacing: spacing, hooks: IHooks(address(0))});
     }

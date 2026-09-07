@@ -17,6 +17,7 @@ import {PositionState} from "./lib/PositionState.sol";
 interface IChainlinkOracleView {
     function maxDeviationBps() external view returns (uint16);
     function maxSpotDeviationBps() external view returns (uint16);
+    function maxMidOffsetBps() external view returns (uint16);
     function sequencerUptimeFeed() external view returns (address);
     function sequencerGracePeriod() external view returns (uint32);
     function feeds(Currency currency)
@@ -118,16 +119,6 @@ contract UniLens {
         uint8 tokenDecimals;
     }
 
-    /// @notice One configured pool's standing with the operator guard.
-    /// @dev The verdict combines two things a caller would otherwise have to fetch and compare itself:
-    /// the pool's `tickSpacing`, which comes from the manager's own configuration, and the oracle's
-    /// `maxSpotDeviationBps`, which comes from the oracle. Neither says anything on its own.
-    struct PoolOperatorInfo {
-        PoolId poolId;
-        int24 tickSpacing;
-        bool operatorMayAdd; // false ⇒ an operator add here reverts `SpacingFinerThanTolerance`
-    }
-
     /// @notice The operator price guard of a manager, resolved in one call.
     /// `oracle == address(0)` ⇒ operators cannot swap **or add liquidity** at all
     /// (`OperatorSwapGuardRequired`).
@@ -137,32 +128,11 @@ contract UniLens {
         uint16 maxDeviationBps; // tolerance on a swap's realized price
         uint16 maxSpotDeviationBps; // tolerance on the pool's own price, gating operator adds; 0 on a
         // pre-task_053 oracle, which has no such branch
+        uint16 maxMidOffsetBps; // tolerance on an operator position's midpoint vs the reference; the
+        // per-operation residual an operator can still extract; 0 on an older oracle
         address sequencerUptimeFeed; // zero ⇒ no L2 sequencer gate on this chain
         uint32 sequencerGracePeriod;
         OracleFeedInfo[] feeds; // index-aligned to ManagerConfig.managed
-        PoolOperatorInfo[] pools; // index-aligned to ManagerConfig.pools
-    }
-
-    /// @dev Per-pool operator verdicts for {oracleStatus}. A pool whose tick lattice is finer than the
-    /// spot tolerance lets an operator park principal inside the accepted corridor and take a slice on
-    /// every operation, so the oracle refuses it outright (audit 2026-09-04, R-2). The rule is scoped to
-    /// products where an operator picks the range: `StableLPManager` fixes its ranges at `initialize`
-    /// and is exempt, which matters because most stable pools are spacing 1.
-    /// @param m The manager being read.
-    /// @param st The status being filled; `maxSpotDeviationBps` must already be resolved.
-    function _fillPoolVerdicts(BaseLPManager m, OracleStatus memory st) internal view {
-        uint256 n = m.poolCount();
-        st.pools = new PoolOperatorInfo[](n);
-        bool exempt;
-        try m.ORACLE_TYPE() returns (uint256 t) {
-            exempt = t == 3000;
-        } catch {}
-        for (uint256 i = 0; i < n; ++i) {
-            (PoolKey memory key) = m.pools(i);
-            st.pools[i].poolId = key.toId();
-            st.pools[i].tickSpacing = key.tickSpacing;
-            st.pools[i].operatorMayAdd = exempt || key.tickSpacing >= int24(uint24(st.maxSpotDeviationBps));
-        }
     }
 
     /// @notice Value a single open position of `wallet` (any {V4PositionManager}, e.g. `StableLPManager`).
@@ -259,7 +229,9 @@ contract UniLens {
         try o.maxSpotDeviationBps() returns (uint16 bps) {
             st.maxSpotDeviationBps = bps;
         } catch {}
-        _fillPoolVerdicts(m, st);
+        try o.maxMidOffsetBps() returns (uint16 bps) {
+            st.maxMidOffsetBps = bps;
+        } catch {}
         try o.sequencerUptimeFeed() returns (address f) {
             st.sequencerUptimeFeed = f;
         } catch {}
