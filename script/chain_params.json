@@ -15,7 +15,7 @@
       "0x0000000000085d4780B73119b644AE5ecd22b376",
       "0xdC035D45d973E3EC169d2276DDab16f1e407384F"
     ],
-    "oracleMaxSpotDeviationBps": 50,
+    "oracleMaxSpotDeviationBps": 40,
     "oracleMaxMidOffsetBps": 10,
     "deploy": { "feeRedeemer": false, "stableImpl": true, "volatileImpl": true, "openImpl": false, "factory": false, "lens": true, "descriptor": false, "oracle": true }
   },
@@ -42,7 +42,7 @@
       "0x14D9143BEcC348920b68D123687045db49a016C6",
       "0xA06b10Db9F390990364A3984C04FadF1c13691b5"
     ],
-    "oracleMaxSpotDeviationBps": 50,
+    "oracleMaxSpotDeviationBps": 185,
     "oracleMaxMidOffsetBps": 10,
     "deploy": { "feeRedeemer": false, "stableImpl": true, "volatileImpl": true, "openImpl": false, "factory": false, "lens": true, "descriptor": false, "oracle": true }
   },
@@ -117,7 +117,7 @@
       "0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1",
       "0x5d3a1Ff2b6BAb83b63cd9AD0787074081a52ef34"
     ],
-    "oracleMaxSpotDeviationBps": 50,
+    "oracleMaxSpotDeviationBps": 45,
     "oracleMaxMidOffsetBps": 10,
     "deploy": { "feeRedeemer": false, "stableImpl": true, "volatileImpl": true, "openImpl": false, "factory": false, "lens": true, "descriptor": false, "oracle": true }
   },

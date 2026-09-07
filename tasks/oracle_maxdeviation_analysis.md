@@ -94,6 +94,94 @@ operators only on stable/ETH pairs, or don't rely on this oracle for BTC/UNI.
 
 > Two snapshots is still a small sample. Keep running (`memory: oracle-maxdev-price-deviation-tool`) to
 > build a real distribution before committing to a number.
+>
+> **Superseded by Series 3 below** (2026-09-07): sampled rather than snapshotted, and the conclusion in
+> this section — that a tolerance wide enough for the SVR lag would be too loose to catch manipulation —
+> no longer holds, because task_054 moved the attack bound onto a separate parameter.
+
+## Series 3 (2026-09-07) — 7 samples per pool over 25 minutes
+
+First run that is a **sample rather than a snapshot**: `PriceDeviation.s.sol` on all four chains, seven
+rounds ~3.5 min apart, public RPCs. Basis in bps.
+
+### Ethereum (1)
+| Pool | n | min | med | max |
+|---|---|---|---|---|
+| USDC/BTC 0.30% | 7 | 25 | 25 | **25** |
+| ETH/USDC | 14 | 5 | 15 | 19 |
+| ETH/USDT 0.05% | 7 | 5 | 15 | 16 |
+| ETH/BTC 0.05% | 7 | 9 | 10 | 10 |
+| BTC/USDC 0.05% | 7 | 0 | 1 | 2 |
+| USDC/USDT `fee 7` | 7 | 1 | 1 | 1 |
+
+### Unichain (130)
+| Pool | n | min | med | max |
+|---|---|---|---|---|
+| ETH/UNI 0.30% | 7 | 84 | 91 | **123** |
+| ETH/BTC 0.05% | 7 | 25 | 27 | 27 |
+| ETH/USDC 0.05% | 7 | 1 | 6 | 16 |
+
+### Base (8453)
+| Pool | n | min | med | max |
+|---|---|---|---|---|
+| ETH/cbBTC | 14 | 2 | 13 | **32** |
+| ETH/USDC | 14 | 3 | 6 | 13 |
+| USDC/cbBTC 0.05% | 7 | 0 | 6 | 6 |
+| USDC/USDT `fee 7` | 7 | 0 | 0 | 0 |
+
+### Arbitrum (42161)
+| Pool | n | min | med | max |
+|---|---|---|---|---|
+| ARB/USDC 0.30% | 7 | 4 | 13 | **30** |
+| ETH/USDC | 14 | 0 | 3 | 11 |
+| BTC/USDC 0.05% | 7 | 7 | 8 | 10 |
+| ETH/USDT 0.05% | 7 | 0 | 1 | 6 |
+| USDC/USDT, USDC/DAI | 7 | 0 | 0 | 0 |
+
+**The spread inside 25 minutes settles the "one snapshot is not enough" argument.** Unichain ETH/UNI
+moved 84 → 123 and Base ETH/cbBTC 2 → 32 within the window; a single reading would have understated
+either by 3–15×. Stable pairs are 0–1 bps everywhere and never move.
+
+### What this sizes, after task_054
+
+The second iteration of task_054 **split the roles apart**, and that is what makes this number choosable:
+
+| Tolerance | Bounds | Sized from |
+|---|---|---|
+| `maxDeviationBps` | an operator swap's realized price | basis + pool fee + execution buffer |
+| `maxSpotDeviationBps` (`d`) | pool vs reference on an operator **add** | **availability only** — must cover the basis, `basis_p99 < d` |
+| `maxMidOffsetBps` (θ) | the position midpoint vs reference | the accepted residual: `take ≈ θ − poolFee` per operation |
+
+**`d` is no longer a security parameter.** Whatever the pool price does, an operator position must be
+centred within θ of the *reference*, so the manager's liquidity sits at the fair price and a sweep
+through it yields `θ − fee` regardless of how far the pool wandered. A skewed operator *swap* is refused
+separately, by `maxDeviationBps`. So `d` may be set generously to keep honest operations alive.
+
+**This retires the July conclusion.** Snapshot 2 concluded that "a tolerance wide enough to accommodate
+the stale-feed basis (150+ bps) would be too loose to catch manipulation", and that on Unichain one
+should "gate operators only on stable/ETH pairs, or not rely on this oracle for BTC/UNI". That was
+correct when `d` was the only bound. It is not the trade-off any more.
+
+### Values set (2026-09-07, `script/chain_params.json`)
+
+| Chain | worst observed | `oracleMaxSpotDeviationBps` | note |
+|---|---|---|---|
+| Ethereum (1) | 25 | **40** | worst × 1.5 |
+| Unichain (130) | 123 | **185** | driven by 18-decimal SVR proxies on a 24 h heartbeat, not pool mispricing |
+| Base (8453) | 32 | **50** | |
+| Arbitrum (42161) | 30 | **45** | |
+| Unichain Sepolia (1301) | — | 50 | no measurable pools; default |
+
+`oracleMaxMidOffsetBps = 10` on every chain — a product decision, not a measurement: it is the residual
+accepted per operation (≈9 bps on a 0.01% pool) and equally the room an honest operator has for a
+deliberately asymmetric range.
+
+**The narrow alternative for Unichain**, if 185 bps of pool-vs-feed slack is judged too permissive as a
+sanity check: keep ETH/UNI out of operator-managed sets and set `d = 40` (covers ETH/BTC at 27 × 1.5).
+That is an owner decision about which pools a bot manages, and it no longer affects the attack bound.
+
+**Still open:** this sample is intra-day and calm. Re-run through a volatile window before treating the
+numbers as final; `PriceDeviation.s.sol` is cheap and read-only.
 
 ## Recommendation
 
