@@ -76,6 +76,7 @@ returns liquidity deltas can skim principal on the way out, and one that reverts
   "treasury": "0x....",             // optional: FeeRedeemer to pass to impls when it isn't redeployed
   "oracleMaxDeviationBps": 100,     // optional: swap tolerance, realized output vs reference (default 100 = 1%)
   "oracleMaxSpotDeviationBps": 50,  // optional: spot tolerance, pool price vs reference (default 50 = 0.5%)
+  "oracleMaxMidOffsetBps": 10,      // optional: operator position midpoint vs reference (default 10 = 0.1%)
   "oracleSequencerFeed": "0x....",  // optional: L2 Sequencer Uptime Feed (omit on L1 / unsupported L2)
   "oracleGracePeriod": 3600,        // optional: seconds after sequencer restart before feeds trusted (default 3600)
   "deploy": {                       // deploy ONLY the oracle + the two manager impls this run
