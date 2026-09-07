@@ -16,6 +16,8 @@ import {PositionState} from "./lib/PositionState.sol";
 /// through this interface is made inside `try/catch` so a different implementation degrades, not reverts.
 interface IChainlinkOracleView {
     function maxDeviationBps() external view returns (uint16);
+    function maxSpotDeviationBps() external view returns (uint16);
+    function maxMidOffsetBps() external view returns (uint16);
     function sequencerUptimeFeed() external view returns (address);
     function sequencerGracePeriod() external view returns (uint32);
     function feeds(Currency currency)
@@ -117,12 +119,17 @@ contract UniLens {
         uint8 tokenDecimals;
     }
 
-    /// @notice The operator-swap price guard of a manager, resolved in one call.
-    /// `oracle == address(0)` ⇒ operators cannot swap at all (`OperatorSwapGuardRequired`).
+    /// @notice The operator price guard of a manager, resolved in one call.
+    /// `oracle == address(0)` ⇒ operators cannot swap **or add liquidity** at all
+    /// (`OperatorSwapGuardRequired`).
     struct OracleStatus {
         address oracle;
         bool isChainlinkLike; // false ⇒ a non-Chainlink IPriceOracle; the fields below are meaningless
-        uint16 maxDeviationBps;
+        uint16 maxDeviationBps; // tolerance on a swap's realized price
+        uint16 maxSpotDeviationBps; // tolerance on the pool's own price, gating operator adds; 0 on a
+        // pre-task_053 oracle, which has no such branch
+        uint16 maxMidOffsetBps; // tolerance on an operator position's midpoint vs the reference; the
+        // per-operation residual an operator can still extract; 0 on an older oracle
         address sequencerUptimeFeed; // zero ⇒ no L2 sequencer gate on this chain
         uint32 sequencerGracePeriod;
         OracleFeedInfo[] feeds; // index-aligned to ManagerConfig.managed
@@ -217,6 +224,14 @@ contract UniLens {
         } catch {
             return st;
         }
+        // Absent on an oracle deployed before task_053; left at zero, which reads as "no spot branch"
+        // and leaves every pool's verdict permissive — which is what such an oracle actually does.
+        try o.maxSpotDeviationBps() returns (uint16 bps) {
+            st.maxSpotDeviationBps = bps;
+        } catch {}
+        try o.maxMidOffsetBps() returns (uint16 bps) {
+            st.maxMidOffsetBps = bps;
+        } catch {}
         try o.sequencerUptimeFeed() returns (address f) {
             st.sequencerUptimeFeed = f;
         } catch {}

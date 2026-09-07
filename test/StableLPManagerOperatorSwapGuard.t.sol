@@ -154,9 +154,9 @@ contract StableLPManagerOperatorSwapGuardTest is StableLPTestBase {
         mgr.allocate(_swapLeg()); // owner bypasses the operator guard
     }
 
-    // ────────── operator: swapless allocate stays unrestricted ──────────
+    // ────────── operator: swapless allocate is gated too (audit 2026-09-04, H-1) ──────────
 
-    function test_operatorSwaplessAllocate_noOracle_succeeds() public {
+    function test_operatorSwaplessAllocate_noOracle_reverts() public {
         // Fund both sides so a no-swap add settles; the leg carries swapAmountIn == 0 ⇒ no guard.
         MockERC20(Currency.unwrap(poolKeys[P].currency0)).mint(address(mgr), 100e18);
         MockERC20(Currency.unwrap(poolKeys[P].currency1)).mint(address(mgr), 100e18);
@@ -171,6 +171,81 @@ contract StableLPManagerOperatorSwapGuardTest is StableLPTestBase {
             minLiquidity: 0
         });
         vm.prank(bot);
-        mgr.allocate(legs); // no swap ⇒ operator allowed without an oracle
+        // No swap, but the add still deploys at the pool's spot price — fail-closed without an oracle.
+        vm.expectRevert(BaseLPManager.OperatorSwapGuardRequired.selector);
+        mgr.allocate(legs);
+    }
+
+    /// @dev The add path must ask about the SPOT price, not merely call something. `RejectSpot` passes
+    /// swaps and reverts only on `amountIn == 0`, so this fails if the guard is dropped or moved onto
+    /// the swap arm. Without it the Stable half of the fix was pinned by nothing: a wrong sentinel
+    /// argument at StableLPManager.sol left all 293 tests green (audit R-9).
+    function test_operatorSwaplessAllocate_consultsTheOracleOnSpot() public {
+        MockERC20(Currency.unwrap(poolKeys[P].currency0)).mint(address(mgr), 100e18);
+        MockERC20(Currency.unwrap(poolKeys[P].currency1)).mint(address(mgr), 100e18);
+        vm.prank(owner);
+        mgr.setPriceOracle(address(oracle));
+        oracle.setMode(MockPriceOracle.Mode.RejectSpot);
+        vm.prank(bot);
+        vm.expectRevert(MockPriceOracle.MockSpotChecked.selector);
+        mgr.allocate(_swaplessLegs());
+    }
+
+    /// @dev The same for reinvest, which reaches `_addLiquidity` by its own path.
+    function test_operatorSwaplessReinvest_consultsTheOracleOnSpot() public {
+        _accrueFees();
+        vm.prank(owner);
+        mgr.setPriceOracle(address(oracle));
+        oracle.setMode(MockPriceOracle.Mode.RejectSpot);
+        BaseLPManager.AllocLeg memory leg = _reinvestLeg();
+        leg.swapAmountIn = 0; // swapless: only the add can reach the oracle
+        leg.swapPriceLimit = 0;
+        vm.prank(bot);
+        vm.expectRevert(MockPriceOracle.MockSpotChecked.selector);
+        mgr.reinvest(leg);
+    }
+
+    function test_operatorSwaplessAllocate_notEnforcedOracle_reverts() public {
+        MockERC20(Currency.unwrap(poolKeys[P].currency0)).mint(address(mgr), 100e18);
+        MockERC20(Currency.unwrap(poolKeys[P].currency1)).mint(address(mgr), 100e18);
+        vm.prank(owner);
+        mgr.setPriceOracle(address(oracle)); // default: NotEnforced
+        vm.prank(bot);
+        vm.expectRevert(abi.encodeWithSelector(BaseLPManager.OperatorSwapUnverified.selector, _poolId()));
+        mgr.allocate(_swaplessLegs());
+    }
+
+    function _swaplessLegs() internal view returns (BaseLPManager.AllocLeg[] memory legs) {
+        legs = new BaseLPManager.AllocLeg[](1);
+        legs[0] = BaseLPManager.AllocLeg({
+            poolId: poolKeys[P].toId(),
+            zeroForOne: false,
+            swapAmountIn: 0,
+            swapPriceLimit: 0,
+            amount0Desired: 10e18,
+            amount1Desired: 10e18,
+            minLiquidity: 0
+        });
+    }
+
+    function test_operatorSwaplessAllocate_inBoundsOracle_succeeds() public {
+        MockERC20(Currency.unwrap(poolKeys[P].currency0)).mint(address(mgr), 100e18);
+        MockERC20(Currency.unwrap(poolKeys[P].currency1)).mint(address(mgr), 100e18);
+        BaseLPManager.AllocLeg[] memory legs = new BaseLPManager.AllocLeg[](1);
+        legs[0] = BaseLPManager.AllocLeg({
+            poolId: poolKeys[P].toId(),
+            zeroForOne: false,
+            swapAmountIn: 0,
+            swapPriceLimit: 0,
+            amount0Desired: 10e18,
+            amount1Desired: 10e18,
+            minLiquidity: 0
+        });
+        vm.prank(owner);
+        mgr.setPriceOracle(address(oracle));
+        oracle.setMode(MockPriceOracle.Mode.Pass);
+        vm.prank(bot);
+        mgr.allocate(legs);
+        assertGt(mgr.positionOf(_saltFor(P)).liquidity, 0, "swapless allocate under a vouching oracle");
     }
 }

@@ -5,9 +5,10 @@ import {Test} from "forge-std/Test.sol";
 import {Clones} from "@openzeppelin/contracts/proxy/Clones.sol";
 
 import {VolatileLPManager} from "../src/VolatileLPManager.sol";
+import {SingletonNFTOwned} from "../src/abstract/SingletonNFTOwned.sol";
 import {BaseLPManager} from "../src/BaseLPManager.sol";
 import {V4PositionManager} from "../src/abstract/V4PositionManager.sol";
-import {MockERC20, MockPriceOracle} from "./helpers/Mocks.sol";
+import {MockERC20, MockPriceOracle, TwoInOneTx} from "./helpers/Mocks.sol";
 
 import {PoolManager} from "@uniswap/v4-core/src/PoolManager.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
@@ -180,20 +181,168 @@ contract VolatileLPManagerOperatorSwapGuardTest is Test {
         mgr.allocate(_one(l));
     }
 
-    // ────────── operator: swapless ops stay unrestricted ──────────
+    // ────────── operator: swapless ops are gated too (audit 2026-09-04, H-1) ──────────
+    //
+    // task_031 assumed a swapless op could not lose value, because L is sized from the desired amounts
+    // and `owed <= desired` holds by construction. That bounds the quantity deployed, not the price it is
+    // deployed at: an operator can skew a thin pool, deploy principal into a narrow range at the skewed
+    // price and trade back through it. So the add path consults the oracle for its spot price, and the
+    // same fail-closed rules apply as for a swap.
 
-    function test_operatorSwaplessRecenter_noOracle_succeeds() public {
+    function test_operatorSwaplessRecenter_noOracle_reverts() public {
         VolatileLPManager.RecenterParams memory rp = _drainRecenter();
-        rp.swapAmountIn = 0; // no swap ⇒ no value-loss vector ⇒ no guard
+        rp.swapAmountIn = 0; // no swap — but the re-add still deploys principal at the pool's spot price
         vm.prank(bot);
+        vm.expectRevert(BaseLPManager.OperatorSwapGuardRequired.selector);
         mgr.recenter(rp);
-        assertEq(mgr.positionOf(SALT).tickLower, int24(-120), "swapless recenter allowed for operator");
     }
 
-    function test_operatorSwaplessAllocate_noOracle_succeeds() public {
+    function test_operatorSwaplessAllocate_noOracle_reverts() public {
+        vm.prank(bot);
+        vm.expectRevert(BaseLPManager.OperatorSwapGuardRequired.selector);
+        mgr.allocate(_one(_leg(bytes32(uint256(3)), -60, 60, 50e18)));
+    }
+
+    function test_operatorSwaplessAllocate_notEnforcedOracle_reverts() public {
+        vm.prank(owner);
+        mgr.setPriceOracle(address(oracle)); // default mode: NotEnforced (no fresh reference)
+        vm.prank(bot);
+        vm.expectRevert(abi.encodeWithSelector(BaseLPManager.OperatorSwapUnverified.selector, poolId));
+        mgr.allocate(_one(_leg(bytes32(uint256(3)), -60, 60, 50e18)));
+    }
+
+    function test_operatorSwaplessAllocate_inBoundsOracle_succeeds() public {
+        vm.prank(owner);
+        mgr.setPriceOracle(address(oracle));
+        oracle.setMode(MockPriceOracle.Mode.Pass);
         vm.prank(bot);
         mgr.allocate(_one(_leg(bytes32(uint256(3)), -60, 60, 50e18)));
-        assertGt(mgr.positionOf(bytes32(uint256(3))).liquidity, 0, "swapless allocate allowed for operator");
+        assertGt(mgr.positionOf(bytes32(uint256(3))).liquidity, 0, "swapless allocate under a vouching oracle");
+    }
+
+    function test_operatorSwaplessRecenter_inBoundsOracle_succeeds() public {
+        vm.prank(owner);
+        mgr.setPriceOracle(address(oracle));
+        oracle.setMode(MockPriceOracle.Mode.Pass);
+        VolatileLPManager.RecenterParams memory rp = _drainRecenter();
+        rp.swapAmountIn = 0;
+        vm.prank(bot);
+        mgr.recenter(rp);
+        assertEq(mgr.positionOf(SALT).tickLower, int24(-120), "swapless recenter under a vouching oracle");
+    }
+
+    /// @dev The add path must ask about the *spot* price, not merely call something. `RejectSpot` passes
+    /// swaps and reverts only on `amountIn == 0`, so this fails if the guard is dropped or moved onto the
+    /// swap arm — which an argument-blind mock would happily let through.
+    function test_operatorSwaplessAllocate_consultsTheOracleOnSpot() public {
+        vm.prank(owner);
+        mgr.setPriceOracle(address(oracle));
+        oracle.setMode(MockPriceOracle.Mode.RejectSpot);
+        vm.prank(bot);
+        vm.expectRevert(MockPriceOracle.MockSpotChecked.selector);
+        mgr.allocate(_one(_leg(bytes32(uint256(3)), -60, 60, 50e18)));
+    }
+
+    function test_operatorSwaplessRecenter_consultsTheOracleOnSpot() public {
+        vm.prank(owner);
+        mgr.setPriceOracle(address(oracle));
+        oracle.setMode(MockPriceOracle.Mode.RejectSpot);
+        VolatileLPManager.RecenterParams memory rp = _drainRecenter();
+        rp.swapAmountIn = 0;
+        vm.prank(bot);
+        vm.expectRevert(MockPriceOracle.MockSpotChecked.selector);
+        mgr.recenter(rp);
+    }
+
+    function test_ownerSwaplessAllocate_noOracle_succeeds() public {
+        vm.prank(owner);
+        mgr.allocate(_one(_leg(bytes32(uint256(3)), -60, 60, 50e18)));
+        assertGt(mgr.positionOf(bytes32(uint256(3))).liquidity, 0, "owner add bypasses the spot gate");
+    }
+
+    // ────────── one operator operation per transaction (audit R-2) ──────────
+
+    /// @dev The price guard bounds one operation; nothing bounded how many a transaction could hold, and
+    /// sixty in-tolerance operations removed 24.84% of a portfolio in a single transaction. Inside a
+    /// transaction no watcher can interpose, so the bound sits on the authorization itself.
+    function test_operatorSecondCallInSameTx_reverts() public {
+        vm.prank(owner);
+        mgr.setPriceOracle(address(oracle));
+        oracle.setMode(MockPriceOracle.Mode.Pass);
+
+        TwoInOneTx batch = new TwoInOneTx();
+        vm.prank(owner);
+        mgr.setOperator(address(batch), true);
+
+        vm.expectRevert(SingletonNFTOwned.OperatorOpsPerTx.selector);
+        batch.run(
+            address(mgr),
+            abi.encodeCall(mgr.allocate, (_one(_leg(bytes32(uint256(3)), -60, 60, 50e18)))),
+            abi.encodeCall(mgr.allocate, (_one(_leg(bytes32(uint256(4)), -60, 60, 50e18))))
+        );
+    }
+
+    /// @dev A fresh transaction clears the transient flag — this is a rate limit, not a one-shot.
+    function test_operatorFirstCallInAFreshTx_succeeds() public {
+        vm.prank(owner);
+        mgr.setPriceOracle(address(oracle));
+        oracle.setMode(MockPriceOracle.Mode.Pass);
+
+        vm.prank(bot);
+        mgr.allocate(_one(_leg(bytes32(uint256(3)), -60, 60, 50e18)));
+        assertGt(mgr.positionOf(bytes32(uint256(3))).liquidity, 0, "one operation per transaction is allowed");
+    }
+
+    /// @dev The owner is not rate-limited: they carry their own slippage everywhere else too.
+    function test_ownerRepeatedCallsInSameTx_succeed() public {
+        vm.startPrank(owner);
+        mgr.allocate(_one(_leg(bytes32(uint256(5)), -60, 60, 50e18)));
+        mgr.allocate(_one(_leg(bytes32(uint256(6)), -60, 60, 50e18)));
+        vm.stopPrank();
+        assertGt(mgr.positionOf(bytes32(uint256(6))).liquidity, 0, "owner is unaffected");
+        // ...and the same two calls inside one transaction, which is what the limit actually counts.
+        TwoInOneTx batch = new TwoInOneTx();
+        vm.prank(owner);
+        mgr.transferFrom(owner, address(batch), 1); // the batcher now holds the ownership NFT
+        batch.run(
+            address(mgr),
+            abi.encodeCall(mgr.allocate, (_one(_leg(bytes32(uint256(11)), -60, 60, 50e18)))),
+            abi.encodeCall(mgr.allocate, (_one(_leg(bytes32(uint256(12)), -60, 60, 50e18))))
+        );
+        assertGt(mgr.positionOf(bytes32(uint256(12))).liquidity, 0, "owner is not rate-limited");
+    }
+
+    /// @dev A multi-leg allocate is ONE authorized call, so the limit does not break it — what it gives
+    /// up is batching two different operations into one transaction.
+    function test_operatorMultiLegAllocate_isOneCall() public {
+        vm.prank(owner);
+        mgr.setPriceOracle(address(oracle));
+        oracle.setMode(MockPriceOracle.Mode.Pass);
+
+        VolatileLPManager.VolatileAllocLeg[] memory legs = new VolatileLPManager.VolatileAllocLeg[](2);
+        legs[0] = _leg(bytes32(uint256(7)), -60, 60, 40e18);
+        legs[1] = _leg(bytes32(uint256(8)), -120, 120, 40e18);
+        vm.prank(bot);
+        mgr.allocate(legs);
+        assertGt(mgr.positionOf(bytes32(uint256(8))).liquidity, 0, "both legs went in on one call");
+    }
+
+    /// @dev `claimFees` is authorized too, so it spends the transaction's single operator call.
+    function test_operatorClaimThenAllocateInSameTx_reverts() public {
+        vm.prank(owner);
+        mgr.setPriceOracle(address(oracle));
+        oracle.setMode(MockPriceOracle.Mode.Pass);
+
+        TwoInOneTx batch = new TwoInOneTx();
+        vm.prank(owner);
+        mgr.setOperator(address(batch), true);
+
+        vm.expectRevert(SingletonNFTOwned.OperatorOpsPerTx.selector);
+        batch.run(
+            address(mgr),
+            abi.encodeCall(mgr.claimFees, (SALT)),
+            abi.encodeCall(mgr.allocate, (_one(_leg(bytes32(uint256(9)), -60, 60, 50e18))))
+        );
     }
 
     // ────────── owner: full freedom (bypasses the guard) ──────────

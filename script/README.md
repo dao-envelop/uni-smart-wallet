@@ -74,7 +74,8 @@ returns liquidity deltas can skim principal on the way out, and one that reverts
   "poolManager": "0x498581fF718922c3f8e6A244956aF099B2652b2b",
   "initialOwner": "0x....",         // protocol admin (owner of FeeRedeemer / factory / oracle)
   "treasury": "0x....",             // optional: FeeRedeemer to pass to impls when it isn't redeployed
-  "oracleMaxDeviationBps": 100,     // optional: ChainlinkPriceOracle initial tolerance (default 100 = 1%)
+  "oracleMaxDeviationBps": 100,     // optional: swap tolerance, realized output vs reference (default 100 = 1%)
+  "oracleMaxSpotDeviationBps": 50,  // optional: spot tolerance, pool price vs reference (default 50 = 0.5%)
   "oracleSequencerFeed": "0x....",  // optional: L2 Sequencer Uptime Feed (omit on L1 / unsupported L2)
   "oracleGracePeriod": 3600,        // optional: seconds after sequencer restart before feeds trusted (default 3600)
   "deploy": {                       // deploy ONLY the oracle + the two manager impls this run
@@ -157,7 +158,7 @@ Two things to keep in mind when wiring these into the oracle:
 ### Wiring the price oracle (per manager clone)
 
 `setPriceOracle(address)` points a manager clone at the deployed `ChainlinkPriceOracle` so operator-
-triggered swaps are price-guarded (owner swaps bypass). It is `onlyOwnerNFT`. First register each managed
+triggered ops are price-guarded (owner ops bypass). It is `onlyOwnerNFT`. First register each managed
 currency's USD feed on the oracle (`setFeed`, owner-only) using `oracle_feeds.json`, then point the
 manager at the oracle:
 
@@ -176,8 +177,48 @@ cast send "$TARGET" "setPriceOracle(address)" "$ORACLE" \
 ```
 
 Both halves are required. An oracle with **no feed** for a pool's currencies has no opinion, so `check`
-returns false and every operator swap fails closed with `OperatorSwapUnverified` — the same end state as
+returns false and every operator op fails closed with `OperatorSwapUnverified` — the same end state as
 having wired no oracle at all.
+
+Since task_053 the guard covers **operator liquidity adds** too, not only swaps: `allocate`, `reinvest`,
+`recenter` and `moveLiquidity` all ask the oracle whether the pool's own spot price is within
+`maxSpotDeviationBps` of the reference before deploying principal (audit 2026-09-04, H-1). Three
+consequences for an operator run:
+
+- an operator can do **nothing** in a pool whose currencies have no fresh feed — plan the feed set to
+  cover every configured pool, not only the ones an operator is expected to swap in;
+- a real market move that outruns the feed's heartbeat blocks operator ops until the feed catches up.
+  That is the intended trade: the alternative is deploying principal at a price nothing vouches for;
+- the two tolerances are separate. `maxDeviationBps` compares a realized swap output and therefore has
+  to absorb the pool fee; `maxSpotDeviationBps` compares prices and should be tighter. What is left
+  after the guard is `basis + maxSpotDeviationBps - tickSpacing/2 - poolFee` per operation — the basis
+  term matters because the bound is against the *reference*, not against the price the pool reverts to,
+  and it cannot be driven to zero on a pool whose basis exceeds its fee tier. Size the tolerance from a
+  high percentile of the measured basis with `PriceDeviation.s.sol` (0-3 bps on stable pairs, ~33 bps on
+  mainnet ETH/WBTC, 72 bps on Unichain ETH/UNI), per chain rather than globally.
+
+**A third tolerance, `maxMidOffsetBps`, bounds where an operator may place a range** (task_054). An
+operator's loss from a range parked at a skewed price is the distance from the range's midpoint to the
+reference minus the pool fee, so the oracle refuses an add whose midpoint sits further than this from
+the reference (`PositionOffReference`, via `checkOp`). That leaves the residual per operation at
+`maxMidOffsetBps - poolFee` — linear, and independent of tick spacing or range width, so **no pool is
+taken away**: a narrow range *at* the fair price is legal on a spacing-1 pool. The reference follows the
+market and the pool follows its last swap, so an honest recenter around a market that really moved
+passes while a range around a skewed pool does not. Two consequences for operators: deliberately
+asymmetric ranges are bounded by this tolerance, and after a real move the freed capital is one-sided,
+so the honest flow rebalances with the (oracle-gated) pre-swap and re-adds centred — a swapless
+one-sided re-add wider than twice the tolerance is, by geometry, the parked range the rule stops.
+`StableLPManager` keeps using `check` (spot only): its ranges are fixed at `initialize`, so an operator
+cannot park one. Size `maxSpotDeviationBps` from the basis alone — `basis_p99 < d` — and
+`maxMidOffsetBps` from the residual you accept; the two no longer constrain each other.
+
+An operator also gets **one authorized call per transaction** (`OperatorOpsPerTx`). A multi-leg
+`allocate` is one call; batching two different operations into one transaction is not possible. This
+does not apply to the owner.
+
+The oracle owner is `Ownable2Step`: `transferOwnership` only nominates, and the new owner must call
+`acceptOwnership`. Both tolerances are additionally capped at 1000 bps in the contract, so raising one
+past 10% is not a configuration mistake that can be made.
 
 #### `oracle_tokens/<chainId>.json` — which currencies to wire
 

@@ -6,6 +6,58 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Security
+
+- **Operator drain rate is bounded** (task_054, audit `2026-09-04` R-2) — the spot gate bounded one
+  operation and nothing bounded a transaction: sixty in-tolerance operations removed 24.84% of a
+  portfolio in one. Two changes close it. `IPriceOracle` gains `checkOp`, the single call a
+  range-choosing product makes for every operator operation; for an add the oracle refuses a range whose
+  midpoint sits further than `maxMidOffsetBps` from the reference (`PositionOffReference`) — an
+  operator's loss from a parked range is exactly that distance minus the pool fee, so the residual is
+  `maxMidOffsetBps - fee` per operation, independent of tick spacing or width, and **no pool is taken
+  away**. `check` stays for already-deployed managers and for `StableLPManager`, whose ranges are fixed.
+  And an operator gets **one authorized call per transaction**, enforced by a transient flag
+  (`OperatorOpsPerTx`). Neither applies to the owner. Operators must rebalance (pre-swap) into a centred
+  range after a real market move; a swapless one-sided re-add wider than twice the tolerance is refused.
+- **A hooked add cannot outspend its leg** (task_054, audit `2026-09-04` R-1) — v4 runs
+  `beforeAddLiquidity` while the lock is open, so a hook could move the price after the oracle vouched
+  for it, let the add be priced against the moved price, and restore it before returning: 44.997% of a
+  portfolio in one approved call. `OpenVolatileLPManager` now caps what an add may bill against the
+  leg's desired amounts (`OwedExceedsDesired`). The hookless products have the invariant by
+  construction and are unchanged.
+
+- **Operator liquidity adds are price-guarded** (task_053, audit `2026-09-04` H-1) — `_addLiquidityAt`
+  (Volatile) and `_addLiquidity` (Stable) now consult the price oracle before deploying principal, so a
+  swapless `allocate` / `reinvest` / `recenter` / `moveLiquidity` can no longer put capital into a pool
+  whose spot price nothing vouches for. task_031 had left these paths open on the premise that
+  `owed <= desired` removed the value-loss vector; it bounds the quantity deployed, not the price, and a
+  PoC drained 22-45% of a portfolio per operation through it. Owners still bypass, as everywhere.
+  **Operators are fail-closed without a fresh feed for both of a pool's currencies** — wire the feed set
+  to cover every configured pool, not only the ones operators swap in.
+
+### Changed
+
+- **`ChainlinkPriceOracle` gains a spot branch** (task_053) — `check` with `amountIn == 0` compares the
+  pool's `slot0` price against the Chainlink reference in **both** directions, within its own
+  `maxSpotDeviationBps` (default 50 bps, deployed via `oracleMaxSpotDeviationBps`). The tolerance is
+  separate from `maxDeviationBps` because that one has to absorb the pool fee and a price comparison does
+  not. The constructor takes the `PoolManager`; `IPriceOracle` is unchanged.
+- **Oracle admin bounded** (task_053, audit `2026-09-04` M-1/L-3) — `Ownable2Step`, a constant 1000 bps
+  ceiling on both tolerances (the old check was only `< 10_000`), and an answer pinned at the
+  aggregator's `minAnswer`/`maxAnswer` now counts as no reference rather than a price to act on.
+- `StableLPManager._addLiquidity` takes the pool's `Range` struct instead of two loose ticks (stack
+  budget, no behaviour change).
+- **`UniLens.oracleStatus` answers the operator question, not just the swap one** (task_054) — it now
+  surfaces `maxSpotDeviationBps` and `maxMidOffsetBps` alongside the swap tolerance, so a UI can
+  explain a `PositionOffReference` refusal and size a range before spending gas on it.
+  **`OracleStatus` gains two fields — an ABI change for anyone decoding the struct.**
+- **Oracle hardening** (task_054) — `MAX_TOKEN_DECIMALS` drops to 24, above which the spot branch's own
+  result overflows at ticks inside `MAX_TICK`; aggregator decimals are bounded at registration; the
+  reference price keeps a live feed answer inside `mulDiv`; prices below a resolution floor decline
+  instead of comparing on a grid coarser than the tolerance; and `refreshBounds` re-reads a
+  circuit-breaker cache left stale by a Chainlink phase change, which re-running `SetOracleFeeds` never
+  did. `StableLPManager`'s reinvest gains the full-fill check its allocate always had.
+
 ## [2.0.0] - 2026-07-23
 
 Second major release. Adds the **VolatileLPManager** product, replaces the stable-only factory with a

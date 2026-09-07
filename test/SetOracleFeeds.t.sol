@@ -6,6 +6,7 @@ import {SetOracleFeeds} from "../script/SetOracleFeeds.s.sol";
 import {ChainlinkPriceOracle} from "../src/oracle/ChainlinkPriceOracle.sol";
 import {MockAggregator} from "./ChainlinkPriceOracle.t.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 
 /// @dev Exposes the script's internal feed resolution so the shipped configs can be checked.
 contract SetOracleFeedsHarness is SetOracleFeeds {
@@ -27,7 +28,7 @@ contract SetOracleFeedsTest is Test {
     function setUp() public {
         script = new SetOracleFeedsHarness();
         // The script is the broadcaster in production; here it must own the oracle to call setFeed.
-        oracle = new ChainlinkPriceOracle(address(script), 100, address(0), 3600);
+        oracle = new ChainlinkPriceOracle(address(script), IPoolManager(address(0)), 100, 50, 10, address(0), 3600);
         ethFeed = new MockAggregator(8, int256(1860e8), block.timestamp);
         usdcFeed = new MockAggregator(8, int256(1e8), block.timestamp);
     }

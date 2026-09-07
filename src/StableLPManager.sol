@@ -191,36 +191,37 @@ contract StableLPManager is BaseLPManager {
             // Operator swaps must be oracle-vouched (fail-closed); owner has full freedom.
             _guardSwap(byOwner, key, leg.zeroForOne, uint256(uint128(-inDelta)), uint256(uint128(outDelta)));
         }
-        L = _addLiquidity(
-            leg.poolId, key, rg.tickLower, rg.tickUpper, leg.amount0Desired, leg.amount1Desired, leg.minLiquidity
-        );
+        L = _addLiquidity(leg.poolId, key, rg, leg.amount0Desired, leg.amount1Desired, leg.minLiquidity, byOwner);
     }
 
     /// @dev Shared by allocate and reinvest: size liquidity at the current price, add it at the pool's
     /// fixed range `[tickLower,tickUpper]`, and record/merge the position (`salt == poolId`). Settlement
     /// is the caller's job. No per-side spend cap is needed: `L` is sized from `amount{0,1}` at the
-    /// on-chain price, so the realized owed is `<= amount{0,1}`.
+    /// on-chain price, so the realized owed is `<= amount{0,1}`. That caps the quantity but not the price
+    /// it is deployed at, so an operator's add is additionally gated on the oracle's view of the pool's
+    /// spot price (audit 2026-09-04, H-1); the owner bypasses.
     function _addLiquidity(
         PoolId id,
         PoolKey memory key,
-        int24 tickLower,
-        int24 tickUpper,
+        Range memory rg,
         uint256 amount0,
         uint256 amount1,
-        uint128 minLiq
+        uint128 minLiq,
+        bool byOwner
     ) internal virtual returns (uint128 L) {
         bytes32 salt = PoolId.unwrap(id);
         (uint160 sqrtP,,,) = POOL_MANAGER.getSlot0(id);
         if (sqrtP == 0) revert PoolUninitialized();
+        _guardSwap(byOwner, key, true, 0, 0); // `amountIn == 0` ⇒ spot check against the reference
 
-        L = PositionMath.liquidityFromAmounts(sqrtP, tickLower, tickUpper, amount0, amount1);
+        L = PositionMath.liquidityFromAmounts(sqrtP, rg.tickLower, rg.tickUpper, amount0, amount1);
         if (L < minLiq) revert MinLiquidityNotMet(L, minLiq);
         if (L == 0) revert ZeroLiquidity(); // reject no-op adds (would register a ghost salt)
 
         (, BalanceDelta fees) = POOL_MANAGER.modifyLiquidity(
             key,
             ModifyLiquidityParams({
-                tickLower: tickLower, tickUpper: tickUpper, liquidityDelta: int256(uint256(L)), salt: salt
+                tickLower: rg.tickLower, tickUpper: rg.tickUpper, liquidityDelta: int256(uint256(L)), salt: salt
             }),
             ""
         );
@@ -228,7 +229,11 @@ contract StableLPManager is BaseLPManager {
 
         if (_positions[salt].liquidity == 0) {
             _positions[salt] = StoredPosition({
-                poolId: id, tickLower: tickLower, tickUpper: tickUpper, liquidity: L, openedAt: uint64(block.timestamp)
+                poolId: id,
+                tickLower: rg.tickLower,
+                tickUpper: rg.tickUpper,
+                liquidity: L,
+                openedAt: uint64(block.timestamp)
             });
             _registerSalt(salt);
         } else {
@@ -288,23 +293,25 @@ contract StableLPManager is BaseLPManager {
         if (leg.swapAmountIn > 0) {
             BalanceDelta sd = _swap(key, leg.zeroForOne, -int256(leg.swapAmountIn), leg.swapPriceLimit);
             int128 inDelta = leg.zeroForOne ? sd.amount0() : sd.amount1();
+            // exactIn: a partial fill (price limit hit) leaves |inDelta| < requested input. Allocate has
+            // always required this; reinvest did not, which also broke the oracle's assumption that a
+            // swap can never reach its guard with a zero input (audit 2026-09-04, R-12).
+            if (uint256(uint128(-inDelta)) < leg.swapAmountIn) revert SwapSlippage(leg.poolId);
             int128 outDelta = leg.zeroForOne ? sd.amount1() : sd.amount0();
             // Operator swaps must be oracle-vouched (fail-closed); owner has full freedom.
             _guardSwap(byOwner, key, leg.zeroForOne, uint256(uint128(-inDelta)), uint256(uint128(outDelta)));
         }
 
-        // Size the add from the realized (positive) deltas of the two pool currencies.
-        int256 d0 = POOL_MANAGER.currencyDelta(address(this), key.currency0);
-        int256 d1 = POOL_MANAGER.currencyDelta(address(this), key.currency1);
-        uint128 L = _addLiquidity(
-            leg.poolId,
-            key,
-            rg.tickLower,
-            rg.tickUpper,
-            d0 > 0 ? uint256(d0) : 0,
-            d1 > 0 ? uint256(d1) : 0,
-            leg.minLiquidity
-        );
+        // Size the add from the realized (positive) deltas of the two pool currencies. Kept in its own
+        // frame: the stack is tight here without via-ir.
+        uint128 L;
+        {
+            int256 d0 = POOL_MANAGER.currencyDelta(address(this), key.currency0);
+            int256 d1 = POOL_MANAGER.currencyDelta(address(this), key.currency1);
+            L = _addLiquidity(
+                leg.poolId, key, rg, d0 > 0 ? uint256(d0) : 0, d1 > 0 ? uint256(d1) : 0, leg.minLiquidity, byOwner
+            );
+        }
 
         _settleCurrency(key.currency0);
         _settleCurrency(key.currency1);

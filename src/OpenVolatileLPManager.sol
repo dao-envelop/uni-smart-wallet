@@ -5,6 +5,7 @@
 pragma solidity ^0.8.20;
 
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {BaseLPManager} from "./BaseLPManager.sol"; // for `@inheritdoc` only — already in the chain
 import {VolatileLPManager} from "./VolatileLPManager.sol";
 
@@ -39,17 +40,30 @@ import {VolatileLPManager} from "./VolatileLPManager.sol";
 /// 3. Swap-delta hooks (`BEFORE/AFTER_SWAP_RETURNS_DELTA`) reach the withdraw conversion swaps, which
 ///    carry a `sqrtPriceLimitX96` but **no** `minAmountOut` and do not pass through `_guardSwap`.
 ///
-/// What is NOT on that list, despite hooks now running inside our `unlock`: re-entrancy. v4 reverts a
-/// nested `unlock` (`AlreadyUnlocked`), the callback target is hardcoded to the caller so it cannot be
-/// retargeted at us, a forged direct call is rejected by `NotPoolManager`, and every entry point carries
-/// `nonReentrant` on a shared guard. Audit `2026-05-17` [M-3] claimed otherwise and is resolved NOT
-/// APPLICABLE (task_044) — its recommended fix would in fact brick every operation. So the residual here
-/// is the delta problem in 1-3, not re-entry.
+/// 4. A hook can move the price **inside** `modifyLiquidity`, after the oracle has vouched for it. v4
+///    invokes `beforeAddLiquidity` while the lock is still open, so the hook may re-enter
+///    `PoolManager.swap`, let the add be priced against the moved price, and put the price back before
+///    returning — 44.997% of a portfolio in one approved call (audit `2026-09-04` [R-1]). It needs none
+///    of the delta-returning permissions in 1-3. Re-reading `slot0` afterwards does not catch it; the
+///    bill does, so `_checkOwed` enforces "owed ≤ desired" here rather than assuming it as the hookless
+///    products may. What that bounds is the *spend*, not the price: a hook can still make an add
+///    expensive up to the desired amounts.
+///
+/// This list once ended with a claim that re-entrancy is NOT among the residuals, on the grounds that
+/// v4 reverts a nested `unlock` (`AlreadyUnlocked`), the callback target is hardcoded to the caller, a
+/// forged direct call is rejected by `NotPoolManager`, and every entry point carries `nonReentrant`. All
+/// of that is true and none of it helps: item 4 re-enters `PoolManager`, not this contract, from inside
+/// a callback this contract is waiting on. Audit `2026-05-17` [M-3] remains NOT APPLICABLE as written
+/// (task_044) — its recommended fix would brick every operation — but the conclusion drawn from it, that
+/// hooks running inside our `unlock` cannot reach us, was too broad.
 ///
 /// Pools are still deduped by `poolId` and capped at `MAX_POOLS`, and the hook set is fixed at
 /// `initialize` — an operator can only ever name a `PoolId` already in the configured set.
 /// ─────────────────────────────────────────────────────────────────────────────────────────────────
 contract OpenVolatileLPManager is VolatileLPManager {
+    /// @notice A hooked add billed the manager more than the caller offered to spend.
+    error OwedExceedsDesired();
+
     /// @param poolManager_ The Uniswap V4 PoolManager shared by every clone.
     /// @param treasury_ The immutable protocol-fee recipient (non-zero; typically a {FeeRedeemer}).
     constructor(IPoolManager poolManager_, address treasury_) VolatileLPManager(poolManager_, treasury_) {}
@@ -75,6 +89,27 @@ contract OpenVolatileLPManager is VolatileLPManager {
     /// @notice The NFT symbol — the shared constant `"eOpenLP"` for every clone.
     function symbol() public pure override returns (string memory) {
         return "eOpenLP";
+    }
+
+    /// @inheritdoc VolatileLPManager
+    /// @dev Enforces the spend cap the other products get for free. Elsewhere "owed ≤ desired" holds by
+    /// construction: L is sized from the desired amounts at the price the oracle just vouched for, and
+    /// nothing can run between the two. Here something can — v4 invokes `beforeAddLiquidity` inside
+    /// `modifyLiquidity` while the lock is still open, so a hook may re-enter `PoolManager.swap`, move
+    /// the price, let the add be priced against it, and put the price back before returning. That took
+    /// 44.997% of a portfolio in one approved call (audit 2026-09-04, R-1).
+    ///
+    /// Re-reading `slot0` afterwards does not catch it: by then the price is home again. The bill is the
+    /// only thing that keeps the evidence, so the bill is what gets checked.
+    function _checkOwed(BalanceDelta principal, uint256 amount0, uint256 amount1) internal pure override {
+        if (_over(principal.amount0(), amount0) || _over(principal.amount1(), amount1)) {
+            revert OwedExceedsDesired();
+        }
+    }
+
+    /// @dev One side of the spend cap. `owed` is the manager's delta: negative is what it pays.
+    function _over(int128 owed, uint256 desired) private pure returns (bool) {
+        return owed < 0 && uint256(uint128(-owed)) > desired;
     }
 
     function _productName() internal pure override returns (string memory) {

@@ -251,7 +251,13 @@ contract DeployStableLPSubsetTest is Test {
     function _noExisting() internal pure returns (DeployStableLP.Existing memory e) {}
 
     function _oracle(uint16 bps) internal pure returns (DeployStableLP.OracleParams memory) {
-        return DeployStableLP.OracleParams({maxDeviationBps: bps, sequencerFeed: address(0), gracePeriod: 3600});
+        return DeployStableLP.OracleParams({
+            maxDeviationBps: bps,
+            maxSpotDeviationBps: 50,
+            maxMidOffsetBps: 10,
+            sequencerFeed: address(0),
+            gracePeriod: 3600
+        });
     }
 
     /// @notice The immediate need: deploy ONLY the oracle + the two manager impls, treasury from fallback.

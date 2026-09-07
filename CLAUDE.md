@@ -39,6 +39,12 @@ from <https://developers.uniswap.org/contracts/v4/deployments>); addresses are w
 `foundry.toml` enables `ffi = true`, sets `solc = 0.8.26`, `evm = cancun`, `optimizer_runs = 200`,
 `via_ir = false`, and grants `fs_permissions` for `./script` and `./test`.
 
+**CI pins Forge to 1.8.1** (`.github/workflows/test.yml`) — match it locally (`foundryup --install
+1.8.1`) before trusting a green run. The version matters for more than reproducibility: 1.8 gives each
+top-level call from a test its own transient storage, as a real transaction does, where 1.7 leaked it
+between them. Tests that assert on per-transaction state (the operator call limit) must therefore make
+their calls from one contract, not from two pranked calls — see `TwoInOneTx` in `test/helpers/Mocks.sol`.
+
 ## Architecture
 
 The repo implements **NFT-owned Uniswap V4 LP managers** that interact with the `PoolManager` directly
@@ -101,6 +107,16 @@ bleed value through an adverse swap: any **operator-triggered** swap in either p
 swaps bypass the oracle. (Stable has no operator-callable principal-removal path, so its operator exposure
 was idle+fees, not principal; Volatile's `recenter` frees principal, hence the HIGH there.)
 
+Since task_053 the same guard covers operator **liquidity adds**, not only swaps (audit `2026-09-04`
+[H-1]); since task_054 two further bounds sit alongside it. For the products where an operator
+picks the range (Volatile, Open) the oracle's `checkOp` also refuses an add whose range midpoint sits
+further than `maxMidOffsetBps` from the reference — an operator's loss from a range parked at a skewed
+price *is* that distance minus the pool fee, so bounding it bounds the loss without taking any pool
+away; Stable, whose ranges are fixed at `initialize`, keeps using `check` (spot only). And an operator
+gets **one authorized call per transaction** (a transient flag on `onlyAuthorized`): the price guard
+bounds one operation, and sixty of them in a single transaction removed 24.84% of a portfolio. Neither
+applies to the owner.
+
 ### Hook policy
 
 **Per product**, decided by `BaseLPManager._hooksAllowed()` and applied in `_registerPool` at init only
@@ -121,6 +137,11 @@ Why the default is load-bearing rather than merely cautious: the **exit path has
 the only quantitative backstop is the aggregate `AmountNotDelivered` check on what reaches the recipient
 — so a hook with `AFTER_REMOVE_LIQUIDITY_RETURNS_DELTA` can skim principal and `_settleManaged` nets the
 shortfall silently. Audit `2026-07-18` still takes hooklessness as a premise **for those two products**.
+
+Audit `2026-09-04` [R-1] added a fourth residual to that list, and it is the sharpest: a hook can move
+the price *inside* `modifyLiquidity`, after the oracle vouched for it, and restore it before returning —
+so `OpenVolatileLPManager` overrides `_checkOwed` to cap what an add may actually bill against what the
+caller offered. The hookless products get that invariant by construction and pay nothing for it.
 
 `OpenVolatileLPManager` (task_043, `ORACLE_TYPE 3002`) exists because forbidding hooked pools outright is
 a product decision the owner should be able to make. It is a separate implementation rather than a flag:

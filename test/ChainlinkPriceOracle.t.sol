@@ -7,6 +7,7 @@ import {ChainlinkPriceOracle} from "../src/oracle/ChainlinkPriceOracle.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
+import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 
 /// @notice Mock Chainlink aggregator (`AggregatorV3Interface` subset).
 contract MockAggregator {
@@ -67,13 +68,16 @@ contract ChainlinkPriceOracleTest is Test {
 
     uint32 internal constant HEARTBEAT = 3600;
     uint16 internal constant MAX_DEV_BPS = 100; // 1%
+    uint16 internal constant SPOT_DEV_BPS = 50; // 0.5% — unused here: this suite never exercises the spot branch
 
     function setUp() public {
         vm.warp(100_000);
         feed0 = new MockAggregator(8, int256(2000e8), block.timestamp);
         feed1 = new MockAggregator(8, int256(1e8), block.timestamp);
 
-        oracle = new ChainlinkPriceOracle(address(this), MAX_DEV_BPS, address(0), 3600);
+        oracle = new ChainlinkPriceOracle(
+            address(this), IPoolManager(address(0)), MAX_DEV_BPS, SPOT_DEV_BPS, 10, address(0), 3600
+        );
         oracle.setFeed(c0, address(feed0), HEARTBEAT, 18);
         oracle.setFeed(c1, address(feed1), HEARTBEAT, 18);
 
@@ -157,8 +161,15 @@ contract ChainlinkPriceOracleTest is Test {
     }
 
     function test_setFeed_maxTokenDecimals_ok() public {
-        oracle.setFeed(c0, address(feed0), HEARTBEAT, 36); // boundary allowed
-        assertTrue(oracle.check(key, true, 1e18, 2000e18), "36 decimals accepted");
+        // 24, not 36: above that the spot branch's own result overflows at ticks inside MAX_TICK, and
+        // FullMath fails with a bare revert instead of this contract's "no opinion" (audit R-10).
+        oracle.setFeed(c0, address(feed0), HEARTBEAT, 24); // boundary allowed
+        assertTrue(oracle.check(key, true, 1e18, 2000e18), "24 decimals accepted");
+    }
+
+    function test_setFeed_aboveMaxTokenDecimals_reverts() public {
+        vm.expectRevert(abi.encodeWithSelector(ChainlinkPriceOracle.TokenDecimalsTooLarge.selector, uint8(25)));
+        oracle.setFeed(c0, address(feed0), HEARTBEAT, 25);
     }
 
     // ────────── H-1: L2 sequencer uptime gate ──────────

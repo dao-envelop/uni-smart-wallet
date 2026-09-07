@@ -14,6 +14,10 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 /// `check` returned `true` (fail-closed — an operator may only swap at an oracle-vouched price). `view`:
 /// it must not mutate state.
 interface IPriceOracle {
+    /// @dev `amountIn == 0` is a sentinel: no swap ran, and the implementation is asked to judge the
+    /// pool's spot price against the reference instead of a realized price. `zeroForOne` and
+    /// `amountOut` are ignored in that mode. A second implementation must honour this or the fixed-range
+    /// product's operator adds will pass unjudged.
     /// @param key The pool the swap ran in.
     /// @param zeroForOne The swap direction (currency0 → currency1 when true).
     /// @param amountIn The input amount paid to the pool.
@@ -24,4 +28,30 @@ interface IPriceOracle {
         external
         view
         returns (bool enforced);
+
+    /// @notice The single entry point a product with operator-chosen ranges uses for every operator
+    /// operation. `amountIn > 0` is a swap and is judged exactly as {check} would; `amountIn == 0` is a
+    /// liquidity add, and the implementation must vouch both for the pool's spot price and for the
+    /// position's midpoint sitting within a (tighter) tolerance of the reference. The second bound is
+    /// what stops the parked-range drain (audit 2026-09-04, R-2): an operator's loss per operation is the
+    /// distance from the range midpoint to the reference, so bounding that distance bounds the loss —
+    /// while a narrow position placed *at* the fair price stays legal.
+    /// @dev One method rather than two so a manager has one external call site: each call encodes the
+    /// whole `PoolKey`, and the second encoder did not fit the EIP-170 budget. Same tri-state contract
+    /// as {check}. `tickLower`/`tickUpper` are ignored for a swap. A product with fixed, owner-chosen
+    /// ranges (`StableLPManager`) keeps using {check}, whose `amountIn == 0` mode is the spot half alone.
+    /// @param key The pool.
+    /// @param zeroForOne Swap direction; ignored for an add.
+    /// @param amountIn Realized swap input, or 0 for an add.
+    /// @param amountOut Realized swap output; ignored for an add.
+    /// @param tickLower The position's lower bound (add only).
+    /// @param tickUpper The position's upper bound (add only).
+    function checkOp(
+        PoolKey calldata key,
+        bool zeroForOne,
+        uint256 amountIn,
+        uint256 amountOut,
+        int24 tickLower,
+        int24 tickUpper
+    ) external view returns (bool enforced);
 }

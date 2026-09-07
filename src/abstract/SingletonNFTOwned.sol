@@ -45,6 +45,13 @@ abstract contract SingletonNFTOwned is ERC721 {
     error NotOwnerNFT();
     error NotAuthorized();
     error ZeroOperator();
+    /// @notice A second operator-triggered operation was attempted in the same transaction.
+    error OperatorOpsPerTx();
+
+    /// @dev Transient flag: set on an operator's first authorized call and cleared by the EVM at the end
+    /// of the transaction. `keccak256("envelop.transient.operatorCalled") - 1`, low byte masked, after
+    /// ERC-7201 — there is no other namespaced slot in this codebase to follow.
+    bytes32 private constant _OPERATOR_CALLED_SLOT = 0x5a12ee7f98d7a0d246d4fe8d7b6490c02e1452379631b6066c0a08f9967fba00;
 
     /// @notice Gates everything that can move capital out: only the NFT holder.
     modifier onlyOwnerNFT() {
@@ -54,9 +61,37 @@ abstract contract SingletonNFTOwned is ERC721 {
 
     /// @notice Owner-or-operator. Gates operational actions that keep value inside
     /// the contract (e.g. position management) so a bot can act without owner signing.
+    /// @dev An operator gets **one** call per transaction. The price guard bounds what a single
+    /// operation may cost; nothing bounded how many of them a transaction could hold, and sixty
+    /// consecutive in-tolerance operations removed 24.84% of a portfolio in one transaction (audit
+    /// 2026-09-04, R-2). `nonReentrant` does not catch that — the calls are sequential, not nested —
+    /// and no off-chain watcher can interpose between two calls that share a transaction, which is why
+    /// the bound has to sit here. Across transactions there are blocks in between, and an owner who
+    /// sees the pattern can revoke the operator.
+    ///
+    /// The flag is transient (EIP-1153) and scoped to this manager's address, so it costs no storage
+    /// and expires on its own. The owner is not counted: they accept their own slippage everywhere else
+    /// too. A multi-leg `allocate` is one call and is unaffected; batching two different operations into
+    /// one transaction is what this gives up.
     modifier onlyAuthorized() {
-        if (ownerOf(TOKEN_ID) != msg.sender && !operators[msg.sender]) revert NotAuthorized();
+        _requireAuthorized();
         _;
+    }
+
+    /// @dev The body of {onlyAuthorized}, kept in its own frame: a modifier is inlined at every use, and
+    /// there are seven of them across the products — sharing one copy costs a jump and saves 264 bytes
+    /// of an EIP-170 budget that has under 200 to spare.
+    function _requireAuthorized() internal {
+        if (ownerOf(TOKEN_ID) == msg.sender) return;
+        if (!operators[msg.sender]) revert NotAuthorized();
+        bool seen;
+        assembly ("memory-safe") {
+            seen := tload(_OPERATOR_CALLED_SLOT)
+        }
+        if (seen) revert OperatorOpsPerTx();
+        assembly ("memory-safe") {
+            tstore(_OPERATOR_CALLED_SLOT, 1)
+        }
     }
 
     /// @dev Mint the singleton ownership token. Call exactly once from the subclass

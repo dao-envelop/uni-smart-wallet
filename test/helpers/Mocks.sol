@@ -57,29 +57,72 @@ contract Echo {
     }
 }
 
-/// @notice Configurable {IPriceOracle} for the operator-swap-guard tests.
-/// - `NotEnforced` ⇒ `check` returns false (no fresh reference): operator swaps are rejected
-///   (`OperatorSwapUnverified`), owner swaps still pass.
-/// - `Pass` ⇒ `check` returns true (in-bounds reference): operator swaps are allowed.
+/// @notice Configurable {IPriceOracle} for the operator-guard tests.
+/// - `NotEnforced` ⇒ `check` returns false (no fresh reference): operator ops are rejected
+///   (`OperatorSwapUnverified`), owner ops still pass.
+/// - `Pass` ⇒ `check` returns true (in-bounds reference): operator ops are allowed.
 /// - `Revert` ⇒ `check` reverts (out-of-bounds price), like a real oracle rejecting an adverse swap.
+/// - `RejectSpot` ⇒ swaps pass, but the `amountIn == 0` spot check reverts {MockSpotChecked}. This is how
+///   a test proves the add path really consulted the oracle: `check` is `view`, so the mock cannot count
+///   calls, and a mock that ignores its arguments would let the guard be refactored away unnoticed.
 contract MockPriceOracle is IPriceOracle {
     enum Mode {
         NotEnforced,
         Pass,
-        Revert
+        Revert,
+        RejectSpot
     }
 
     Mode public mode;
 
     error MockPriceOutOfBounds();
+    error MockSpotChecked();
 
     function setMode(Mode m) external {
         mode = m;
     }
 
-    function check(PoolKey calldata, bool, uint256, uint256) external view returns (bool) {
+    function check(PoolKey calldata, bool, uint256 amountIn, uint256) external view returns (bool) {
         if (mode == Mode.Revert) revert MockPriceOutOfBounds();
+        if (mode == Mode.RejectSpot) {
+            if (amountIn == 0) revert MockSpotChecked();
+            return true;
+        }
         return mode == Mode.Pass;
+    }
+
+    /// @dev The add half of the op call is the spot check of the add path, so `RejectSpot` fires there.
+    function checkOp(PoolKey calldata, bool, uint256 amountIn, uint256, int24, int24) external view returns (bool) {
+        if (mode == Mode.Revert) revert MockPriceOutOfBounds();
+        if (mode == Mode.RejectSpot) {
+            if (amountIn == 0) revert MockSpotChecked();
+            return true;
+        }
+        return mode == Mode.Pass;
+    }
+}
+
+/// @notice Performs two calls inside ONE external call — the only way to express "the same
+/// transaction" that does not depend on how the test runner scopes transient storage. forge 1.8 gives
+/// each top-level call from a test its own transient state, as a real transaction would; 1.7 leaked it
+/// across them, so a test written as two `vm.prank`ed calls passed locally and failed in CI while the
+/// guard itself was correct either way. It is also how the attack is actually shaped: the drain that
+/// motivated the per-transaction limit was a contract operator looping calls in one transaction.
+contract TwoInOneTx {
+    /// @param target The contract to call twice.
+    /// @param first Calldata for the first call.
+    /// @param second Calldata for the second call; its revert is what a caller usually asserts on.
+    function run(address target, bytes calldata first, bytes calldata second) external {
+        (bool ok1, bytes memory r1) = target.call(first);
+        if (!ok1) _bubble(r1);
+        (bool ok2, bytes memory r2) = target.call(second);
+        if (!ok2) _bubble(r2);
+    }
+
+    function _bubble(bytes memory r) private pure {
+        assembly ("memory-safe") {
+            revert(add(r, 0x20), mload(r))
+        }
     }
 }
 
