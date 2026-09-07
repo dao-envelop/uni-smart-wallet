@@ -45,7 +45,7 @@ are only about the completeness of the documented, accepted risk.
 
 | ID | Severity | Status | Title |
 |---|---|---|---|
-| **H-1** | **HIGH** | **CONFIRMED (PoC)** | A compromised operator extracts principal **without any swap**: swapless `recenter`/`moveLiquidity` deploy liquidity at a skewed spot price; `moveLiquidity` lets it pick the thinnest configured pool |
+| **H-1** | **HIGH** | **REDUCED, NOT CLOSED** (task_053 + task_054; see [fix-review/FIX-REVIEW.en.md](fix-review/FIX-REVIEW.en.md)) | A compromised operator extracts principal **without any swap**: swapless `recenter`/`moveLiquidity` deploy liquidity at a skewed spot price; `moveLiquidity` lets it pick the thinnest configured pool |
 | M-1 | MEDIUM | Confirmed | The shared `ChainlinkPriceOracle` is the single trust root of operator safety for every manager; its owner can instantly and boundlessly disable the guard (`maxDeviationBps ≤ 9999`, arbitrary aggregator) |
 | L-1 | LOW | Confirmed | "owed ≤ desired by construction" is off by 1 wei (v4 rounds the add up); a swapless full-amount move/recenter with zero idle reverts |
 | L-2 | LOW | Confirmed | `moveLiquidity` lacks the pre-checks `withdrawTo`/`recenter` have (unknown salt → `UnknownPool(0)`, over-pull → v4 panic) |
@@ -54,6 +54,14 @@ are only about the completeness of the documented, accepted risk.
 | I-1 | INFO | — | `FeesCollected` semantics changed (5 paths, gross): downstream must not read it as "delivered to balance" |
 | I-2 | INFO | — | `operatorList` unbounded; `_clearOperators` on NFT transfer — self-inflicted gas DoS |
 | I-3 | INFO | — | 4 fork tests skip without `BASE_RPC`; the new paths (move, fee events) have no live-v4 coverage |
+
+> **Status, 2026-09-07.** The fix was audited in its own right —
+> [`fix-review/FIX-REVIEW.en.md`](fix-review/FIX-REVIEW.en.md) — and then remediated in task_054.
+> H-1 as reported no longer reproduces on the products that ship: the per-operation loss fell from
+> 44.5 % to the accepted residual (`maxMidOffsetBps − poolFee`, ~9 bps at the shipped setting), an
+> operator gets one authorized call per transaction, and `OpenVolatileLPManager` caps what a hooked add
+> may bill. The review raised 15 issues of its own, two of them HIGH with working proofs of concept;
+> those proofs are now regressions in [`fix-review/poc/`](fix-review/poc/).
 
 **Operator-compromise verdict.** After task_031/032 an operator indeed cannot run an adverse **swap** inside
 the manager. But task_031 recorded the premise "swapless operator ops … stay unrestricted — L is sized

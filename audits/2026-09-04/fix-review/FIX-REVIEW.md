@@ -1,5 +1,7 @@
 # Ревью исправлений task_053 — аудит фикса H-1
 
+*[English version](FIX-REVIEW.en.md)*
+
 **Дата:** 2026-09-06 · **Предмет:** коммиты `d31fdb0`, `4e9e784`, `8231fa5`, `a96ea5a` на ветке
 `audit/2026-09-04` (`git diff master..HEAD -- src script`)
 **Что чинили:** [H-1](../AUDIT-REPORT.md) (HIGH, PoC) — swapless-операции оператора кладут principal
