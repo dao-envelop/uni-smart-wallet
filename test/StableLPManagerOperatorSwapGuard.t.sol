@@ -176,6 +176,58 @@ contract StableLPManagerOperatorSwapGuardTest is StableLPTestBase {
         mgr.allocate(legs);
     }
 
+    /// @dev The add path must ask about the SPOT price, not merely call something. `RejectSpot` passes
+    /// swaps and reverts only on `amountIn == 0`, so this fails if the guard is dropped or moved onto
+    /// the swap arm. Without it the Stable half of the fix was pinned by nothing: a wrong sentinel
+    /// argument at StableLPManager.sol left all 293 tests green (audit R-9).
+    function test_operatorSwaplessAllocate_consultsTheOracleOnSpot() public {
+        MockERC20(Currency.unwrap(poolKeys[P].currency0)).mint(address(mgr), 100e18);
+        MockERC20(Currency.unwrap(poolKeys[P].currency1)).mint(address(mgr), 100e18);
+        vm.prank(owner);
+        mgr.setPriceOracle(address(oracle));
+        oracle.setMode(MockPriceOracle.Mode.RejectSpot);
+        vm.prank(bot);
+        vm.expectRevert(MockPriceOracle.MockSpotChecked.selector);
+        mgr.allocate(_swaplessLegs());
+    }
+
+    /// @dev The same for reinvest, which reaches `_addLiquidity` by its own path.
+    function test_operatorSwaplessReinvest_consultsTheOracleOnSpot() public {
+        _accrueFees();
+        vm.prank(owner);
+        mgr.setPriceOracle(address(oracle));
+        oracle.setMode(MockPriceOracle.Mode.RejectSpot);
+        BaseLPManager.AllocLeg memory leg = _reinvestLeg();
+        leg.swapAmountIn = 0; // swapless: only the add can reach the oracle
+        leg.swapPriceLimit = 0;
+        vm.prank(bot);
+        vm.expectRevert(MockPriceOracle.MockSpotChecked.selector);
+        mgr.reinvest(leg);
+    }
+
+    function test_operatorSwaplessAllocate_notEnforcedOracle_reverts() public {
+        MockERC20(Currency.unwrap(poolKeys[P].currency0)).mint(address(mgr), 100e18);
+        MockERC20(Currency.unwrap(poolKeys[P].currency1)).mint(address(mgr), 100e18);
+        vm.prank(owner);
+        mgr.setPriceOracle(address(oracle)); // default: NotEnforced
+        vm.prank(bot);
+        vm.expectRevert(abi.encodeWithSelector(BaseLPManager.OperatorSwapUnverified.selector, _poolId()));
+        mgr.allocate(_swaplessLegs());
+    }
+
+    function _swaplessLegs() internal view returns (BaseLPManager.AllocLeg[] memory legs) {
+        legs = new BaseLPManager.AllocLeg[](1);
+        legs[0] = BaseLPManager.AllocLeg({
+            poolId: poolKeys[P].toId(),
+            zeroForOne: false,
+            swapAmountIn: 0,
+            swapPriceLimit: 0,
+            amount0Desired: 10e18,
+            amount1Desired: 10e18,
+            minLiquidity: 0
+        });
+    }
+
     function test_operatorSwaplessAllocate_inBoundsOracle_succeeds() public {
         MockERC20(Currency.unwrap(poolKeys[P].currency0)).mint(address(mgr), 100e18);
         MockERC20(Currency.unwrap(poolKeys[P].currency1)).mint(address(mgr), 100e18);

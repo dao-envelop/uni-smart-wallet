@@ -14,3 +14,6 @@ docs/
 .env
 
 logdo.md
+
+# agent worktrees and local session state
+.claude/

@@ -292,13 +292,24 @@ contract VolatileLPManager is BaseLPManager {
         }
         if (L < minLiq) revert MinLiquidityNotMet(L, minLiq);
         if (L == 0) revert ZeroLiquidity(); // reject no-op adds (would register a ghost salt)
-        (, BalanceDelta fees) = POOL_MANAGER.modifyLiquidity(
+        (BalanceDelta callerDelta, BalanceDelta fees) = POOL_MANAGER.modifyLiquidity(
             key,
             ModifyLiquidityParams({tickLower: tl, tickUpper: tu, liquidityDelta: int256(uint256(L)), salt: salt}),
             ""
         );
         _skimFees(key, salt, fees);
+        _checkOwed(callerDelta - fees, amount0, amount1);
     }
+
+    /// @dev What the add actually cost, against what the caller was willing to spend. For a hookless
+    /// pool this can only pass — L was sized from those very amounts — so the base implementation does
+    /// nothing and pays no bytes for the comparison. {OpenVolatileLPManager} overrides it: a hook can
+    /// move the price inside `modifyLiquidity`, after the oracle has vouched for it, and then put the
+    /// price back before returning, so the only evidence left is the bill (audit 2026-09-04, R-1).
+    /// @param principal The caller delta net of realized fees: negative on a side the manager pays.
+    /// @param amount0 The desired spend of currency0.
+    /// @param amount1 The desired spend of currency1.
+    function _checkOwed(BalanceDelta principal, uint256 amount0, uint256 amount1) internal virtual {}
 
     // ────────── recenter ──────────
 
