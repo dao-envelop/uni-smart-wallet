@@ -22,8 +22,15 @@ jobs:
           persist-credentials: false
           submodules: recursive
 
+      # Pinned deliberately. The toolchain floats otherwise, and a minor bump has already changed test
+      # semantics under us: forge 1.8 gives each top-level call from a test its own transient storage
+      # (as a real transaction does) where 1.7 leaked it between them, turning four passing
+      # per-transaction tests red without a line of contract code changing. Upgrading should be a commit
+      # someone makes and verifies, not something a build discovers.
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: "1.8.1"
 
       - name: Show Forge version
         run: forge --version

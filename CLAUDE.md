@@ -39,6 +39,12 @@ from <https://developers.uniswap.org/contracts/v4/deployments>); addresses are w
 `foundry.toml` enables `ffi = true`, sets `solc = 0.8.26`, `evm = cancun`, `optimizer_runs = 200`,
 `via_ir = false`, and grants `fs_permissions` for `./script` and `./test`.
 
+**CI pins Forge to 1.8.1** (`.github/workflows/test.yml`) — match it locally (`foundryup --install
+1.8.1`) before trusting a green run. The version matters for more than reproducibility: 1.8 gives each
+top-level call from a test its own transient storage, as a real transaction does, where 1.7 leaked it
+between them. Tests that assert on per-transaction state (the operator call limit) must therefore make
+their calls from one contract, not from two pranked calls — see `TwoInOneTx` in `test/helpers/Mocks.sol`.
+
 ## Architecture
 
 The repo implements **NFT-owned Uniswap V4 LP managers** that interact with the `PoolManager` directly
