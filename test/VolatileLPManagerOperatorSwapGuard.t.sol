@@ -8,7 +8,7 @@ import {VolatileLPManager} from "../src/VolatileLPManager.sol";
 import {SingletonNFTOwned} from "../src/abstract/SingletonNFTOwned.sol";
 import {BaseLPManager} from "../src/BaseLPManager.sol";
 import {V4PositionManager} from "../src/abstract/V4PositionManager.sol";
-import {MockERC20, MockPriceOracle} from "./helpers/Mocks.sol";
+import {MockERC20, MockPriceOracle, TwoInOneTx} from "./helpers/Mocks.sol";
 
 import {PoolManager} from "@uniswap/v4-core/src/PoolManager.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
@@ -270,12 +270,16 @@ contract VolatileLPManagerOperatorSwapGuardTest is Test {
         mgr.setPriceOracle(address(oracle));
         oracle.setMode(MockPriceOracle.Mode.Pass);
 
-        vm.prank(bot);
-        mgr.allocate(_one(_leg(bytes32(uint256(3)), -60, 60, 50e18)));
+        TwoInOneTx batch = new TwoInOneTx();
+        vm.prank(owner);
+        mgr.setOperator(address(batch), true);
 
-        vm.prank(bot);
         vm.expectRevert(SingletonNFTOwned.OperatorOpsPerTx.selector);
-        mgr.allocate(_one(_leg(bytes32(uint256(4)), -60, 60, 50e18)));
+        batch.run(
+            address(mgr),
+            abi.encodeCall(mgr.allocate, (_one(_leg(bytes32(uint256(3)), -60, 60, 50e18)))),
+            abi.encodeCall(mgr.allocate, (_one(_leg(bytes32(uint256(4)), -60, 60, 50e18))))
+        );
     }
 
     /// @dev A fresh transaction clears the transient flag — this is a rate limit, not a one-shot.
@@ -296,6 +300,16 @@ contract VolatileLPManagerOperatorSwapGuardTest is Test {
         mgr.allocate(_one(_leg(bytes32(uint256(6)), -60, 60, 50e18)));
         vm.stopPrank();
         assertGt(mgr.positionOf(bytes32(uint256(6))).liquidity, 0, "owner is unaffected");
+        // ...and the same two calls inside one transaction, which is what the limit actually counts.
+        TwoInOneTx batch = new TwoInOneTx();
+        vm.prank(owner);
+        mgr.transferFrom(owner, address(batch), 1); // the batcher now holds the ownership NFT
+        batch.run(
+            address(mgr),
+            abi.encodeCall(mgr.allocate, (_one(_leg(bytes32(uint256(11)), -60, 60, 50e18)))),
+            abi.encodeCall(mgr.allocate, (_one(_leg(bytes32(uint256(12)), -60, 60, 50e18))))
+        );
+        assertGt(mgr.positionOf(bytes32(uint256(12))).liquidity, 0, "owner is not rate-limited");
     }
 
     /// @dev A multi-leg allocate is ONE authorized call, so the limit does not break it — what it gives
@@ -319,12 +333,16 @@ contract VolatileLPManagerOperatorSwapGuardTest is Test {
         mgr.setPriceOracle(address(oracle));
         oracle.setMode(MockPriceOracle.Mode.Pass);
 
-        vm.prank(bot);
-        mgr.claimFees(SALT);
+        TwoInOneTx batch = new TwoInOneTx();
+        vm.prank(owner);
+        mgr.setOperator(address(batch), true);
 
-        vm.prank(bot);
         vm.expectRevert(SingletonNFTOwned.OperatorOpsPerTx.selector);
-        mgr.allocate(_one(_leg(bytes32(uint256(9)), -60, 60, 50e18)));
+        batch.run(
+            address(mgr),
+            abi.encodeCall(mgr.claimFees, (SALT)),
+            abi.encodeCall(mgr.allocate, (_one(_leg(bytes32(uint256(9)), -60, 60, 50e18))))
+        );
     }
 
     // ────────── owner: full freedom (bypasses the guard) ──────────

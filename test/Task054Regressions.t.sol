@@ -9,6 +9,7 @@ import {ChainlinkPriceOracle} from "../src/oracle/ChainlinkPriceOracle.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {UniLens} from "../src/UniLens.sol";
 import {MockAggregator} from "./ChainlinkPriceOracle.t.sol";
+import {TwoInOneTx} from "./helpers/Mocks.sol";
 
 /// @notice Regressions for task_054, against the two HIGH findings of the fix review.
 ///
@@ -46,9 +47,16 @@ contract Task054Regressions is RedTeamBase {
         _boot(3000, 60, 4_000e18, 1_000e18, 1_000e18);
         _openAsOwner(-60, 60, 500e18);
 
-        _recenterAsBot(-120, 120);
+        TwoInOneTx batch = new TwoInOneTx();
+        vm.prank(owner);
+        mgr.setOperator(address(batch), true);
+
         vm.expectRevert(SingletonNFTOwned.OperatorOpsPerTx.selector);
-        _recenterAsBot(-180, 180);
+        batch.run(
+            address(mgr),
+            abi.encodeCall(mgr.recenter, (_ownerRecenter(-120, 120))),
+            abi.encodeCall(mgr.recenter, (_ownerRecenter(-180, 180)))
+        );
     }
 
     /// @dev The owner is not rate-limited — the limit is about a delegated key, not about the manager.

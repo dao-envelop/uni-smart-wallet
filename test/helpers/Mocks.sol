@@ -102,6 +102,30 @@ contract MockPriceOracle is IPriceOracle {
     }
 }
 
+/// @notice Performs two calls inside ONE external call — the only way to express "the same
+/// transaction" that does not depend on how the test runner scopes transient storage. forge 1.8 gives
+/// each top-level call from a test its own transient state, as a real transaction would; 1.7 leaked it
+/// across them, so a test written as two `vm.prank`ed calls passed locally and failed in CI while the
+/// guard itself was correct either way. It is also how the attack is actually shaped: the drain that
+/// motivated the per-transaction limit was a contract operator looping calls in one transaction.
+contract TwoInOneTx {
+    /// @param target The contract to call twice.
+    /// @param first Calldata for the first call.
+    /// @param second Calldata for the second call; its revert is what a caller usually asserts on.
+    function run(address target, bytes calldata first, bytes calldata second) external {
+        (bool ok1, bytes memory r1) = target.call(first);
+        if (!ok1) _bubble(r1);
+        (bool ok2, bytes memory r2) = target.call(second);
+        if (!ok2) _bubble(r2);
+    }
+
+    function _bubble(bytes memory r) private pure {
+        assembly ("memory-safe") {
+            revert(add(r, 0x20), mload(r))
+        }
+    }
+}
+
 /// @notice A no-op hook that only observes the add/remove-liquidity calls, for the
 /// {OpenVolatileLPManager} suite. It returns its own selector (so v4 accepts the call) and touches no
 /// deltas — deliberately: it proves the manager's ops still work with a hook *in the loop*, without the

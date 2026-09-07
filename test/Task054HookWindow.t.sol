@@ -9,7 +9,7 @@ import {SingletonNFTOwned} from "../src/abstract/SingletonNFTOwned.sol";
 import {VolatileLPManager} from "../src/VolatileLPManager.sol";
 import {V4PositionManager} from "../src/abstract/V4PositionManager.sol";
 import {PositionState} from "../src/lib/PositionState.sol";
-import {MockERC20} from "./helpers/Mocks.sol";
+import {MockERC20, TwoInOneTx} from "./helpers/Mocks.sol";
 import {ChainlinkPriceOracle} from "../src/oracle/ChainlinkPriceOracle.sol";
 import {MockAggregator} from "./ChainlinkPriceOracle.t.sol";
 
@@ -265,9 +265,11 @@ contract Task054HookWindow is Test {
 
         VolatileLPManager.VolatileAllocLeg[] memory second = _legs(-120, 120, 45e18, 45e18);
         second[0].salt = SALT2;
-        vm.prank(bot);
+        TwoInOneTx batch = new TwoInOneTx();
+        vm.prank(owner);
+        mgr.setOperator(address(batch), true);
         vm.expectRevert(SingletonNFTOwned.OperatorOpsPerTx.selector);
-        mgr.allocate(second);
+        batch.run(address(mgr), abi.encodeCall(mgr.allocate, (second)), abi.encodeCall(mgr.allocate, (second)));
 
         assertGt(m0, 0);
     }
