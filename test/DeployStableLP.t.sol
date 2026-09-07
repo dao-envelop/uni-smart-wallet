@@ -208,8 +208,17 @@ contract DeployStableLPConfigTest is Test {
         assertEq(o.sequencerFeed, address(0xFE), "explicit sequencer feed");
         assertEq(uint256(o.gracePeriod), 1800, "explicit grace");
 
+        // The two add-side tolerances are read the same way; they are set per chain, so a silent
+        // fallback to the default would deploy the wrong guard on the chain that needed the override.
+        DeployStableLP.OracleParams memory p =
+            h.readOracle('{"oracleMaxSpotDeviationBps":185,"oracleMaxMidOffsetBps":25}', "");
+        assertEq(uint256(p.maxSpotDeviationBps), 185, "explicit spot tolerance");
+        assertEq(uint256(p.maxMidOffsetBps), 25, "explicit midpoint tolerance");
+
         DeployStableLP.OracleParams memory d = h.readOracle("{}", "");
         assertEq(uint256(d.maxDeviationBps), 100, "default 1%");
+        assertEq(uint256(d.maxSpotDeviationBps), 50, "default spot 0.5%");
+        assertEq(uint256(d.maxMidOffsetBps), 10, "default midpoint 0.1%");
         assertEq(d.sequencerFeed, address(0), "no sequencer feed by default");
         assertEq(uint256(d.gracePeriod), 3600, "default grace 1h");
     }
@@ -288,7 +297,10 @@ contract DeployStableLPSubsetTest is Test {
         // Oracle owned by admin with the configured tolerance.
         assertTrue(address(d.oracle) != address(0), "oracle");
         assertEq(d.oracle.owner(), admin, "oracle owner == admin");
-        assertEq(uint256(d.oracle.maxDeviationBps()), 250, "oracle tolerance");
+        assertEq(uint256(d.oracle.maxDeviationBps()), 250, "oracle swap tolerance");
+        assertEq(uint256(d.oracle.maxSpotDeviationBps()), 50, "oracle spot tolerance");
+        assertEq(uint256(d.oracle.maxMidOffsetBps()), 10, "oracle midpoint tolerance");
+        assertEq(address(d.oracle.POOL_MANAGER()), address(pm), "oracle wired to this chain's PoolManager");
     }
 
     /// @notice A fresh FeeRedeemer this run overrides any fallback treasury for the impls.
