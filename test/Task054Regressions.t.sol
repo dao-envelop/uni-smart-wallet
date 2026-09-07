@@ -7,6 +7,7 @@ import {VolatileLPManager} from "../src/VolatileLPManager.sol";
 import {SingletonNFTOwned} from "../src/abstract/SingletonNFTOwned.sol";
 import {ChainlinkPriceOracle} from "../src/oracle/ChainlinkPriceOracle.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {UniLens} from "../src/UniLens.sol";
 
 /// @notice Regressions for task_054, against the two HIGH findings of the fix review.
 ///
@@ -76,6 +77,25 @@ contract Task054Regressions is RedTeamBase {
         uint256 lostBps = before > _managerValue() ? (before - _managerValue()) * 10_000 / before : 0;
         console2.log("one vouched-for operation, coarse pool - manager loss (bps):", lostBps);
         assertLt(lostBps, 100, "a single operation cannot take a percent");
+    }
+
+    /// @dev The same verdict a UI reads before offering a pool: on a Volatile manager the rule applies,
+    /// so a lattice finer than the tolerance is reported unusable rather than discovered by a revert.
+    function test_R2_lensReportsThePoolVerdict() public {
+        _boot(100, 1, 4_000e18, 0, 1_000e18); // spacing 1 against a 50 bps tolerance
+        UniLens lens = new UniLens();
+
+        UniLens.OracleStatus memory st = lens.oracleStatus(address(mgr));
+        assertEq(st.maxSpotDeviationBps, 50, "the tolerance a UI needs is surfaced");
+        assertEq(st.pools.length, 1, "one verdict per configured pool");
+        assertEq(st.pools[0].tickSpacing, int24(1), "spacing surfaced");
+        assertFalse(st.pools[0].operatorMayAdd, "spacing 1 under a 50 bps tolerance is refused");
+
+        // And the verdict tracks the tolerance, since that is what the rule is written against.
+        vm.prank(oracle.owner());
+        oracle.setMaxSpotDeviationBps(1);
+        st = lens.oracleStatus(address(mgr));
+        assertTrue(st.pools[0].operatorMayAdd, "at a 1 bps tolerance the same pool is usable");
     }
 
     function _ownerRecenter(int24 tl, int24 tu) internal pure returns (VolatileLPManager.RecenterParams memory) {

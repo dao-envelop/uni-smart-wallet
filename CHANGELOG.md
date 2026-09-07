@@ -44,6 +44,12 @@ All notable changes to this project are documented here. The format is based on
   aggregator's `minAnswer`/`maxAnswer` now counts as no reference rather than a price to act on.
 - `StableLPManager._addLiquidity` takes the pool's `Range` struct instead of two loose ticks (stack
   budget, no behaviour change).
+- **`UniLens.oracleStatus` answers the operator question, not just the swap one** (task_054) — it now
+  surfaces `maxSpotDeviationBps` alongside the swap tolerance, and a `PoolOperatorInfo` per configured
+  pool saying whether an operator may add there at all. That verdict needs both halves and neither is
+  in the pool: `tickSpacing` comes from the manager's configuration, the tolerance from the oracle. A
+  UI can grey out a pool instead of letting a bot discover it through a revert. **`OracleStatus` gains
+  two fields — an ABI change for anyone decoding the struct.**
 - **Oracle hardening** (task_054) — `MAX_TOKEN_DECIMALS` drops to 24, above which the spot branch's own
   result overflows at ticks inside `MAX_TICK`; aggregator decimals are bounded at registration; the
   reference price keeps a live feed answer inside `mulDiv`; prices below a resolution floor decline
