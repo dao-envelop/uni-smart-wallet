@@ -161,8 +161,15 @@ contract ChainlinkPriceOracleTest is Test {
     }
 
     function test_setFeed_maxTokenDecimals_ok() public {
-        oracle.setFeed(c0, address(feed0), HEARTBEAT, 36); // boundary allowed
-        assertTrue(oracle.check(key, true, 1e18, 2000e18), "36 decimals accepted");
+        // 24, not 36: above that the spot branch's own result overflows at ticks inside MAX_TICK, and
+        // FullMath fails with a bare revert instead of this contract's "no opinion" (audit R-10).
+        oracle.setFeed(c0, address(feed0), HEARTBEAT, 24); // boundary allowed
+        assertTrue(oracle.check(key, true, 1e18, 2000e18), "24 decimals accepted");
+    }
+
+    function test_setFeed_aboveMaxTokenDecimals_reverts() public {
+        vm.expectRevert(abi.encodeWithSelector(ChainlinkPriceOracle.TokenDecimalsTooLarge.selector, uint8(25)));
+        oracle.setFeed(c0, address(feed0), HEARTBEAT, 25);
     }
 
     // ────────── H-1: L2 sequencer uptime gate ──────────

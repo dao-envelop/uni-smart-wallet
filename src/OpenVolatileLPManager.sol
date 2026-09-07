@@ -5,6 +5,7 @@
 pragma solidity ^0.8.20;
 
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {BaseLPManager} from "./BaseLPManager.sol"; // for `@inheritdoc` only — already in the chain
 import {VolatileLPManager} from "./VolatileLPManager.sol";
 
@@ -75,6 +76,32 @@ contract OpenVolatileLPManager is VolatileLPManager {
     /// @notice The NFT symbol — the shared constant `"eOpenLP"` for every clone.
     function symbol() public pure override returns (string memory) {
         return "eOpenLP";
+    }
+
+    /// @inheritdoc VolatileLPManager
+    /// @dev Re-checks the price **after** the add. The base implementation reads `slot0`, asks the
+    /// oracle to vouch for it, and only then calls `modifyLiquidity` — which is safe exactly as long as
+    /// nothing can execute in between. In this product something can: v4 invokes `beforeAddLiquidity`
+    /// inside `modifyLiquidity` while the lock is still open, so a hook may re-enter `PoolManager.swap`,
+    /// move the price and settle its own deltas. The oracle's vouch then describes a price that no
+    /// longer exists when v4 computes what the manager owes — 44.997% of a portfolio in one approved
+    /// call (audit 2026-09-04, R-1). Asking again afterwards makes the guarantee "the price was in
+    /// bounds and still is", which is what the caller assumed all along.
+    ///
+    /// The hookless products cannot reach this: `key.hooks == address(0)` leaves no callback to warp
+    /// from, so they do not pay for the second check.
+    function _addLiquidityAt(
+        PoolKey memory key,
+        int24 tl,
+        int24 tu,
+        bytes32 salt,
+        uint256 amount0,
+        uint256 amount1,
+        uint128 minLiq,
+        bool byOwner
+    ) internal override returns (uint128 L) {
+        L = super._addLiquidityAt(key, tl, tu, salt, amount0, amount1, minLiq, byOwner);
+        _guardSwap(byOwner, key, true, 0, 0);
     }
 
     function _productName() internal pure override returns (string memory) {

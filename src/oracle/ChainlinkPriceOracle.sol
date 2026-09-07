@@ -20,6 +20,13 @@ interface IAggregatorV3 {
         returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound);
 }
 
+/// @dev The product-identity probe. `ORACLE_TYPE` is the Envelop oracle discriminator every manager
+/// already publishes (3000 Stable, 3001 Volatile, 3002 Open); the spot branch reads it to decide whether
+/// the tick-spacing rule applies. A manager that lies about it only weakens its own guard.
+interface IProductId {
+    function ORACLE_TYPE() external view returns (uint256);
+}
+
 /// @dev Circuit-breaker surface. `minAnswer`/`maxAnswer` live on the *underlying* aggregator, not on the
 /// proxy that is normally registered as the feed — hence `aggregator()` to hop from one to the other.
 /// Every call site probes these with `try`: most modern feeds expose none of them.
@@ -84,20 +91,39 @@ contract ChainlinkPriceOracle is IPriceOracle, Ownable2Step {
     /// @notice Allowed downward deviation of realized output vs the reference-implied output, in bps.
     uint16 public maxDeviationBps;
 
-    /// @notice Allowed deviation, in bps and in **either** direction, of a pool's `slot0` price vs the
+    /// @notice Allowed deviation, in bps and in either direction, of a pool's `slot0` price vs the
     /// reference-implied price. Gates operator liquidity adds.
+    /// @dev The deviation is normalized by the reference, so the two directions are not exactly equal
+    /// widths measured against the pool's own price: at 50 bps the gap is 1.03x and immaterial, at the
+    /// 1000 bps cap a pool skewed down may sit 1.22x further out than one skewed up (audit R-15).
+    /// It also gates which pools an operator may touch at all — see {SpacingFinerThanTolerance}, and
+    /// note that *raising* this narrows that set.
     uint16 public maxSpotDeviationBps;
 
     /// @notice The v4 `PoolManager` whose `slot0` the spot branch reads.
     IPoolManager public immutable POOL_MANAGER;
 
-    /// @notice Upper bound on `tokenDecimals` accepted by {setFeed}, so that every power of ten these
-    /// decimals reach stays well inside `uint256`: `10 ** (feedDecimals + tokenDecimals)` in the swap
-    /// branch, which leaves room up to a combined 77, and `Q96 * 10 ** tokenDecimals` in the spot one,
-    /// which is the binding constraint — `2**96` eats 29 orders of magnitude, leaving room up to 48.
-    /// Raise this and the spot branch is what breaks first. Feed decimals come from the aggregator and
-    /// are not bounded here; the owner picks the aggregator.
-    uint8 internal constant MAX_TOKEN_DECIMALS = 36;
+    /// @notice Upper bound on `tokenDecimals` accepted by {setFeed}. The binding constraint is not any
+    /// intermediate but the spot branch's *result*: `poolPrice` is the human price scaled by 1e18, so it
+    /// overflows `uint256` once the price passes ~1.16e59 — which a wide decimal gap reaches at ordinary
+    /// ticks. At 36 decimals against 0 that happens at tick 531,087, well inside `MAX_TICK`, and
+    /// `FullMath.mulDiv` fails there with a bare revert rather than this contract's "no opinion".
+    /// At 24 the same limit sits past `MAX_TICK`, so no legal pool price can reach it (audit R-10).
+    /// The swap branch is looser: `10 ** (feedDecimals + tokenDecimals)` allows a combined 77.
+    /// Feed decimals come from the aggregator and are bounded separately in {setFeed}.
+    uint8 internal constant MAX_TOKEN_DECIMALS = 24;
+
+    /// @notice Upper bound on an aggregator's own `decimals()`. Chainlink publishes 8 or 18; anything
+    /// beyond this would overflow `(10 ** feedDecimals) * WAD` in the reference price and revert with a
+    /// panic instead of declining to judge (audit R-11).
+    uint8 internal constant MAX_FEED_DECIMALS = 36;
+
+    /// @notice Floor on both computed prices before a deviation is derived from them. Each price is an
+    /// integer, so the comparison's resolution is `10_000 / price` bps; below this floor that grid is
+    /// coarser than the tolerance it is compared against, and truncation shifts the accepted corridor off
+    /// the reference rather than merely widening it — accepting up to 96 bps at a 50 bps setting in the
+    /// measured case. Declining to judge is the safe answer (audit R-3).
+    uint256 internal constant MIN_PRICE_RESOLUTION = 1e6;
 
     /// @notice Hard ceiling on both tolerances. Without it the oracle owner could raise a tolerance to
     /// 99.99% and leave the guard nominally wired but economically absent (audit 2026-09-04, M-1).
@@ -128,6 +154,10 @@ contract ChainlinkPriceOracle is IPriceOracle, Ownable2Step {
     error InvalidBps(uint16 bps);
     error PriceOutOfBounds(uint256 amountOut, uint256 minOut);
     error SpotPriceOutOfBounds(uint256 poolPrice, uint256 referencePrice);
+    /// @notice The pool's tick lattice is finer than the spot tolerance, so an operator could park
+    /// principal inside the accepted corridor and extract on every operation (audit 2026-09-04, R-2).
+    error SpacingFinerThanTolerance(int24 tickSpacing, uint16 maxSpotDeviationBps);
+    error FeedDecimalsTooLarge(uint8 feedDecimals);
     error TokenDecimalsTooLarge(uint8 tokenDecimals);
 
     /// @param owner_ The protocol admin allowed to configure feeds / tolerances.
@@ -154,12 +184,15 @@ contract ChainlinkPriceOracle is IPriceOracle, Ownable2Step {
 
     /// @notice Register (or clear, with `aggregator == address(0)`) a currency's USD feed. Owner-only.
     /// @dev Also caches the aggregator's circuit-breaker bounds. Chainlink can swap the aggregator behind
-    /// a proxy (a phase change), which leaves the cache stale — re-run `SetOracleFeeds` after one.
+    /// a proxy (a phase change), which leaves that cache describing an aggregator that is no longer
+    /// live; {refreshBounds} is what corrects it — re-running `SetOracleFeeds` does not, because it
+    /// skips a currency whose registered triple is unchanged.
     function setFeed(Currency currency, address aggregator, uint32 heartbeat, uint8 tokenDecimals) external onlyOwner {
         if (aggregator != address(0) && tokenDecimals > MAX_TOKEN_DECIMALS) {
             revert TokenDecimalsTooLarge(tokenDecimals);
         }
         uint8 fd = aggregator == address(0) ? 0 : IAggregatorV3(aggregator).decimals();
+        if (fd > MAX_FEED_DECIMALS) revert FeedDecimalsTooLarge(fd);
         feeds[currency] =
             Feed({aggregator: aggregator, heartbeat: heartbeat, feedDecimals: fd, tokenDecimals: tokenDecimals});
         emit FeedSet(currency, aggregator, heartbeat, tokenDecimals);
@@ -167,6 +200,24 @@ contract ChainlinkPriceOracle is IPriceOracle, Ownable2Step {
         Bounds memory b = aggregator == address(0) ? Bounds(0, 0) : _readBounds(aggregator);
         feedBounds[currency] = b;
         emit FeedBoundsSet(currency, b.minAnswer, b.maxAnswer);
+    }
+
+    /// @notice Re-read the cached circuit-breaker bounds for the given currencies. Owner-only.
+    /// @dev Chainlink can replace the aggregator behind a registered proxy (a phase change), which
+    /// leaves {feedBounds} describing an aggregator that is no longer live. Re-running `SetOracleFeeds`
+    /// does not fix it — that script skips a currency whose `(aggregator, heartbeat, tokenDecimals)`
+    /// still match, and a phase change leaves all three identical (audit 2026-09-04, R-13). This is the
+    /// operation that does. Currencies with no feed are skipped rather than reverting, so a whole set
+    /// can be refreshed in one call.
+    /// @param currencies The managed currencies to re-read.
+    function refreshBounds(Currency[] calldata currencies) external onlyOwner {
+        for (uint256 i = 0; i < currencies.length; ++i) {
+            address aggregator = feeds[currencies[i]].aggregator;
+            if (aggregator == address(0)) continue;
+            Bounds memory b = _readBounds(aggregator);
+            feedBounds[currencies[i]] = b;
+            emit FeedBoundsSet(currencies[i], b.minAnswer, b.maxAnswer);
+        }
     }
 
     /// @notice Update the swap deviation tolerance (bps, ≤ {MAX_DEVIATION_CAP}). Owner-only.
@@ -277,6 +328,19 @@ contract ChainlinkPriceOracle is IPriceOracle, Ownable2Step {
     /// when either side lacks a fresh reference, the pool is uninitialized, or a price degenerates to
     /// zero (no opinion — the manager fail-closes that for operators).
     function _checkSpot(PoolKey calldata key) internal view returns (bool enforced) {
+        // A pool whose tick lattice is finer than the tolerance lets an operator park principal wholly
+        // inside the corridor between the reference and the edge of the band, and extract
+        // `tolerance − tickSpacing/2 − poolFee` on every operation, repeatably (audit 2026-09-04, R-2).
+        // Once `tickSpacing >= tolerance` no aligned range fits in that corridor at all.
+        //
+        // Scoped to the products that let an operator choose the range: `StableLPManager` writes
+        // `rangeOf` only in `initialize` and has no operator path that frees principal, so the parking
+        // attack cannot reach it — and most stable pools are spacing 1, which this rule would otherwise
+        // put out of reach for no gain. A caller that misreports its type only weakens its own guard.
+        if (key.tickSpacing < int24(uint24(maxSpotDeviationBps)) && !_isFixedRangeProduct(msg.sender)) {
+            revert SpacingFinerThanTolerance(key.tickSpacing, maxSpotDeviationBps);
+        }
+
         (uint256 a0, uint8 fd0, uint8 td0, bool ok0) = _read(key.currency0);
         (uint256 a1, uint8 fd1, uint8 td1, bool ok1) = _read(key.currency1);
         if (!ok0 || !ok1) return false;
@@ -289,14 +353,32 @@ contract ChainlinkPriceOracle is IPriceOracle, Ownable2Step {
         uint256 priceX96 = FullMath.mulDiv(uint256(sqrtP), uint256(sqrtP), Q96);
         uint256 poolPrice = FullMath.mulDiv(priceX96, WAD * (10 ** td0), Q96 * (10 ** td1));
         // Reference price implied by the two USD feeds: usd0/usd1, same units.
-        uint256 refPrice = FullMath.mulDiv(a0, (10 ** fd1) * WAD, a1 * (10 ** fd0));
-        if (poolPrice == 0 || refPrice == 0) return false;
+        // `a1` is a live feed answer: keep it inside `mulDiv`'s 512-bit intermediate rather than
+        // multiplying it out first, so an absurd answer declines instead of panicking (audit R-11).
+        uint256 refPrice = FullMath.mulDiv(FullMath.mulDiv(a0, 10 ** fd1, a1), WAD, 10 ** fd0);
+        // Below the resolution floor the integer grid these prices sit on is coarser than the tolerance
+        // being applied to them, so the verdict would be noise in either direction (audit R-3).
+        if (priceX96 < MIN_PRICE_RESOLUTION || poolPrice < MIN_PRICE_RESOLUTION || refPrice < MIN_PRICE_RESOLUTION) {
+            return false;
+        }
 
         uint256 diff = poolPrice > refPrice ? poolPrice - refPrice : refPrice - poolPrice;
         if (FullMath.mulDiv(diff, 10_000, refPrice) > maxSpotDeviationBps) {
             revert SpotPriceOutOfBounds(poolPrice, refPrice);
         }
         return true;
+    }
+
+    /// @dev Whether the caller is a product whose ranges are fixed at initialization, and which is
+    /// therefore out of reach of the parking attack the tick-spacing rule exists to stop. `try` because
+    /// `check` is also called by things that are not managers at all — tests, the lens, a router.
+    /// @param caller The address that called {check}; the manager, in production.
+    function _isFixedRangeProduct(address caller) internal view returns (bool) {
+        try IProductId(caller).ORACLE_TYPE() returns (uint256 t) {
+            return t == 3000; // StableLPManager
+        } catch {
+            return false; // not a manager, or one that will not say ⇒ the rule applies
+        }
     }
 
     /// @dev Read a currency's reference: (answer, feedDecimals, tokenDecimals, fresh?).

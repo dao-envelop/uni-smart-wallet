@@ -19,7 +19,12 @@ contract MockBoundedAggregator is MockAggregator {
     address public aggregator;
 
     constructor(uint8 d, int256 a, uint256 t, int192 lo, int192 hi) MockAggregator(d, a, t) {
-        aggregator = address(new MockBounds(lo, hi));
+        if (lo != 0 || hi != 0) aggregator = address(new MockBounds(lo, hi));
+    }
+
+    /// @dev A Chainlink phase change: the proxy keeps its address, the aggregator behind it does not.
+    function setUnderlying(address a) external {
+        aggregator = a;
     }
 }
 
@@ -30,6 +35,15 @@ contract MockBounds {
     constructor(int192 lo, int192 hi) {
         minAnswer = lo;
         maxAnswer = hi;
+    }
+}
+
+/// @notice Stands in for a manager: all the oracle asks of one is its Envelop product discriminator.
+contract MockProduct {
+    uint256 public immutable ORACLE_TYPE;
+
+    constructor(uint256 t) {
+        ORACLE_TYPE = t;
     }
 }
 
@@ -50,7 +64,9 @@ contract ChainlinkPriceOracleSpotTest is Test {
 
     uint16 internal constant SWAP_DEV_BPS = 100; // 1%
     uint16 internal constant SPOT_DEV_BPS = 50; // 0.5%
-    int24 internal constant SPACING = 1;
+    // 60, not 1: since the tick-spacing rule a pool finer than the tolerance is refused outright, so a
+    // spacing-1 fixture would test nothing but that rule. Its own cases live in the section at the end.
+    int24 internal constant SPACING = 60;
 
     function setUp() public {
         vm.warp(100_000);
@@ -164,6 +180,101 @@ contract ChainlinkPriceOracleSpotTest is Test {
         _initAt(0);
         oracle.setFeed(c1, address(new MockAggregator(18, int256(1e18), block.timestamp)), 3600, 18);
         assertTrue(oracle.check(key, true, 0, 0), "feed decimals normalized");
+    }
+
+    // ────────── R-2: the tick-spacing rule ──────────
+
+    /// @dev A pool whose lattice is finer than the tolerance lets an operator park principal inside the
+    /// accepted corridor and extract on every operation. Once spacing >= tolerance, nothing fits.
+    function test_spacing_finerThanTolerance_reverts() public {
+        PoolKey memory fine = _keyWith(1);
+        poolManager.initialize(fine, TickMath.getSqrtPriceAtTick(0));
+        vm.expectRevert(
+            abi.encodeWithSelector(ChainlinkPriceOracle.SpacingFinerThanTolerance.selector, int24(1), SPOT_DEV_BPS)
+        );
+        oracle.check(fine, true, 0, 0);
+    }
+
+    function test_spacing_atTolerance_allowed() public {
+        PoolKey memory atEdge = _keyWith(int24(uint24(SPOT_DEV_BPS))); // spacing == tolerance
+        poolManager.initialize(atEdge, TickMath.getSqrtPriceAtTick(0));
+        assertTrue(oracle.check(atEdge, true, 0, 0), "spacing == tolerance leaves no room to park");
+    }
+
+    /// @dev The rule follows the tolerance, so raising the tolerance NARROWS the set of usable pools.
+    function test_spacing_ruleFollowsTheTolerance() public {
+        PoolKey memory k10 = _keyWith(10);
+        poolManager.initialize(k10, TickMath.getSqrtPriceAtTick(0));
+        oracle.setMaxSpotDeviationBps(10);
+        assertTrue(oracle.check(k10, true, 0, 0), "spacing 10 is fine at a 10 bps tolerance");
+        oracle.setMaxSpotDeviationBps(11);
+        vm.expectRevert(
+            abi.encodeWithSelector(ChainlinkPriceOracle.SpacingFinerThanTolerance.selector, int24(10), uint16(11))
+        );
+        oracle.check(k10, true, 0, 0);
+    }
+
+    /// @dev The swap branch is unaffected: it judges a realized price, and no range is being placed.
+    function test_spacing_ruleDoesNotTouchTheSwapBranch() public {
+        PoolKey memory fine = _keyWith(1);
+        poolManager.initialize(fine, TickMath.getSqrtPriceAtTick(0));
+        assertTrue(oracle.check(fine, true, 1e18, 1e18), "a swap in a fine-spacing pool is still judged");
+    }
+
+    /// @dev StableLPManager fixes its ranges at initialization, so an operator cannot park one and the
+    /// rule would only cost it pools — most stable pairs are spacing 1.
+    function test_spacing_fixedRangeProductIsExempt() public {
+        PoolKey memory fine = _keyWith(1);
+        poolManager.initialize(fine, TickMath.getSqrtPriceAtTick(0));
+        MockProduct stable = new MockProduct(3000);
+        vm.prank(address(stable));
+        assertTrue(oracle.check(fine, true, 0, 0), "a fixed-range product is exempt");
+
+        MockProduct volatile_ = new MockProduct(3001);
+        vm.prank(address(volatile_));
+        vm.expectRevert(
+            abi.encodeWithSelector(ChainlinkPriceOracle.SpacingFinerThanTolerance.selector, int24(1), SPOT_DEV_BPS)
+        );
+        oracle.check(fine, true, 0, 0);
+    }
+
+    /// @dev A caller that is not a manager at all gets the rule, not an exemption.
+    function test_spacing_nonManagerCallerGetsTheRule() public {
+        PoolKey memory fine = _keyWith(1);
+        poolManager.initialize(fine, TickMath.getSqrtPriceAtTick(0));
+        vm.expectRevert(
+            abi.encodeWithSelector(ChainlinkPriceOracle.SpacingFinerThanTolerance.selector, int24(1), SPOT_DEV_BPS)
+        );
+        oracle.check(fine, true, 0, 0); // this test contract has no ORACLE_TYPE
+    }
+
+    /// @dev Same pair, a different lattice — a fresh pool, since tickSpacing is part of the PoolKey.
+    function _keyWith(int24 spacing) internal view returns (PoolKey memory) {
+        return PoolKey({currency0: c0, currency1: c1, fee: 3000, tickSpacing: spacing, hooks: IHooks(address(0))});
+    }
+
+    // ────────── R-13: refreshing a stale bounds cache ──────────
+
+    function test_refreshBounds_rereadsAfterAPhaseChange() public {
+        MockBoundedAggregator agg = new MockBoundedAggregator(8, int256(1e8), block.timestamp, 0, 0);
+        oracle.setFeed(c0, address(agg), 3600, 18);
+        (int128 lo0,) = oracle.feedBounds(c0);
+        assertEq(lo0, int128(0), "no bounds cached at first");
+
+        agg.setUnderlying(address(new MockBounds(int192(1e7), int192(1e12)))); // Chainlink phase change
+        Currency[] memory cs = new Currency[](1);
+        cs[0] = c0;
+        oracle.refreshBounds(cs);
+
+        (int128 lo, int128 hi) = oracle.feedBounds(c0);
+        assertEq(lo, int128(1e7), "minAnswer picked up");
+        assertEq(hi, int128(1e12), "maxAnswer picked up");
+    }
+
+    function test_refreshBounds_skipsUnconfiguredCurrencies() public {
+        Currency[] memory cs = new Currency[](1);
+        cs[0] = Currency.wrap(address(0xDEAD));
+        oracle.refreshBounds(cs); // must not revert
     }
 
     // ────────── M-1: the owner's room to disable the guard ──────────

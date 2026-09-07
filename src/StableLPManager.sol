@@ -293,6 +293,10 @@ contract StableLPManager is BaseLPManager {
         if (leg.swapAmountIn > 0) {
             BalanceDelta sd = _swap(key, leg.zeroForOne, -int256(leg.swapAmountIn), leg.swapPriceLimit);
             int128 inDelta = leg.zeroForOne ? sd.amount0() : sd.amount1();
+            // exactIn: a partial fill (price limit hit) leaves |inDelta| < requested input. Allocate has
+            // always required this; reinvest did not, which also broke the oracle's assumption that a
+            // swap can never reach its guard with a zero input (audit 2026-09-04, R-12).
+            if (uint256(uint128(-inDelta)) < leg.swapAmountIn) revert SwapSlippage(leg.poolId);
             int128 outDelta = leg.zeroForOne ? sd.amount1() : sd.amount0();
             // Operator swaps must be oracle-vouched (fail-closed); owner has full freedom.
             _guardSwap(byOwner, key, leg.zeroForOne, uint256(uint128(-inDelta)), uint256(uint128(outDelta)));

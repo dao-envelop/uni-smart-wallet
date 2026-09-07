@@ -5,6 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import {Clones} from "@openzeppelin/contracts/proxy/Clones.sol";
 
 import {VolatileLPManager} from "../src/VolatileLPManager.sol";
+import {SingletonNFTOwned} from "../src/abstract/SingletonNFTOwned.sol";
 import {BaseLPManager} from "../src/BaseLPManager.sol";
 import {V4PositionManager} from "../src/abstract/V4PositionManager.sol";
 import {MockERC20, MockPriceOracle} from "./helpers/Mocks.sol";
@@ -257,6 +258,73 @@ contract VolatileLPManagerOperatorSwapGuardTest is Test {
         vm.prank(owner);
         mgr.allocate(_one(_leg(bytes32(uint256(3)), -60, 60, 50e18)));
         assertGt(mgr.positionOf(bytes32(uint256(3))).liquidity, 0, "owner add bypasses the spot gate");
+    }
+
+    // ────────── one operator operation per transaction (audit R-2) ──────────
+
+    /// @dev The price guard bounds one operation; nothing bounded how many a transaction could hold, and
+    /// sixty in-tolerance operations removed 24.84% of a portfolio in a single transaction. Inside a
+    /// transaction no watcher can interpose, so the bound sits on the authorization itself.
+    function test_operatorSecondCallInSameTx_reverts() public {
+        vm.prank(owner);
+        mgr.setPriceOracle(address(oracle));
+        oracle.setMode(MockPriceOracle.Mode.Pass);
+
+        vm.prank(bot);
+        mgr.allocate(_one(_leg(bytes32(uint256(3)), -60, 60, 50e18)));
+
+        vm.prank(bot);
+        vm.expectRevert(SingletonNFTOwned.OperatorOpsPerTx.selector);
+        mgr.allocate(_one(_leg(bytes32(uint256(4)), -60, 60, 50e18)));
+    }
+
+    /// @dev A fresh transaction clears the transient flag — this is a rate limit, not a one-shot.
+    function test_operatorFirstCallInAFreshTx_succeeds() public {
+        vm.prank(owner);
+        mgr.setPriceOracle(address(oracle));
+        oracle.setMode(MockPriceOracle.Mode.Pass);
+
+        vm.prank(bot);
+        mgr.allocate(_one(_leg(bytes32(uint256(3)), -60, 60, 50e18)));
+        assertGt(mgr.positionOf(bytes32(uint256(3))).liquidity, 0, "one operation per transaction is allowed");
+    }
+
+    /// @dev The owner is not rate-limited: they carry their own slippage everywhere else too.
+    function test_ownerRepeatedCallsInSameTx_succeed() public {
+        vm.startPrank(owner);
+        mgr.allocate(_one(_leg(bytes32(uint256(5)), -60, 60, 50e18)));
+        mgr.allocate(_one(_leg(bytes32(uint256(6)), -60, 60, 50e18)));
+        vm.stopPrank();
+        assertGt(mgr.positionOf(bytes32(uint256(6))).liquidity, 0, "owner is unaffected");
+    }
+
+    /// @dev A multi-leg allocate is ONE authorized call, so the limit does not break it — what it gives
+    /// up is batching two different operations into one transaction.
+    function test_operatorMultiLegAllocate_isOneCall() public {
+        vm.prank(owner);
+        mgr.setPriceOracle(address(oracle));
+        oracle.setMode(MockPriceOracle.Mode.Pass);
+
+        VolatileLPManager.VolatileAllocLeg[] memory legs = new VolatileLPManager.VolatileAllocLeg[](2);
+        legs[0] = _leg(bytes32(uint256(7)), -60, 60, 40e18);
+        legs[1] = _leg(bytes32(uint256(8)), -120, 120, 40e18);
+        vm.prank(bot);
+        mgr.allocate(legs);
+        assertGt(mgr.positionOf(bytes32(uint256(8))).liquidity, 0, "both legs went in on one call");
+    }
+
+    /// @dev `claimFees` is authorized too, so it spends the transaction's single operator call.
+    function test_operatorClaimThenAllocateInSameTx_reverts() public {
+        vm.prank(owner);
+        mgr.setPriceOracle(address(oracle));
+        oracle.setMode(MockPriceOracle.Mode.Pass);
+
+        vm.prank(bot);
+        mgr.claimFees(SALT);
+
+        vm.prank(bot);
+        vm.expectRevert(SingletonNFTOwned.OperatorOpsPerTx.selector);
+        mgr.allocate(_one(_leg(bytes32(uint256(9)), -60, 60, 50e18)));
     }
 
     // ────────── owner: full freedom (bypasses the guard) ──────────

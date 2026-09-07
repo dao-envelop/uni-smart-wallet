@@ -264,7 +264,9 @@ contract VolatileLPManager is BaseLPManager {
 
     /// @dev Size L from desired amounts at the live price, add under `salt` at [tl,tu], skim the
     /// protocol fee. `minLiq` is the slippage floor on the quantity: L is sized from `amount0`/`amount1`
-    /// via `getLiquidityForAmounts` (L rounded down), so owed ≤ the desired amounts by construction.
+    /// via `getLiquidityForAmounts` (L rounded down), so owed ≤ the desired amounts by construction —
+    /// for a hookless pool. {OpenVolatileLPManager} accepts hooked pools, where a hook that returns a
+    /// delta makes the manager pay whatever the PoolManager says; that product overrides this.
     /// That bounds *how much* is deployed and says nothing about *at what price* — which is why an
     /// operator's add is additionally gated on the oracle's view of the pool's spot price (audit
     /// 2026-09-04, H-1: without it an operator skewed a thin pool, deployed principal into a narrow
@@ -280,7 +282,7 @@ contract VolatileLPManager is BaseLPManager {
         uint256 amount1,
         uint128 minLiq,
         bool byOwner
-    ) internal returns (uint128 L) {
+    ) internal virtual returns (uint128 L) {
         PositionMath.requireValidTickRange(tl, tu, key.tickSpacing);
         {
             (uint160 sqrtP,,,) = POOL_MANAGER.getSlot0(key.toId());
