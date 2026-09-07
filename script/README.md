@@ -190,10 +190,25 @@ consequences for an operator run:
 - a real market move that outruns the feed's heartbeat blocks operator ops until the feed catches up.
   That is the intended trade: the alternative is deploying principal at a price nothing vouches for;
 - the two tolerances are separate. `maxDeviationBps` compares a realized swap output and therefore has
-  to absorb the pool fee; `maxSpotDeviationBps` compares prices and should be tighter — the residual
-  risk after the fix is extraction within `maxSpotDeviationBps - poolFee` per operation, so a spot
-  tolerance at or above the fee tier of the thinnest configured pool gives the guard nothing to do.
-  Size it with `PriceDeviation.s.sol` (basis was 0-3 bps on stable pairs, ~33 bps on ETH/WBTC).
+  to absorb the pool fee; `maxSpotDeviationBps` compares prices and should be tighter. What is left
+  after the guard is `basis + maxSpotDeviationBps - tickSpacing/2 - poolFee` per operation — the basis
+  term matters because the bound is against the *reference*, not against the price the pool reverts to,
+  and it cannot be driven to zero on a pool whose basis exceeds its fee tier. Size the tolerance from a
+  high percentile of the measured basis with `PriceDeviation.s.sol` (0-3 bps on stable pairs, ~33 bps on
+  mainnet ETH/WBTC, 72 bps on Unichain ETH/UNI), per chain rather than globally.
+
+**`maxSpotDeviationBps` also selects which pools an operator may touch, and raising it NARROWS that set.**
+Since task_054 the oracle refuses a pool whose `tickSpacing` is finer than the tolerance
+(`SpacingFinerThanTolerance`): a finer lattice lets an operator park principal inside the accepted
+corridor and take `tolerance - tickSpacing/2 - poolFee` on every operation, repeatably, while the oracle
+approves each one. At `tickSpacing >= tolerance` no aligned range fits in that corridor at all. So a pool
+is both usable and safe exactly when `basis_p99 < maxSpotDeviationBps <= tickSpacing` — pick the two
+together with the pool set, not separately. `StableLPManager` is exempt (it fixes ranges at
+`initialize`, so an operator cannot park one), which is why its spacing-1 stable pools remain available.
+
+An operator also gets **one authorized call per transaction** (`OperatorOpsPerTx`). A multi-leg
+`allocate` is one call; batching two different operations into one transaction is not possible. This
+does not apply to the owner.
 
 The oracle owner is `Ownable2Step`: `transferOwnership` only nominates, and the new owner must call
 `acceptOwnership`. Both tolerances are additionally capped at 1000 bps in the contract, so raising one

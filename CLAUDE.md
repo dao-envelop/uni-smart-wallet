@@ -101,6 +101,15 @@ bleed value through an adverse swap: any **operator-triggered** swap in either p
 swaps bypass the oracle. (Stable has no operator-callable principal-removal path, so its operator exposure
 was idle+fees, not principal; Volatile's `recenter` frees principal, hence the HIGH there.)
 
+Since task_053 the same guard covers operator **liquidity adds**, not only swaps (audit `2026-09-04`
+[H-1]); since task_054 two further bounds sit alongside it. The oracle refuses a pool whose
+`tickSpacing` is finer than its own `maxSpotDeviationBps`, because a finer lattice lets an operator park
+principal inside the accepted corridor and extract on every operation — scoped to the products where an
+operator picks the range, which is why Stable, whose ranges are fixed at `initialize`, is exempt. And an
+operator gets **one authorized call per transaction** (a transient flag on `onlyAuthorized`): the price
+guard bounds one operation, and sixty of them in a single transaction removed 24.84% of a portfolio.
+Neither applies to the owner.
+
 ### Hook policy
 
 **Per product**, decided by `BaseLPManager._hooksAllowed()` and applied in `_registerPool` at init only
@@ -121,6 +130,11 @@ Why the default is load-bearing rather than merely cautious: the **exit path has
 the only quantitative backstop is the aggregate `AmountNotDelivered` check on what reaches the recipient
 — so a hook with `AFTER_REMOVE_LIQUIDITY_RETURNS_DELTA` can skim principal and `_settleManaged` nets the
 shortfall silently. Audit `2026-07-18` still takes hooklessness as a premise **for those two products**.
+
+Audit `2026-09-04` [R-1] added a fourth residual to that list, and it is the sharpest: a hook can move
+the price *inside* `modifyLiquidity`, after the oracle vouched for it, and restore it before returning —
+so `OpenVolatileLPManager` overrides `_checkOwed` to cap what an add may actually bill against what the
+caller offered. The hookless products get that invariant by construction and pay nothing for it.
 
 `OpenVolatileLPManager` (task_043, `ORACLE_TYPE 3002`) exists because forbidding hooked pools outright is
 a product decision the owner should be able to make. It is a separate implementation rather than a flag:

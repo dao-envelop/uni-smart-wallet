@@ -40,12 +40,22 @@ import {VolatileLPManager} from "./VolatileLPManager.sol";
 /// 3. Swap-delta hooks (`BEFORE/AFTER_SWAP_RETURNS_DELTA`) reach the withdraw conversion swaps, which
 ///    carry a `sqrtPriceLimitX96` but **no** `minAmountOut` and do not pass through `_guardSwap`.
 ///
-/// What is NOT on that list, despite hooks now running inside our `unlock`: re-entrancy. v4 reverts a
-/// nested `unlock` (`AlreadyUnlocked`), the callback target is hardcoded to the caller so it cannot be
-/// retargeted at us, a forged direct call is rejected by `NotPoolManager`, and every entry point carries
-/// `nonReentrant` on a shared guard. Audit `2026-05-17` [M-3] claimed otherwise and is resolved NOT
-/// APPLICABLE (task_044) — its recommended fix would in fact brick every operation. So the residual here
-/// is the delta problem in 1-3, not re-entry.
+/// 4. A hook can move the price **inside** `modifyLiquidity`, after the oracle has vouched for it. v4
+///    invokes `beforeAddLiquidity` while the lock is still open, so the hook may re-enter
+///    `PoolManager.swap`, let the add be priced against the moved price, and put the price back before
+///    returning — 44.997% of a portfolio in one approved call (audit `2026-09-04` [R-1]). It needs none
+///    of the delta-returning permissions in 1-3. Re-reading `slot0` afterwards does not catch it; the
+///    bill does, so `_checkOwed` enforces "owed ≤ desired" here rather than assuming it as the hookless
+///    products may. What that bounds is the *spend*, not the price: a hook can still make an add
+///    expensive up to the desired amounts.
+///
+/// This list once ended with a claim that re-entrancy is NOT among the residuals, on the grounds that
+/// v4 reverts a nested `unlock` (`AlreadyUnlocked`), the callback target is hardcoded to the caller, a
+/// forged direct call is rejected by `NotPoolManager`, and every entry point carries `nonReentrant`. All
+/// of that is true and none of it helps: item 4 re-enters `PoolManager`, not this contract, from inside
+/// a callback this contract is waiting on. Audit `2026-05-17` [M-3] remains NOT APPLICABLE as written
+/// (task_044) — its recommended fix would brick every operation — but the conclusion drawn from it, that
+/// hooks running inside our `unlock` cannot reach us, was too broad.
 ///
 /// Pools are still deduped by `poolId` and capped at `MAX_POOLS`, and the hook set is fixed at
 /// `initialize` — an operator can only ever name a `PoolId` already in the configured set.
