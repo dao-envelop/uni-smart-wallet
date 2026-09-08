@@ -391,10 +391,31 @@ contract GasCompareVolatileForkTest is Test {
         });
     }
 
+    /// @dev The operator's re-range: same midpoint as the live pool, twice the width. Since task_054 an
+    /// operator may not park a range away from the reference (`PositionOffReference`), so the shifted
+    /// {_recenterParams} shape is an owner-only freedom.
+    function _recenterParamsCentred(bytes32 salt) internal view returns (VolatileLPManager.RecenterParams memory) {
+        return VolatileLPManager.RecenterParams({
+            salt: salt,
+            newTickLower: baseTick - 2 * W,
+            newTickUpper: baseTick + 2 * W,
+            zeroForOne: true,
+            swapAmountIn: 0.1e18,
+            swapPriceLimit: TickMath.MIN_SQRT_PRICE + 1,
+            minAmountOut: 0,
+            minLiquidity: 0
+        });
+    }
+
     /// @dev Deploy the real {ChainlinkPriceOracle} wired to the live Base ETH/USD + USDC/USD feeds. A
     /// large heartbeat keeps the fork-block answers "fresh" so `check` returns `enforced = true`.
-    function _chainlinkOracle(uint16 maxDevBps, uint16 maxSpotDevBps) internal returns (ChainlinkPriceOracle oracle) {
-        oracle = new ChainlinkPriceOracle(address(this), POOL_MANAGER, maxDevBps, maxSpotDevBps, 10, address(0), 3600);
+    function _chainlinkOracle(uint16 maxDevBps, uint16 maxSpotDevBps, uint16 maxMidOffsetBps)
+        internal
+        returns (ChainlinkPriceOracle oracle)
+    {
+        oracle = new ChainlinkPriceOracle(
+            address(this), POOL_MANAGER, maxDevBps, maxSpotDevBps, maxMidOffsetBps, address(0), 3600
+        );
         oracle.setFeed(Currency.wrap(WETH), ETH_USD_FEED, 365 days, 18);
         oracle.setFeed(Currency.wrap(USDC), USDC_USD_FEED, 365 days, 6);
     }
@@ -425,16 +446,20 @@ contract GasCompareVolatileForkTest is Test {
         uint256 gOwner = g - gasleft();
 
         // Wire the real Chainlink oracle (5% tolerance) + an operator bot.
-        ChainlinkPriceOracle oracle = _chainlinkOracle(500, 500);
+        // 5% on all three tolerances: this case measures the operator's gas overhead, not how tight the
+        // guard can be. The mid-offset bound must clear the live pool-vs-feed basis (~50 bps on this
+        // 0.3% pool), which the centred range below is still measured against.
+        ChainlinkPriceOracle oracle = _chainlinkOracle(500, 500, 500);
         vm.startPrank(owner);
         mgr.setPriceOracle(address(oracle));
         mgr.setOperator(bot, true);
         vm.stopPrank();
 
-        // Operator recenter: small swap, realized price ~= reference (fee only) -> oracle vouches.
+        // Operator recenter: small swap, realized price ~= reference (fee only), and a range centred on
+        // the pool -> oracle vouches. The owner's shifted range above would trip `PositionOffReference`.
         vm.prank(bot);
         g = gasleft();
-        mgr.recenter(_recenterParams(sBot));
+        mgr.recenter(_recenterParamsCentred(sBot));
         uint256 gOperator = g - gasleft();
 
         assertGt(mgr.positionOf(sOwner).liquidity, 0, "owner recenter");
@@ -466,7 +491,9 @@ contract GasCompareVolatileForkTest is Test {
         if (!forkActive) return;
         bytes32 s = bytes32(uint256(1));
         VolatileLPManager mgr = _freshManagerWithPosition(s);
-        ChainlinkPriceOracle oracle = _chainlinkOracle(10, 500); // 0.10% swap tolerance; the spot branch is not what this case is about
+        // 0.10% swap tolerance; the spot/mid branches are not what this case is about — the swap is
+        // gated first, so the recenter reverts before the add is ever checked.
+        ChainlinkPriceOracle oracle = _chainlinkOracle(10, 500, 10);
         vm.startPrank(owner);
         mgr.setPriceOracle(address(oracle));
         mgr.setOperator(bot, true);
