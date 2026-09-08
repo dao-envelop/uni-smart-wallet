@@ -234,13 +234,39 @@ Parallel arrays consumed by `SetOracleFeeds`:
 ```
 
 - `token` — the currency as the manager sees it; `address(0)` for native ETH.
-- `symbol` — a key in `oracle_feeds.json` for that chain (`BTC` serves wrapped BTC on chains with no
-  `WBTC` entry).
+- `symbol` — a key in `oracle_feeds.json` for that chain. Several tokens may share one symbol: native
+  ETH and WETH both price off `ETH/USD`, bridged USDC off `USDC/USD`. Wrapped BTC rides `BTC` rather
+  than `WBTC` wherever the wrapper's own feed is slower than the market — see the note in each file.
 - `decimals` — the **token's own** ERC-20 decimals (18 for native). Feed decimals are not listed here:
   `setFeed` caches them from the aggregator.
 
+Wire every currency the chain has a feed for, not only the ones the current pools use: since task_053
+an operator can neither swap nor add liquidity in a pool whose currency has no feed, so a short list
+silently decides which pools an operator may ever be given. Verify each address on-chain (`symbol()`,
+`decimals()`) before adding it — nothing downstream checks that an aggregator is the pair it claims to
+be, and `setFeed` will happily register a wrong one.
+
 Overrides: `ORACLE` (skip the `deployments` lookup), `TOKENS_CONFIG`, `FEEDS_CONFIG`. The broadcaster must
 be the oracle owner — the script reverts `NotOracleOwner` before touching anything otherwise.
+
+### Sizing `maxSpotDeviationBps` — `basis_sample.py`
+
+The oracle's spot tolerance has to sit above the basis an honest pool actually shows and below the
+skew an attacker would need. The basis moves with feed cadence and market noise, so one reading
+cannot size it — twice now a snapshot has produced a tolerance that later readings walked into.
+
+```bash
+script/basis_sample.py --rounds 8 --interval 300 --json /tmp/basis.json
+```
+
+Read-only, no keys. It runs `PriceDeviation.s.sol` across the four measurable chains on a timer,
+reports max / p95 / median per pool, reads the **live** `maxSpotDeviationBps` off each deployed oracle
+(not the config), and exits 2 when a chain's tolerance is under 1.25x its worst observed basis.
+Raising a tolerance is `setMaxSpotDeviationBps` on the oracle — owner-only, capped at
+`MAX_DEVIATION_CAP = 1000`, no redeploy.
+
+When one asset's basis stands out, check its feed's age before blaming the pool: a 24 h-heartbeat feed
+drifts from the market by design, and the gate reads that drift as a skewed pool.
 
 ### CreateManager — universal factory
 
