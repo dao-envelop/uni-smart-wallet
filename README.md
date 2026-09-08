@@ -26,6 +26,13 @@ token, snapshot-guarded so it cannot dip into pre-existing holdings) · `withdra
 `claimFees`. `VolatileLPManager` adds `recenter` (remove → swap → re-add in one call) and
 `moveLiquidity` (the same across two pools).
 
+`moveLiquidity` and the swap guard it shares with the rest live in
+[`src/VolatileLPManager.sol`](./src/VolatileLPManager.sol); the operation is covered by
+[`test/VolatileLPManagerMove.t.sol`](./test/VolatileLPManagerMove.t.sol), and
+[`test/CrossPoolUnlock.t.sol`](./test/CrossPoolUnlock.t.sol) is the manager-free proof that Uniswap v4
+permits several pools inside one `unlock` at all. What building it over v4 cost is written down in
+[`FEEDBACK.md`](./FEEDBACK.md).
+
 Hooks are rejected categorically by the first two — not by a whitelist, because approving an address
 says nothing about its permission bits. That matters because the exit path has no floor: a hook holding
 `AFTER_REMOVE_LIQUIDITY_RETURNS_DELTA` can skim principal on the way out. `OpenVolatileLPManager` lifts
