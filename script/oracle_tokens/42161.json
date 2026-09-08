@@ -1,5 +1,5 @@
 {
-  "_comment": "Arbitrum One (42161) currencies to wire into ChainlinkPriceOracle via SetOracleFeeds.s.sol. Parallel arrays; `symbol` keys into script/oracle_feeds.json, `decimals` is the token's own ERC-20 decimals (18 for native ETH = address(0)). Every address below was verified on-chain (symbol + decimals) on 2026-09-08. Two entries may share one `symbol` \u2014 native ETH and WETH both price off ETH/USD. WBTC uses the WBTC/USD feed (tracks the wrapper, heartbeat 86400) rather than BTC/USD (heartbeat 1755) \u2014 switch the symbol to \"BTC\" if you prefer the tighter heartbeat over wrapper-aware pricing. USDC.e is bridged USDC and USD\u20ae0 is the OFT USDT; both ride the base asset's feed. Feeds present but not wired: BTC, and SOL/BNB/XRP/ADA/AVAX/DOGE/LTC/DOT/POL/OP, which have no canonical ERC-20 here. Wrapped/bridged representations ride the base asset's feed: a depeg of the wrapper itself is outside what the oracle can see. That is the same trade-off already taken for WBTC on chains with no WBTC/USD feed.",
+  "_comment": "Arbitrum One (42161) currencies to wire into ChainlinkPriceOracle via SetOracleFeeds.s.sol. Parallel arrays; `symbol` keys into script/oracle_feeds.json, `decimals` is the token's own ERC-20 decimals (18 for native ETH = address(0)). Every address below was verified on-chain (symbol + decimals) on 2026-09-08. Two entries may share one `symbol` \u2014 native ETH and WETH both price off ETH/USD. WBTC rides BTC/USD (heartbeat 2655) rather than the wrapper-aware WBTC/USD (86400). The slow feed drifts from the market between updates, and the spot gate reads that drift as the pool being wrong: the same setup on mainnet cbBTC measured 147 bps of gap on 2026-09-08 and refused every operator add. Switch the symbol back to \"WBTC\" only if wrapper-depeg detection is worth intermittent operator downtime. USDC.e is bridged USDC and USD\u20ae0 is the OFT USDT; both ride the base asset's feed. Feeds present but not wired: WBTC, and SOL/BNB/XRP/ADA/AVAX/DOGE/LTC/DOT/POL/OP, which have no canonical ERC-20 here. Wrapped/bridged representations ride the base asset's feed: a depeg of the wrapper itself is outside what the oracle can see. That is the same trade-off already taken for WBTC on chains with no WBTC/USD feed.",
   "token": [
     "0x0000000000000000000000000000000000000000",
     "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
@@ -23,7 +23,7 @@
     "USDC",
     "USDT",
     "DAI",
-    "WBTC",
+    "BTC",
     "ARB",
     "LINK",
     "UNI",

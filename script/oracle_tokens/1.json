@@ -1,5 +1,5 @@
 {
-  "_comment": "Ethereum mainnet (1) currencies to wire into ChainlinkPriceOracle via SetOracleFeeds.s.sol. Parallel arrays; `symbol` keys into script/oracle_feeds.json, `decimals` is the token's own ERC-20 decimals (18 for native ETH = address(0)). Every address below was verified on-chain (symbol + decimals) on 2026-09-08. Two entries may share one `symbol` \u2014 native ETH and WETH both price off ETH/USD. Feeds present in oracle_feeds.json but not wired: SOL and AVAX have no canonical ERC-20 on mainnet. WBTC rides BTC/USD because oracle_feeds.json carries no mainnet WBTC/USD entry; cbBTC has its own. POL's feed is still named MATIC / USD on-chain (the token was renamed, the feed was not). Wrapped/bridged representations ride the base asset's feed: a depeg of the wrapper itself is outside what the oracle can see. That is the same trade-off already taken for WBTC on chains with no WBTC/USD feed.",
+  "_comment": "Ethereum mainnet (1) currencies to wire into ChainlinkPriceOracle via SetOracleFeeds.s.sol. Parallel arrays; `symbol` keys into script/oracle_feeds.json, `decimals` is the token's own ERC-20 decimals (18 for native ETH = address(0)). Every address below was verified on-chain (symbol + decimals) on 2026-09-08. Two entries may share one `symbol` \u2014 native ETH and WETH both price off ETH/USD. Feeds present in oracle_feeds.json but not wired: SOL and AVAX have no canonical ERC-20 on mainnet. WBTC and cbBTC both ride BTC/USD. WBTC because oracle_feeds.json carries no mainnet WBTC/USD entry; cbBTC because its own feed is on a 24h heartbeat and drifts up to ~1% from BTC before it updates \u2014 measured 147 bps and 21h stale on 2026-09-08, which put every cbBTC pool outside the 40 bps spot tolerance and left operators fail-closed there. A wrapper depeg is no longer visible to the oracle; a reference that keeps up with the market is worth more than that here. POL's feed is still named MATIC / USD on-chain (the token was renamed, the feed was not). Wrapped/bridged representations ride the base asset's feed: a depeg of the wrapper itself is outside what the oracle can see. That is the same trade-off already taken for WBTC on chains with no WBTC/USD feed.",
   "token": [
     "0x0000000000000000000000000000000000000000",
     "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
@@ -22,7 +22,7 @@
     "ETH",
     "ETH",
     "BTC",
-    "cbBTC",
+    "BTC",
     "USDC",
     "USDT",
     "DAI",
