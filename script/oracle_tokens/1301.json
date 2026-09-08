@@ -1,0 +1,21 @@
+{
+  "_comment": "Unichain Sepolia (1301) currencies to wire into ChainlinkPriceOracle via SetOracleFeeds.s.sol. Parallel arrays; `symbol` keys into script/oracle_feeds.json, `decimals` is the token's own ERC-20 decimals (18 for native ETH = address(0)). Every address below was verified on-chain (symbol + decimals) on 2026-09-08. Two entries may share one `symbol` \u2014 native ETH and WETH both price off ETH/USD. Testnet. The chain has BTC/ETH/USDC/USDT/LINK feeds, but only these four currencies exist as real tokens on it \u2014 there is no canonical WBTC or USDT on Unichain Sepolia, so those two feeds stay unwired. USDC is Circle's testnet token, LINK is Chainlink's faucet token. Wrapped/bridged representations ride the base asset's feed: a depeg of the wrapper itself is outside what the oracle can see. That is the same trade-off already taken for WBTC on chains with no WBTC/USD feed.",
+  "token": [
+    "0x0000000000000000000000000000000000000000",
+    "0x4200000000000000000000000000000000000006",
+    "0x31d0220469e10c4E71834a79b1f276d740d3768F",
+    "0xda40816f278Cd049c137F6612822D181065EBfB4"
+  ],
+  "symbol": [
+    "ETH",
+    "ETH",
+    "USDC",
+    "LINK"
+  ],
+  "decimals": [
+    18,
+    18,
+    6,
+    18
+  ]
+}

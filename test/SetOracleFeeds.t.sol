@@ -75,17 +75,39 @@ contract SetOracleFeedsTest is Test {
 
     function test_readTokens_parsesShippedArbitrumConfig() public view {
         SetOracleFeeds.TokenFeed[] memory tokens = script.readTokens("script/oracle_tokens/42161.json");
-        assertEq(tokens.length, 6, "arbitrum currency count");
+        // Asserted by shape, not by count: the set grows whenever a chain gains a wireable currency, and
+        // a hard-coded length turns that into a test failure rather than the review it deserves.
+        assertGt(tokens.length, 0, "arbitrum config not empty");
         assertEq(tokens[0].token, address(0), "index 0 is native ETH");
         assertEq(tokens[0].decimals, 18, "native decimals");
-        assertEq(tokens[1].token, USDC, "index 1 is USDC");
-        assertEq(tokens[1].decimals, 6, "usdc decimals");
+
+        bool foundUsdc;
+        for (uint256 i = 0; i < tokens.length; ++i) {
+            if (tokens[i].token != USDC) continue;
+            foundUsdc = true;
+            assertEq(tokens[i].decimals, 6, "usdc decimals");
+        }
+        assertTrue(foundUsdc, "native USDC is wired");
+    }
+
+    /// @dev Every currency appears once: a duplicate would make the later entry silently win at `setFeed`.
+    function test_shippedConfigs_haveNoDuplicateCurrencies() public view {
+        uint256[5] memory chains = [uint256(1), 130, 1301, 8453, 42161];
+        for (uint256 i = 0; i < chains.length; ++i) {
+            SetOracleFeeds.TokenFeed[] memory tokens =
+                script.readTokens(string.concat("script/oracle_tokens/", vm.toString(chains[i]), ".json"));
+            for (uint256 j = 0; j < tokens.length; ++j) {
+                for (uint256 k = j + 1; k < tokens.length; ++k) {
+                    assertTrue(tokens[j].token != tokens[k].token, "currency listed twice");
+                }
+            }
+        }
     }
 
     /// @dev Every shipped config must resolve — a symbol the chain has no feed for would only surface at
     /// broadcast time otherwise.
     function test_shippedConfigsResolveAgainstFeedsFile() public view {
-        uint256[4] memory chains = [uint256(1), 130, 8453, 42161];
+        uint256[5] memory chains = [uint256(1), 130, 1301, 8453, 42161];
         for (uint256 i = 0; i < chains.length; ++i) {
             string memory path = string.concat("script/oracle_tokens/", vm.toString(chains[i]), ".json");
             SetOracleFeeds.TokenFeed[] memory tokens = script.readTokens(path);

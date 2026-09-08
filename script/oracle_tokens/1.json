@@ -1,12 +1,57 @@
 {
-  "_comment": "Ethereum mainnet (1) currencies for SetOracleFeeds.s.sol. Parallel arrays; `symbol` keys into script/oracle_feeds.json, `decimals` is the token's own ERC-20 decimals (18 for native ETH = address(0)). Token addresses match script/price_pools/1.json. Mainnet publishes no WBTC/USD feed in oracle_feeds.json, so WBTC rides the BTC/USD feed; cbBTC has its own.",
+  "_comment": "Ethereum mainnet (1) currencies to wire into ChainlinkPriceOracle via SetOracleFeeds.s.sol. Parallel arrays; `symbol` keys into script/oracle_feeds.json, `decimals` is the token's own ERC-20 decimals (18 for native ETH = address(0)). Every address below was verified on-chain (symbol + decimals) on 2026-09-08. Two entries may share one `symbol` \u2014 native ETH and WETH both price off ETH/USD. Feeds present in oracle_feeds.json but not wired: SOL and AVAX have no canonical ERC-20 on mainnet. WBTC rides BTC/USD because oracle_feeds.json carries no mainnet WBTC/USD entry; cbBTC has its own. POL's feed is still named MATIC / USD on-chain (the token was renamed, the feed was not). Wrapped/bridged representations ride the base asset's feed: a depeg of the wrapper itself is outside what the oracle can see. That is the same trade-off already taken for WBTC on chains with no WBTC/USD feed.",
   "token": [
     "0x0000000000000000000000000000000000000000",
+    "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+    "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599",
+    "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf",
     "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
     "0xdAC17F958D2ee523a2206206994597C13D831ec7",
-    "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599",
-    "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf"
+    "0x6B175474E89094C44Da98b954EedeAC495271d0F",
+    "0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0",
+    "0x514910771AF9Ca656af840dff83E8264EcF986CA",
+    "0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984",
+    "0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9",
+    "0xD533a949740bb3306d119CC777fa900bA034cd52",
+    "0x9f8F72aA9304c8B593d555F12eF6589cC3A579A2",
+    "0x455e53CBB86018Ac2B8092FdCd39d8444aFFC3F6",
+    "0xB50721BCf8d664c30412Cfbc6cf7a15145234ad1",
+    "0xB8c77482e45F1F44dE1745F52C74426C631bDD52"
   ],
-  "symbol": ["ETH", "USDC", "USDT", "BTC", "cbBTC"],
-  "decimals": [18, 6, 6, 8, 8]
+  "symbol": [
+    "ETH",
+    "ETH",
+    "BTC",
+    "cbBTC",
+    "USDC",
+    "USDT",
+    "DAI",
+    "wstETH",
+    "LINK",
+    "UNI",
+    "AAVE",
+    "CRV",
+    "MKR",
+    "POL",
+    "ARB",
+    "BNB"
+  ],
+  "decimals": [
+    18,
+    18,
+    8,
+    8,
+    6,
+    6,
+    18,
+    18,
+    18,
+    18,
+    18,
+    18,
+    18,
+    18,
+    18,
+    18
+  ]
 }
