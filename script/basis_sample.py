@@ -37,6 +37,11 @@ HEALTHY_RATIO = 1.5
 TIGHT_RATIO = 1.25
 RECOMMEND_RATIO = 1.6
 
+
+def bump(worst: int) -> int:
+    """The tolerance a worst-case basis argues for, rounded up to a multiple of 5."""
+    return int(-(-worst * RECOMMEND_RATIO // 5) * 5)
+
 POOL_RE = re.compile(r"^\s*\[(?P<label>[^\]]+)\]\s*$")
 BASIS_RE = re.compile(r"^\s*basis \(bps\):\s*(?P<v>\d+)\s*$")
 FEE_RE = re.compile(r"^\s*pool fee \(bps\):\s*(?P<v>\d+)\s*$")
@@ -133,10 +138,21 @@ def main() -> int:
             print(f"chain {c}: no samples\n")
             continue
         tol = live_tolerance(c)
-        worst_pool = max(samples[c], key=lambda p: max(samples[c][p]))
-        worst = max(samples[c][worst_pool])
+        peaks = {pool: max(v) for pool, v in samples[c].items()}
+        worst_pool = max(peaks, key=peaks.get)
+        worst = peaks[worst_pool]
         p95 = max(percentile(v, 0.95) for v in samples[c].values())
-        rec = int(-(-worst * RECOMMEND_RATIO // 5) * 5)  # round up to a multiple of 5
+        rec = bump(worst)
+
+        # The single worst pool drives the recommendation, so what it would cost to leave that pool out
+        # is shown next to it. No attempt is made to classify a pool as an outlier automatically: a high
+        # basis can mean a thin pool nobody arbitrages (in which case the gate refusing an add there is
+        # correct, and sizing the bound to it widens the allowance on every other pool) or an ordinary
+        # deep pool on a volatile pair (in which case it is exactly what the bound has to clear). Only
+        # looking at the pool's depth separates the two, and that judgement is a human's.
+        ranked = sorted(peaks.items(), key=lambda kv: -kv[1])
+        second = ranked[1] if len(ranked) > 1 else None
+        rec_second = bump(second[1]) if second else None
 
         if tol is None:
             verdict = "tolerance unknown"
@@ -153,11 +169,17 @@ def main() -> int:
         for pool, v in sorted(samples[c].items(), key=lambda kv: -max(kv[1])):
             print(f"    {pool:24} max {max(v):>4}  p95 {percentile(v, 0.95):>5.0f}  median {statistics.median(v):>5.0f}  n={len(v)}")
         if verdict not in ("ok", "tolerance unknown"):
-            print(f"    -> recommend maxSpotDeviationBps = {rec} (owner-only setMaxSpotDeviationBps, no redeploy)")
+            print(f"    -> recommend maxSpotDeviationBps = {rec}, set by {worst_pool} "
+                  f"(owner-only setMaxSpotDeviationBps, no redeploy)")
+            if second and rec_second < rec:
+                print(f"       Without {worst_pool} the chain argues for {rec_second} (next is {second[0]} at {second[1]}).")
+                print(f"       Check that pool's depth before sizing to it — a thin pool nobody arbitrages sits")
+                print(f"       off-market, and refusing an operator add there is the gate working, not a bad bound.")
         print()
         report[c] = {"tolerance": tol, "worst": worst, "p95": round(p95, 1),
-                     "worst_pool": worst_pool, "recommend": rec, "verdict": verdict,
-                     "samples": samples[c]}
+                     "worst_pool": worst_pool, "recommend": rec,
+                     "second_pool": second[0] if second else None, "recommend_without_worst": rec_second,
+                     "verdict": verdict, "samples": samples[c]}
 
     if args.json:
         Path(args.json).write_text(json.dumps(
