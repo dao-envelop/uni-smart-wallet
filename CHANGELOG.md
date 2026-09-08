@@ -6,6 +6,26 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-09-08
+
+### Added
+
+- **`OpenVolatileLPManager`** (task_043) — `VolatileLPManager` with the hook gate lifted
+  (`ORACLE_TYPE 3002`, symbol `eOpenLP`), for owners who want a hooked pool. A separate implementation
+  rather than a flag: each gets its own EIP-170 budget, and the factory's owner-curated allowlist makes
+  choosing it an explicit opt-in. For that product the invariant "the manager's own code protects the
+  principal" holds only as far as the chosen hook is honest — `test_brickingHook_trapsPrincipal`
+  demonstrates the cost. **Not deployed on any chain.**
+- **`VolatileLPManager.moveLiquidity`** (task_051) — remove from one pool, optionally swap, and re-add
+  into another, all inside one `unlock`. Doing it as two calls paid the fixed per-operation cost twice
+  and left the portfolio uncovered in between.
+- **On-chain operator enumeration and two lens reads** (task_042) — `operatorList(i)` / `operatorCount()`
+  are public, as is `StableLPManager.rangeOf`, so `UniLens.operators` and `UniLens.stableRanges` can
+  answer without a log scan. **Both revert on managers created before this release**, whose equivalents
+  are `internal`; a frontend must keep its log-scan fallback for those.
+- **`FeesCollected`** (task_047) — every path that realises fees now reports how much, from the single
+  point they all pass through, not only `claimFees`.
+
 ### Security
 
 - **Operator drain rate is bounded** (task_054, audit `2026-09-04` R-2) — the spot gate bounded one
@@ -37,6 +57,8 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
+- **`MAX_POOLS` raised from 8 to 32** (task_052) — with the gas measurements that justify it
+  (`test/PoolCountScaling.t.sol`): every write path still works at the cap, and reads stay inside budget.
 - **`ChainlinkPriceOracle` gains a spot branch** (task_053) — `check` with `amountIn == 0` compares the
   pool's `slot0` price against the Chainlink reference in **both** directions, within its own
   `maxSpotDeviationBps` (default 50 bps, deployed via `oracleMaxSpotDeviationBps`). The tolerance is
@@ -57,6 +79,21 @@ All notable changes to this project are documented here. The format is based on
   instead of comparing on a grid coarser than the tolerance; and `refreshBounds` re-reads a
   circuit-breaker cache left stale by a Chainlink phase change, which re-running `SetOracleFeeds` never
   did. `StableLPManager`'s reinvest gains the full-fill check its allocate always had.
+- **The Base fork gas comparison follows the task_054 rule** — its operator recenter re-ranged to a
+  shifted band (`[baseTick, baseTick + 2W]`, midpoint 618 bps off the reference), which an operator may
+  no longer do. It now re-ranges centred, and the test oracle's mid-offset tolerance is a parameter
+  rather than a hard-coded 10 bps. The fork suite is env-gated, so CI never caught it.
+
+### Deployed
+
+- New `StableLPManager` / `VolatileLPManager` implementations, `UniLens` and `ChainlinkPriceOracle` on
+  Ethereum (1), Arbitrum One (42161), Base (8453), Unichain (130) and Unichain Sepolia (1301);
+  `LPManagerFactory`, `WalletPositionDescriptor` and `FeeRedeemer` were unchanged and were not
+  redeployed. Addresses in [Deployments](./README.md#deployments) / `deployments/<chainId>.json`.
+- **Existing managers are unaffected.** EIP-1167 clones are immutable and keep pointing at the
+  implementation they were created from; everything above reaches managers created after this release.
+- Each new oracle starts empty and must be seeded with `script/SetOracleFeeds.s.sol` before any operator
+  can act, and each manager must be pointed at it with `setPriceOracle` by its own NFT owner.
 
 ## [2.0.0] - 2026-07-23
 
@@ -192,6 +229,7 @@ First public release of **Envelop StableLP** — an NFT-owned, factory-cloned Un
 - Ethereum (1), Arbitrum One (42161), Base (8453), Unichain (130), and Unichain Sepolia (1301).
   See [Deployments](./README.md#deployments) / `deployments/<chainId>.json`.
 
-[Unreleased]: https://github.com/dao-envelop/uni-smart-wallet/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/dao-envelop/uni-smart-wallet/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/dao-envelop/uni-smart-wallet/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/dao-envelop/uni-smart-wallet/compare/v1.0.0...v2.0.0
 [1.0.0]: https://github.com/dao-envelop/uni-smart-wallet/releases/tag/v1.0.0
