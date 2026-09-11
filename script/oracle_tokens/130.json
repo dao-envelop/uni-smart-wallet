@@ -1,12 +1,13 @@
 {
-  "_comment": "Unichain (130) currencies to wire into ChainlinkPriceOracle via SetOracleFeeds.s.sol. Parallel arrays; `symbol` keys into script/oracle_feeds.json, `decimals` is the token's own ERC-20 decimals (18 for native ETH = address(0)). Every address below was verified on-chain (symbol + decimals) on 2026-09-08. Two entries may share one `symbol` \u2014 native ETH and WETH both price off ETH/USD. Unichain publishes only BTC/ETH/USDC/UNI/LINK, all as 18-decimal SVR proxies on a 24h heartbeat \u2014 every feed the chain has is wired here. WBTC rides BTC/USD (no WBTC/USD feed on this chain). LINK is Chainlink's canonical bridged token. Wrapped/bridged representations ride the base asset's feed: a depeg of the wrapper itself is outside what the oracle can see. That is the same trade-off already taken for WBTC on chains with no WBTC/USD feed.",
+  "_comment": "Unichain (130) currencies to wire into ChainlinkPriceOracle via SetOracleFeeds.s.sol. Parallel arrays; `symbol` keys into script/oracle_feeds.json, `decimals` is the token's own ERC-20 decimals (18 for native ETH = address(0)). Every address below was verified on-chain (symbol + decimals); the set was re-checked against Chainlink's reference-data-directory (feeds-ethereum-mainnet-unichain-1.json) on 2026-09-11. Two entries may share one `symbol` — native ETH and WETH both price off ETH/USD, and the chain carries TWO distinct 8-decimal `Wrapped BTC` tokens (0x0555E3… and 0x927B51…), both riding BTC/USD. Unichain publishes only BTC/ETH/USDC/UNI/LINK as USD price feeds, all 18-decimal SVR proxies on a 24h heartbeat — every one is wired here. Its other Chainlink feeds are LST/LRT exchange rates (ezETH, rsETH, weETH, wstETH) and an L2 Sequencer Uptime Status Feed at 0x495639D9914e7D270c5dCC641BfB1d807423F813, which this script does NOT set (the gate is a constructor argument; see setSequencerFeed). There is NO USDT/USD and NO HYPE/USD feed on this chain, so USD₮0 (0x9151434b…) and HYPE (0x15D0e0c5…) cannot be wired: an operator fails closed in every pool holding them until Chainlink publishes one. Wrapped/bridged representations ride the base asset's feed: a depeg of the wrapper itself is outside what the oracle can see. That is the same trade-off already taken for WBTC on chains with no WBTC/USD feed.",
   "token": [
     "0x0000000000000000000000000000000000000000",
     "0x4200000000000000000000000000000000000006",
     "0x0555E30da8f98308EdB960aa94C0Db47230d2B9c",
     "0x078D782b760474a361dDA0AF3839290b0EF57AD6",
     "0x8f187aA05619a017077f5308904739877ce9eA21",
-    "0xEF66491eab4bbB582c57b14778afd8dFb70D8A1A"
+    "0xEF66491eab4bbB582c57b14778afd8dFb70D8A1A",
+    "0x927B51f251480a681271180DA4de28D44EC4AfB8"
   ],
   "symbol": [
     "ETH",
@@ -14,7 +15,8 @@
     "BTC",
     "USDC",
     "UNI",
-    "LINK"
+    "LINK",
+    "BTC"
   ],
   "decimals": [
     18,
@@ -22,6 +24,7 @@
     8,
     6,
     18,
-    18
+    18,
+    8
   ]
 }

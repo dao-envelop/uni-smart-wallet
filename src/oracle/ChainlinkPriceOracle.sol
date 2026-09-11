@@ -132,10 +132,16 @@ contract ChainlinkPriceOracle is IPriceOracle, Ownable2Step {
     uint256 internal constant WAD = 1e18;
     uint256 internal constant Q96 = FixedPoint96.Q96; // 2**96
 
-    /// @notice Optional L2 Sequencer Uptime Feed (Chainlink). Zero on L1 or on L2s Chainlink does not
-    /// publish one for (e.g. Unichain) — then the sequencer gate is skipped. When set, {check} treats a
-    /// down or recently-restarted sequencer as "no fresh reference" (returns false ⇒ operator swaps
-    /// fail-closed), per Chainlink's L2 best practice.
+    /// @notice Optional L2 Sequencer Uptime Feed (Chainlink). Zero on L1, or on an L2 Chainlink does not
+    /// publish one for — then the sequencer gate is **skipped entirely**, which is what a zero here means:
+    /// not a check pointed at nothing, but no check. When set, {check} treats a down or recently-restarted
+    /// sequencer as "no fresh reference" (returns false ⇒ operator swaps fail-closed), per Chainlink's L2
+    /// best practice.
+    ///
+    /// A zero on a live L2 is therefore worth re-examining rather than assuming: Unichain was deployed
+    /// without one and Chainlink has since published
+    /// `0x495639D9914e7D270c5dCC641BfB1d807423F813` there (task_103). {setSequencerFeed} wires it after
+    /// the fact; `sequencerGracePeriod` is dead storage until it is.
     address public sequencerUptimeFeed;
     /// @notice Seconds that must elapse after the sequencer restarts before feeds are trusted again.
     uint32 public sequencerGracePeriod;
