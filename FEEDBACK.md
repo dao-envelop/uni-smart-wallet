@@ -6,7 +6,7 @@ one pool and adds it into another inside a single `unlock`. Everything here cost
 **1. Deltas are keyed by `(address, currency)`, not by pool — and nothing says so.** That is what makes
 several pools legal inside one `unlock`, which is the whole basis of what we shipped. We only believed it
 after reading `PoolManager._accountDelta` and proving it against a bare `PoolManager`
-([`test/CrossPoolUnlock.t.sol`](./test/CrossPoolUnlock.t.sol)). One sentence in the docs saves a day.
+([`test/CrossPoolUnlock.t.sol`](https://github.com/dao-envelop/uni-smart-wallet/blob/master/test/CrossPoolUnlock.t.sol)). One sentence in the docs saves a day.
 
 **2. `unlock` checks exactly one thing on exit** — `NonzeroDeltaCount != 0`. Same root as (1): the
 guarantee is stronger than it looks. Say it plainly — any number of pools, any order, leave no non-zero
