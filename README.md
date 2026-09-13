@@ -21,6 +21,10 @@ position's range is chosen.
 | `VolatileLPManager` | hookless, configured at init | chosen per call | many per pool, caller-chosen salt |
 | `OpenVolatileLPManager` | **any pool, hooked included** | chosen per call | as Volatile |
 
+**`OpenVolatileLPManager` is a research build, not a product for users.** It accepts hooked pools, so
+the principal is only as safe as the hook its owner chose; it is deployed on no chain, and the
+factory's owner-curated allowlist makes picking it an explicit opt-in.
+
 `StableLPManager` ops: `allocate` (deploy idle balance) · `allocateFrom` (deploy a named just-deposited
 token, snapshot-guarded so it cannot dip into pre-existing holdings) · `withdrawTo` · `reinvest` ·
 `claimFees`. `VolatileLPManager` adds `recenter` (remove → swap → re-add in one call) and
@@ -33,12 +37,9 @@ token, snapshot-guarded so it cannot dip into pre-existing holdings) · `withdra
 permits several pools inside one `unlock` at all. What building it over v4 cost is written down in
 [`FEEDBACK.md`](./FEEDBACK.md).
 
-Hooks are rejected categorically by the first two — not by a whitelist, because approving an address
-says nothing about its permission bits. That matters because the exit path has no floor: a hook holding
-`AFTER_REMOVE_LIQUIDITY_RETURNS_DELTA` can skim principal on the way out. `OpenVolatileLPManager` lifts
-the gate for owners who want it, and pays for it: there the invariant "the manager's own code protects
-the principal" holds only as far as the chosen hook is honest. It is a separate implementation, is not
-deployed on any chain, and the factory's owner-curated allowlist makes choosing it an explicit opt-in.
+The first two reject hooked pools outright rather than by whitelist — an address says nothing about its
+permission bits, and the exit path has no floor to stop a hook with
+`AFTER_REMOVE_LIQUIDITY_RETURNS_DELTA` skimming principal on the way out.
 
 ## Ownership and authorization
 
@@ -73,14 +74,7 @@ it. V4 `PoolManager` addresses come from the
 [official Uniswap deployments](https://docs.uniswap.org/contracts/v4/deployments).
 
 | Chain | `LPManagerFactory` | `StableLPManager` | `VolatileLPManager` | `UniLens` | `ChainlinkPriceOracle` | `WalletPositionDescriptor` | `FeeRedeemer` |
-|--- |
-|--- |
-|--- |
-|--- |
-|--- |
-|--- |
-|--- |
-|---|
+|---|---|---|---|---|---|---|---|
 | **Ethereum** (1) | [`0x75e5d72D6971221b6332AaE8F59759d4Ba366dd0`](https://blockscan.com/address/0x75e5d72D6971221b6332AaE8F59759d4Ba366dd0) | [`0x15E2f43954e7c32044363B19ea64BB290f85bDbE`](https://blockscan.com/address/0x15E2f43954e7c32044363B19ea64BB290f85bDbE) | [`0x4F59E6454462C9d3851D4B4126DC200FE6209e2D`](https://blockscan.com/address/0x4F59E6454462C9d3851D4B4126DC200FE6209e2D) | [`0xfcb6910d217AAc4B9d7a205473024964A08Bc8eC`](https://blockscan.com/address/0xfcb6910d217AAc4B9d7a205473024964A08Bc8eC) | [`0xa5A1fF40a1F89F26Db124DC56ad6fD8aBb378f29`](https://blockscan.com/address/0xa5A1fF40a1F89F26Db124DC56ad6fD8aBb378f29) | [`0x67a2CD3804F2e5E7e09cA213929011A77C8aefEa`](https://blockscan.com/address/0x67a2CD3804F2e5E7e09cA213929011A77C8aefEa) | [`0x3352dbb1507182140225B9aFbeb40e604208F9Fe`](https://blockscan.com/address/0x3352dbb1507182140225B9aFbeb40e604208F9Fe) |
 | **Arbitrum One** (42161) | [`0x8A56c6be755aC385395E96234b553DB1B9B06bEa`](https://blockscan.com/address/0x8A56c6be755aC385395E96234b553DB1B9B06bEa) | [`0xf162F4389f521b8e93B7a62bdeAd52Fc9cd9A419`](https://blockscan.com/address/0xf162F4389f521b8e93B7a62bdeAd52Fc9cd9A419) | [`0x758A9664D0D10aF83fcE97c943C037E4584dCB8e`](https://blockscan.com/address/0x758A9664D0D10aF83fcE97c943C037E4584dCB8e) | [`0x15E2f43954e7c32044363B19ea64BB290f85bDbE`](https://blockscan.com/address/0x15E2f43954e7c32044363B19ea64BB290f85bDbE) | [`0x4F59E6454462C9d3851D4B4126DC200FE6209e2D`](https://blockscan.com/address/0x4F59E6454462C9d3851D4B4126DC200FE6209e2D) | [`0x330ce9c5d9271b0aeC08cD363C535Ef126743b0c`](https://blockscan.com/address/0x330ce9c5d9271b0aeC08cD363C535Ef126743b0c) | [`0x430D09A7969A5c6eF2fb5DcE40972d6e66eF5E33`](https://blockscan.com/address/0x430D09A7969A5c6eF2fb5DcE40972d6e66eF5E33) |
 | **Base** (8453) | [`0x7A3c8F45b809078da58d17fb6Cd059334622838F`](https://blockscan.com/address/0x7A3c8F45b809078da58d17fb6Cd059334622838F) | [`0xC425A68df03764F648883b961eb982f087fe22ca`](https://blockscan.com/address/0xC425A68df03764F648883b961eb982f087fe22ca) | [`0x4765B0E28cdC0a9fd715B3520e94870473D3e7e4`](https://blockscan.com/address/0x4765B0E28cdC0a9fd715B3520e94870473D3e7e4) | [`0x71B7a17299592e06b80c28C6aB1C1DB5dC67D06D`](https://blockscan.com/address/0x71B7a17299592e06b80c28C6aB1C1DB5dC67D06D) | [`0x0A55A8e0Ee3d58e8D7d82803d70092903c593a96`](https://blockscan.com/address/0x0A55A8e0Ee3d58e8D7d82803d70092903c593a96) | [`0xa950991F86eF1b79Db65c4F3893dA9408A1ce157`](https://blockscan.com/address/0xa950991F86eF1b79Db65c4F3893dA9408A1ce157) | [`0x21c23bA0ec49c9440CD259cCB48ff9D06CD16522`](https://blockscan.com/address/0x21c23bA0ec49c9440CD259cCB48ff9D06CD16522) |
