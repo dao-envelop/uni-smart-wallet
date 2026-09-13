@@ -4,10 +4,6 @@ We built an LP manager that talks to `PoolManager` directly — no periphery `Po
 during ETHOnline added `moveLiquidity`: one operator call that moves a position out of one pool and into
 another inside a single `unlock`. Here is what cost us time.
 
-We re-checked all of it against the docs before sending, and two items turned out to be documented after
-all. They are at the bottom, because a list of complaints is more useful when you can see which ones we
-got wrong.
-
 **1. Nothing explains why several pools in one `unlock` is allowed.** It works because deltas are keyed
 by `(address, currency)` and not by pool, so the exit check doesn't care how many pools you touched. You
 can infer that from `currencyDelta(user, currency)` having no pool argument, but no page says it. The
@@ -38,10 +34,3 @@ recover the missing key fields by probing candidate fee tiers and tick spacings.
 and the salt together. But the subgraph's entity has no `salt` field and its `Position` entity is built
 around `PositionManager` token ids, so the documented indexing path can't represent positions keyed by
 salt, and everyone who keys them that way writes the same decoder.
-
----
-
-**Two we withdrew.** We had written that the docs don't say removing liquidity realises accrued fees —
-they do: `@return callerDelta` is "the total of both principal, fee deltas, and hook deltas". And that
-nothing on chain ties a salt to its pool — `ModifyLiquidity` does, in NatSpec we should have read
-sooner. Each cost us a real bug, and neither was your documentation's fault.
