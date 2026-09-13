@@ -1,36 +1,47 @@
 # Feedback on building over Uniswap v4
 
-Written while adding `moveLiquidity` to `VolatileLPManager` — one operator call that pulls liquidity from
-one pool and adds it into another inside a single `unlock`. Everything here cost us time.
+We built an LP manager that talks to `PoolManager` directly — no periphery `PositionManager` — and
+during ETHOnline added `moveLiquidity`: one operator call that moves a position out of one pool and into
+another inside a single `unlock`. Here is what cost us time.
 
-**1. Deltas are keyed by `(address, currency)`, not by pool — and nothing says so.** That is what makes
-several pools legal inside one `unlock`, which is the whole basis of what we shipped. We only believed it
-after reading `PoolManager._accountDelta` and proving it against a bare `PoolManager`
-([`test/CrossPoolUnlock.t.sol`](https://github.com/dao-envelop/uni-smart-wallet/blob/master/test/CrossPoolUnlock.t.sol)). One sentence in the docs saves a day.
+We re-checked all of it against the docs before sending, and two items turned out to be documented after
+all. They are at the bottom, because a list of complaints is more useful when you can see which ones we
+got wrong.
 
-**2. `unlock` checks exactly one thing on exit** — `NonzeroDeltaCount != 0`. Same root as (1): the
-guarantee is stronger than it looks. Say it plainly — any number of pools, any order, leave no non-zero
-delta — and people design against it instead of guessing.
+**1. Nothing explains why several pools in one `unlock` is allowed.** It works because deltas are keyed
+by `(address, currency)` and not by pool, so the exit check doesn't care how many pools you touched. You
+can infer that from `currencyDelta(user, currency)` having no pool argument, but no page says it. The
+Batch Modify guide states the conclusion — "move liquidity between two positions on entirely different
+Pools" — without the reason, which wasn't enough for us to risk real money on it. We ended up reading
+`PoolManager._accountDelta` and writing a test against a bare `PoolManager`. One sentence in the Unlock
+Callback & Deltas guide would have saved a day.
 
-**3. `modifyLiquidity` returns `(callerDelta, feesAccrued)` — removing liquidity realises fees.** Our
-claim path reported them, our removal paths did not, so a recenter silently reset lifetime fee counters
-downstream. "Fees you just took, whether or not you asked" is worth saying out loud.
+**2. The swap guides never mention partial fills.** A swap that reaches `sqrtPriceLimitX96` stops there
+and returns successfully, having spent less than you asked for. `IPoolManager.swap` does say
+"Integrators should perform checks on the returned swapDelta" — but in a note about low liquidity and
+hooks, while the swapping guides teach only a minimum-output check, which doesn't catch an exact-input
+swap that under-spent.
 
-**4. A `swap` can fill partially** at `sqrtPriceLimitX96`. Writing a full-fill guard by hand is not what
-you expect after an exact-input swap returns successfully; "check this yourself" in the docs would do.
+**3. Contract size is the real constraint, and there's nothing to push bytecode into.** The settle
+plumbing is `abstract contract DeltaResolver`, so it compiles into our manager instead of living
+somewhere we can call. Ours ships with 46 bytes free of 24,576, and that budget chose our API rather
+than the use case did: the version taking arrays of sources and destinations needed 947 bytes and we had
+858, so the call moves one position to one destination. The docs never mention size at all.
 
-**5. EIP-170 is the real constraint, and there is no unlock/settle plumbing callable as an external
-library** — periphery's `LiquidityAmounts` helps with the math, but bytecode is what runs out. Our largest
-manager ships with **46 bytes of headroom** (24,530 of 24,576). The first version of this operation took
-an array of pulls and an array of adds; the calldata-to-memory encoder and memory decoder that arrays of
-structs require cost **947 bytes against the 858 we had before the operation**. So the API is one position
-to one destination — a shape chosen by the size limit, not by the use case.
+**4. You can't ask which v4 pools exist for a pair.** `POST /lp/pool_info` returns `fee`, `tickSpacing`
+and `hookAddress` — but only if you already know them. Ask by token pair alone and it answers
+`400 · "V4 pools require fee and tick_spacing"`. The subgraph schema models all of it, while the docs
+say those endpoints "are not official deployments". So discovery means running your own indexer, and we
+recover the missing key fields by probing candidate fee tiers and tick spacings.
 
-**6. There is no canonical way to ask "which pools exist, with what keys".** Discovery needs a subgraph or
-an indexer, and the explore gateway omits `tickSpacing` and on some chains reports the *effective* fee
-rather than the `PoolKey` fee — so both key fields get recovered by probing candidates. "Pools for this
-pair, with their keys" would remove a class of workarounds.
+**5. The official v4 subgraph drops `salt`.** On chain it's fine — `ModifyLiquidity` carries the pool id
+and the salt together. But the subgraph's entity has no `salt` field and its `Position` entity is built
+around `PositionManager` token ids, so the documented indexing path can't represent positions keyed by
+salt, and everyone who keys them that way writes the same decoder.
 
-**7. Nothing links a position's `salt` to its pool in logs.** `salt` is caller-chosen and the pool lives
-only in manager storage, so a log-only indexer must read Uniswap's own `ModifyLiquidity` events to learn
-which pool a position is in. Defensible, but every integrator keying positions by salt rebuilds it.
+---
+
+**Two we withdrew.** We had written that the docs don't say removing liquidity realises accrued fees —
+they do: `@return callerDelta` is "the total of both principal, fee deltas, and hook deltas". And that
+nothing on chain ties a salt to its pool — `ModifyLiquidity` does, in NatSpec we should have read
+sooner. Each cost us a real bug, and neither was your documentation's fault.
