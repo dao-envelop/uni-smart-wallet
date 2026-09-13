@@ -18,17 +18,17 @@ and returns successfully, having spent less than you asked for. `IPoolManager.sw
 hooks, while the swapping guides teach only a minimum-output check, which doesn't catch an exact-input
 swap that under-spent.
 
-**3. Contract size is the real constraint, and there's nothing to push bytecode into.** The settle
-plumbing is `abstract contract DeltaResolver`, so it compiles into our manager instead of living
-somewhere we can call. Ours ships with 46 bytes free of 24,576, and that budget chose our API rather
-than the use case did: the version taking arrays of sources and destinations needed 947 bytes and we had
-858, so the call moves one position to one destination. The docs never mention size at all.
+**3. Contract size is the real constraint, and there's nothing to call into.** Periphery offers the
+settle plumbing only as base contracts you inherit, so it becomes your bytecode either way — we ended up
+writing our own `_settle` rather than inherit a base we couldn't afford whole. Ours ships with 46 bytes
+free of 24,576, and that budget chose our API rather than the use case did: the version taking arrays of
+sources and destinations needed 947 bytes and we had 858, so the call moves one position to one
+destination. The docs never mention size at all.
 
-**4. You can't ask which v4 pools exist for a pair.** `POST /lp/pool_info` returns `fee`, `tickSpacing`
-and `hookAddress` — but only if you already know them. Ask by token pair alone and it answers
-`400 · "V4 pools require fee and tick_spacing"`. The subgraph schema models all of it, while the docs
-say those endpoints "are not official deployments". So discovery means running your own indexer, and we
-recover the missing key fields by probing candidate fee tiers and tick spacings.
+**4. There is no way to ask which v4 pools exist for a token pair.** No endpoint and no on-chain read
+path — `POST /lp/pool_info` needs the `fee` and `tickSpacing` you were trying to find out. So discovery
+means running your own indexer, and we recover the missing key fields by probing candidate fee tiers and
+tick spacings.
 
 **5. The official v4 subgraph drops `salt`.** On chain it's fine — `ModifyLiquidity` carries the pool id
 and the salt together. But the subgraph's entity has no `salt` field and its `Position` entity is built
