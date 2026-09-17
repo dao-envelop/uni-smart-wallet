@@ -1,6 +1,6 @@
 # task_050 — Раскатать подбивку heartbeat'ов на Ethereum, Unichain и Base и начать сверять файл с цепью
 
-**Ветка:** `task/050-heartbeat-pad-rollout`
+**Ветка:** `task/050-heartbeat-pad-rollout` · **Статус:** закрыта 2026-09-17 — снята передеплоем 2.1.0 (09-08): `feeds()` на живых оракулах — chain 1 USDC 83700 / ETH 4500, chain 130 ETH 87300, т.е. подбитые значения; прогонять нечего. Сверка файл ↔ цепь — task_049.
 **Находка:** `qa-workspace/quality/findings/2026-09-01-heartbeat-pad-live-on-one-chain-of-four.md`
 **Severity:** S3 (домен B — on-chain правда)
 **Связано:** task_045 (правило подбивки), task_049 (тот же корень — нет сверки «репозиторий ↔ цепь»)
