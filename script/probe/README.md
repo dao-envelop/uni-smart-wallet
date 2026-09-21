@@ -1,4 +1,21 @@
-# Lens probe
+# Probes
+
+## `probe_deployment.mjs` — is the chain behind `master`? (task_049)
+
+No dependencies (node ≥ 18, JSON-RPC over `fetch`). After `forge build`:
+
+```bash
+node script/probe/probe_deployment.mjs            # every chain in deployments/
+node script/probe/probe_deployment.mjs 42161 8453 # a subset
+```
+
+For each `deployments/<chainId>.json` component it `eth_getCode`s the address and checks that every
+external selector of the compiled contract (`out/<C>.sol/<C>.json` → `methodIdentifiers`) occurs in
+the runtime as a `PUSH4`. Prints `ok (N selectors)` / `missing: f(), g(uint256)` / `not deployed` /
+`NO CODE`. Exit 0 in sync, 1 behind, 2 unreadable. CI runs it on every push (`.github/workflows/test.yml`).
+
+## `probe_lens.mjs` — the task_040 lens check
+
 
 `probe_lens.mjs` — post-deploy verification for the redeployed `UniLens` (task_040).
 

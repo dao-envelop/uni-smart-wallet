@@ -1,6 +1,6 @@
 # task_049 — Записывать, из какого коммита собран задеплоенный стек, и сверять его с `master`
 
-**Ветка:** `task/049-deployment-provenance`
+**Статус:** done (2026-09-21, в master) · **Ветка:** `task/049-deployment-provenance`
 **Находка:** `qa-workspace/quality/findings/2026-09-01-deployed-stack-lags-master-by-two-tasks.md`
 **Severity:** S3 (домен B — on-chain правда)
 
@@ -127,3 +127,17 @@ $ sed -n '/## \[Unreleased\]/,/## \[2.0.0\]/p' CHANGELOG.md
 
 Не деплоит. Не меняет `src/`. Не решает, нужен ли `OpenVolatileLPManager` на цепях — только делает
 его отсутствие видимым.
+
+## Сделано (2026-09-21)
+
+1. `DeployStableLP.s.sol` `_write`: поля `commit` (`DEPLOY_COMMIT`, **обязателен** — иначе `ProvenanceMissing`),
+   `tag` (`DEPLOY_TAG`), `deployedAt` (`block.timestamp`), `solc`/`optimizerRuns`/`viaIr` (константы, зеркало
+   `foundry.toml`). Пять `deployments/*.json` заполнены постфактум из `broadcast/DeployStableLP.s.sol/<chain>/run-latest.json`:
+   `commit 12bcb45f…` (тот tree, с которого шёл broadcast 09-08; `src/` побайтно = `v2.1.0`), `tag v2.1.0`,
+   `deployedAt` — timestamp броадкаста.
+2. `script/probe/probe_deployment.mjs` без зависимостей (fetch + JSON-RPC): селекторы из `out/*.json` ↔ `eth_getCode`
+   по каждому компоненту каждой сети; exit 0/1/2. Шаг в `.github/workflows/test.yml` после `forge build`.
+   Прогон 09-21: все пять сетей `ok` по 7 компонентам; `OpenVolatileLPManager` — `not deployed` везде (не
+   красит CI — решение владельца, записано в `CHANGELOG [Unreleased]`). Негативный контроль: адреса `v2.0.0`
+   → `missing: operatorCount(), operatorList(uint256), rangeOf(bytes32)` / `operators, oracleStatus, stableRanges`, exit 1.
+3. `CHANGELOG [Unreleased]` не пуст; `script/README.md` и `script/probe/README.md` описывают шаг.

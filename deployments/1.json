@@ -1,5 +1,7 @@
 {
   "chainId": 1,
+  "commit": "12bcb45f56cffcedfed88212d403c43906a01ecd",
+  "deployedAt": 1788857010,
   "descriptor": "0x67a2CD3804F2e5E7e09cA213929011A77C8aefEa",
   "factory": "0x75e5d72D6971221b6332AaE8F59759d4Ba366dd0",
   "feeRedeemer": "0x3352dbb1507182140225B9aFbeb40e604208F9Fe",
@@ -7,7 +9,11 @@
   "impl": "0x15E2f43954e7c32044363B19ea64BB290f85bDbE",
   "lens": "0xfcb6910d217AAc4B9d7a205473024964A08Bc8eC",
   "name": "mainnet",
+  "optimizerRuns": 200,
   "oracle": "0xa5A1fF40a1F89F26Db124DC56ad6fD8aBb378f29",
   "poolManager": "0x000000000004444c5dc75cB358380D2e3dE08A90",
+  "solc": "0.8.26",
+  "tag": "v2.1.0",
+  "viaIr": false,
   "volatileImpl": "0x4F59E6454462C9d3851D4B4126DC200FE6209e2D"
 }
