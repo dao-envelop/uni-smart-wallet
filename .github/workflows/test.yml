@@ -43,3 +43,13 @@ jobs:
 
       - name: Run Forge tests
         run: forge test -vvv
+
+      # Does the stack on the chains still carry every function master has? Selector presence in
+      # the runtime at each deployments/<chainId>.json address, over public RPCs (task_049). Red
+      # means the chain is BEHIND master — a deploy is due or [Unreleased] must say why not. It
+      # cannot prove equality, only catch growth master made that the chain never received, which
+      # is exactly the 47-day gap of 2026-07/09 nobody saw. Public RPCs blink: a failure here with
+      # "eth_getCode failed" is the network, not the stack, and exits 2 rather than 1.
+      - name: Deployed stack carries every selector of this build
+        run: node script/probe/probe_deployment.mjs
+

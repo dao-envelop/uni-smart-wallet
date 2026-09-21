@@ -46,7 +46,21 @@ $ forge script script/DeployDescriptor.s.sol --sig "run()" --rpc-url mainnet --a
 # Deploy scripts
 
 Per-chain parameters live in `chain_params.json`, keyed by `block.chainid`. Deploy
-artifacts (addresses) are written to `deployments/<chainId>.json`.
+artifacts (addresses) are written to `deployments/<chainId>.json`, together with the **provenance** of
+the write — `commit`, `tag`, `deployedAt` (unix s), `solc`, `optimizerRuns`, `viaIr` (task_049). Set
+`DEPLOY_COMMIT` (and `DEPLOY_TAG`) from the tree you deploy from; `DeployStableLP` reverts
+`ProvenanceMissing` without it:
+
+```bash
+DEPLOY_COMMIT=$(git rev-parse HEAD) DEPLOY_TAG=$(git describe --tags --always --dirty) \
+forge script script/DeployStableLP.s.sol --sig "run()" --rpc-url $RPC --sender $SENDER --account $KEYSTORE --broadcast
+```
+
+The provenance describes the **last full-stack write**; `DeployDescriptor.s.sol` updates only
+`.descriptor` and leaves it as is. After any deploy run `node script/probe/probe_deployment.mjs`
+(CI does too): it reads the runtime at every recorded address and lists the selectors of the current
+build that are missing from it — the check that would have caught the v2.0.0 stack lagging `master`
+by two tasks for 47 days. Exit 0 = in sync, 1 = behind, 2 = could not read.
 
 | Script | What it does |
 |---|---|

@@ -45,14 +45,29 @@ import {ChainlinkPriceOracle} from "../src/oracle/ChainlinkPriceOracle.sol";
 /// Addresses are MERGED into `deployments/<chainId>.json`: keys for components deployed this run are
 /// (over)written, all other previously-recorded keys are preserved.
 ///
+/// Every write also records **provenance** (task_049): `commit` and `tag` from the environment,
+/// `deployedAt` (unix seconds of the broadcast block) and the compiler settings the artefacts were
+/// built with. Until 2026-09-21 the file held addresses and nothing else, so a deploy that fell
+/// behind `master` left no trace — the v2.0.0 stack lived 47 days past task_042/043 unnoticed.
+/// `DEPLOY_COMMIT` is REQUIRED for a broadcast: a run without it reverts `ProvenanceMissing` instead
+/// of writing an anonymous file. Set both from the tree you are deploying:
+///
+///   DEPLOY_COMMIT=$(git rev-parse HEAD) DEPLOY_TAG=$(git describe --tags --always --dirty) \
+///   forge script script/DeployStableLP.s.sol --sig "run()" --rpc-url $RPC \
+///     --sender $SENDER --account $KEYSTORE --broadcast
+///
 /// Per-chain `poolManager` (required) and `initialOwner` (optional protocol admin) come from
 /// `script/chain_params.json` keyed by `block.chainid`. A zero `initialOwner` falls back to the
 /// broadcaster.
-///
-///   forge script script/DeployStableLP.s.sol --sig "run()" --rpc-url $RPC \
-///     --sender $SENDER --account $KEYSTORE --broadcast
 contract DeployStableLP is Script {
     string internal constant CONFIG_PATH = "./script/chain_params.json";
+    /// @dev Mirrors foundry.toml; recorded into deployments/<chainId>.json so a later reader knows what
+    /// the runtime at each address was compiled with without digging through git history.
+    string internal constant BUILD_SOLC = "0.8.26";
+    uint256 internal constant BUILD_OPTIMIZER_RUNS = 200;
+    bool internal constant BUILD_VIA_IR = false;
+
+    error ProvenanceMissing();
     uint16 internal constant DEFAULT_ORACLE_MAX_DEVIATION_BPS = 100; // 1%
     /// @dev Tighter than the swap tolerance on purpose: that one has to absorb the pool fee (it judges a
     /// realized output), a spot-vs-reference comparison does not. Live basis was 0-3 bps on stable pairs
@@ -435,6 +450,16 @@ contract DeployStableLP is Script {
         if (existing.lens != address(0)) out = vm.serializeAddress(k, "lens", existing.lens);
         if (existing.descriptor != address(0)) out = vm.serializeAddress(k, "descriptor", existing.descriptor);
         if (existing.oracle != address(0)) out = vm.serializeAddress(k, "oracle", existing.oracle);
+
+        // Provenance: which tree this runtime came from, when, and how it was compiled (task_049).
+        string memory commit = vm.envOr("DEPLOY_COMMIT", string(""));
+        if (bytes(commit).length == 0) revert ProvenanceMissing();
+        out = vm.serializeString(k, "commit", commit);
+        out = vm.serializeString(k, "tag", vm.envOr("DEPLOY_TAG", string("")));
+        out = vm.serializeUint(k, "deployedAt", block.timestamp);
+        out = vm.serializeString(k, "solc", BUILD_SOLC);
+        out = vm.serializeUint(k, "optimizerRuns", BUILD_OPTIMIZER_RUNS);
+        out = vm.serializeBool(k, "viaIr", BUILD_VIA_IR);
 
         vm.writeJson(out, string.concat("./deployments/", vm.toString(block.chainid), ".json"));
     }

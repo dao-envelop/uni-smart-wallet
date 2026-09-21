@@ -6,6 +6,21 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **Deployment provenance** (task_049). `deployments/<chainId>.json` now records `commit`, `tag`,
+  `deployedAt` and the compiler settings of the last write; `DeployStableLP.s.sol` refuses to
+  broadcast without `DEPLOY_COMMIT` (`ProvenanceMissing`). The five files are back-filled from the
+  forge broadcast records of 2026-09-08 (`12bcb45`, source-identical to `v2.1.0`).
+- `script/probe/probe_deployment.mjs` — checks that the runtime at every recorded address carries
+  every external selector of the current build, on every chain, and CI runs it after the build. It
+  is what would have shown the v2.0.0 stack sitting 47 days behind `master`.
+
+### Not yet deployed
+
+- `OpenVolatileLPManager` (task_043, in 2.1.0) has no `openImpl` on any chain; the probe reports it
+  as `not deployed`. Whether to deploy it is an owner decision, not a CI failure.
+
 ## [2.1.0] - 2026-09-08
 
 ### Added
