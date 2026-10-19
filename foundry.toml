@@ -8,6 +8,10 @@ solc_version = '0.8.26'
 evm_version = "cancun"
 optimizer_runs = 200
 via_ir = false
+# EIP-170: the CBOR metadata trailer (IPFS hash + solc version, 53 B) is dead weight in the
+# clone-target implementations; verification reproduces it from this same config (task_056).
+cbor_metadata = false
+bytecode_hash = "none"
 ffi = true
 
 # The deploy script reads ./script/chain_params.json at runtime; tests write

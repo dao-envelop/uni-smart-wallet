@@ -4,7 +4,6 @@
 
 pragma solidity ^0.8.20;
 
-import "@openzeppelin/contracts/interfaces/IERC4906.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
@@ -150,7 +149,7 @@ contract VolatileLPManager is BaseLPManager {
     /// @param salt The position key.
     function claimFees(bytes32 salt) external onlyAuthorized nonReentrant fixEtherBalance {
         _pokeFromConfig(salt); // reverts UnknownPosition if not open
-        emit IERC4906.MetadataUpdate(TOKEN_ID);
+        _metadataUpdated();
     }
 
     /// @dev POKE handler: realize fees (liquidityDelta 0), skim the protocol cut, net the rest back.
@@ -173,18 +172,17 @@ contract VolatileLPManager is BaseLPManager {
     /// Owner-or-operator (off-chain sizing). Draws from whatever managed currencies sit on the
     /// manager's balance; residuals net back via `_settleManaged`.
     /// @param legs Per-position actions (pool, salt, range, optional pre-swap, desired amounts, caps).
-    function allocate(VolatileAllocLeg[] calldata legs) external onlyAuthorized nonReentrant fixEtherBalance {
-        if (legs.length == 0) revert NoLegs();
-        for (uint256 i = 0; i < legs.length; ++i) {
-            _indexOf(legs[i].poolId); // reverts UnknownPool if not configured
-        }
-        POOL_MANAGER.unlock(abi.encode(OP_ALLOCATE_V, abi.encode(_isOwnerCall(), legs)));
+    function allocate(VolatileAllocLeg[] calldata legs) external nonReentrant fixEtherBalance {
+        // `_requireAuthorized()` is the `onlyAuthorized` check, returning byOwner, evaluated first. An empty
+        // list (NoLegs) and an unknown pool (UnknownPool) revert inside the unlock.
+        POOL_MANAGER.unlock(abi.encode(OP_ALLOCATE_V, abi.encode(_requireAuthorized(), legs)));
         emit Allocated(legs.length);
-        emit IERC4906.MetadataUpdate(TOKEN_ID);
+        _metadataUpdated();
     }
 
     function _handleAllocateV(bytes memory payload) internal returns (bytes memory) {
         (bool byOwner, VolatileAllocLeg[] memory legs) = abi.decode(payload, (bool, VolatileAllocLeg[]));
+        if (legs.length == 0) revert NoLegs();
         for (uint256 i = 0; i < legs.length; ++i) {
             _allocateLegV(legs[i], byOwner);
         }
@@ -315,15 +313,17 @@ contract VolatileLPManager is BaseLPManager {
 
     /// @notice Move an open position to a new range in one call. Owner-or-operator.
     /// @param p Recenter plan: salt, new range, optional rebalancing swap, and floors/caps.
-    function recenter(RecenterParams calldata p) external onlyAuthorized nonReentrant fixEtherBalance {
-        if (_positions[p.salt].liquidity == 0) revert UnknownPosition(p.salt);
-        POOL_MANAGER.unlock(abi.encode(OP_RECENTER, abi.encode(_isOwnerCall(), p)));
-        emit IERC4906.MetadataUpdate(TOKEN_ID);
+    function recenter(RecenterParams calldata p) external nonReentrant fixEtherBalance {
+        // `_requireAuthorized()` is the `onlyAuthorized` check, returning byOwner; it runs first (abi.encode
+        // evaluates left to right). Called inline rather than held in a local: the local cost 163 B here.
+        POOL_MANAGER.unlock(abi.encode(OP_RECENTER, abi.encode(_requireAuthorized(), p)));
+        _metadataUpdated();
     }
 
     function _handleRecenter(bytes memory payload) internal returns (bytes memory) {
         (bool byOwner, RecenterParams memory p) = abi.decode(payload, (bool, RecenterParams));
         StoredPosition memory pos = _positions[p.salt];
+        if (pos.liquidity == 0) revert UnknownPosition(p.salt);
         PoolKey memory key = pools[_indexOf(pos.poolId)].key;
 
         // 1. Pull the whole position at its old range — principal + fees become positive deltas.
@@ -397,16 +397,13 @@ contract VolatileLPManager is BaseLPManager {
     /// pre-swap and floors. May be a fresh salt or a top-up of an existing position.
     function moveLiquidity(bytes32 fromSalt, uint128 liquidity, VolatileAllocLeg calldata add)
         external
-        onlyAuthorized
         nonReentrant
         fixEtherBalance
     {
-        // `_pullLiquidity` returns silently on a zero pull, which would turn this into a plain allocate
-        // funded from whatever happens to sit on the balance. Reject it here, where the revert is clear.
-        if (liquidity == 0) revert ZeroLiquidity();
-        POOL_MANAGER.unlock(abi.encode(OP_MOVE, abi.encode(_isOwnerCall(), fromSalt, liquidity, add)));
+        // `_requireAuthorized()` is the `onlyAuthorized` check, returning byOwner, evaluated first.
+        POOL_MANAGER.unlock(abi.encode(OP_MOVE, abi.encode(_requireAuthorized(), fromSalt, liquidity, add)));
         emit LiquidityMoved(fromSalt, add.salt, liquidity);
-        emit IERC4906.MetadataUpdate(TOKEN_ID);
+        _metadataUpdated();
     }
 
     /// @dev Free, then re-deploy, then settle once. Both halves reuse the paths the product already has:
@@ -418,6 +415,9 @@ contract VolatileLPManager is BaseLPManager {
     function _handleMove(bytes memory payload) internal returns (bytes memory) {
         (bool byOwner, bytes32 fromSalt, uint128 liquidity, VolatileAllocLeg memory add) =
             abi.decode(payload, (bool, bytes32, uint128, VolatileAllocLeg));
+        // `_pullLiquidity` returns silently on a zero pull, which would turn this into a plain allocate
+        // funded from whatever happens to sit on the balance. Reject it, where the revert is clear.
+        if (liquidity == 0) revert ZeroLiquidity();
         _pullLiquidity(fromSalt, liquidity);
         _allocateLegV(add, byOwner);
         _settleManaged();

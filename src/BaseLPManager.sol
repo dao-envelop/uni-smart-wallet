@@ -6,7 +6,6 @@ pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import "@openzeppelin/contracts/interfaces/IERC4906.sol";
-import {Address} from "@openzeppelin/contracts/utils/Address.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
@@ -282,9 +281,15 @@ abstract contract BaseLPManager is SingletonNFTOwned, V4PositionManager {
     function _finishInit(address owner_, uint256 poolCount_, address descriptor_) internal {
         if (descriptor_ != address(0)) positionDescriptor = descriptor_;
         _mintSingleton(owner_);
-        emit IERC4906.MetadataUpdate(TOKEN_ID);
+        _metadataUpdated();
         emit EnvelopWrappedV2(owner_, TOKEN_ID, 0x0000, "");
         emit Initialized(owner_, address(POOL_MANAGER), poolCount_);
+    }
+
+    /// @dev ERC-4906 refresh of the singleton token. One copy for every mutating entry point: an inlined
+    /// `emit` repeats its 32-byte topic at each of the eleven sites (task_056, EIP-170).
+    function _metadataUpdated() internal {
+        emit IERC4906.MetadataUpdate(TOKEN_ID);
     }
 
     /// @dev Add a currency to the managed-stable set (dedup via the mapping).
@@ -297,18 +302,23 @@ abstract contract BaseLPManager is SingletonNFTOwned, V4PositionManager {
 
     /// @notice The per-clone NFT name. Decodes the packed `_name` set at init; an empty name falls
     /// back to the product default.
-    /// @return The manager's NFT name.
+    /// @return s The manager's NFT name.
     // Clones don't run the ERC721 constructor, so derive name from packed storage; symbol is shared.
-    function name() public view override returns (string memory) {
+    function name() public view override returns (string memory s) {
         bytes32 n = _name;
         if (n == bytes32(0)) n = _defaultName(); // unnamed clone ⇒ product default
-        uint256 len;
-        while (len < 32 && n[len] != 0) ++len;
-        bytes memory b = new bytes(len);
-        for (uint256 i; i < len; ++i) {
-            b[i] = n[i];
+        // Length = bytes up to the first zero; the word is stored whole rather than copied byte by byte
+        // (task_056, EIP-170). Bytes after the first zero sit past the length and the ABI encoder
+        // zero-pads the tail, so they never reach a caller.
+        assembly ("memory-safe") {
+            let len := 0
+            for {} // byte(32, n) == 0 bounds it
+             byte(len, n) {} { len := add(len, 1) }
+            s := mload(0x40)
+            mstore(s, len)
+            mstore(add(s, 0x20), n)
+            mstore(0x40, add(s, 0x40))
         }
-        return string(b);
     }
 
     /// @notice The NFT symbol (product-specific; subclasses override).
@@ -321,7 +331,7 @@ abstract contract BaseLPManager is SingletonNFTOwned, V4PositionManager {
     /// returns an empty string.
     function setPositionDescriptor(address descriptor) external onlyOwnerNFT {
         positionDescriptor = descriptor;
-        emit IERC4906.MetadataUpdate(TOKEN_ID);
+        _metadataUpdated();
     }
 
     /// @notice Set (or clear, with the zero address) the operator-swap price guard. Owner-only.
@@ -331,13 +341,6 @@ abstract contract BaseLPManager is SingletonNFTOwned, V4PositionManager {
     function setPriceOracle(address oracle) external onlyOwnerNFT {
         priceOracle = oracle;
         emit PriceOracleSet(oracle);
-    }
-
-    /// @dev Whether the current external caller is the NFT owner (vs a delegated operator). Computed at
-    /// the external entry point and threaded into the unlock payload, since inside `unlockCallback`
-    /// `msg.sender` is the PoolManager.
-    function _isOwnerCall() internal view returns (bool) {
-        return ownerOf(TOKEN_ID) == msg.sender;
     }
 
     /// @dev Economic-safety guard for a just-executed swap, asymmetric by caller:
@@ -389,14 +392,23 @@ abstract contract BaseLPManager is SingletonNFTOwned, V4PositionManager {
     }
 
     /// @notice On-chain metadata for the singleton ownership token. Delegates to the configured
-    /// {IWalletDescriptor}; returns "" if none is set (never reverts).
+    /// {IWalletDescriptor}; returns "" if none is set or if it reverts (never reverts itself).
+    /// @dev The descriptor is an external renderer that iterates every position and reads token
+    /// metadata, so it can run out of gas or hit a token whose `symbol()` misbehaves. A revert there used
+    /// to brick `tokenURI` — and with it every marketplace and wallet view of the manager — until the
+    /// owner swapped the descriptor; now it degrades to the no-descriptor answer (task_056). Not caught:
+    /// a descriptor that returns successfully but with data that does not decode as a string.
     /// @param id The token id (only the singleton `TOKEN_ID` = 1 exists).
-    /// @return The descriptor's data-URI, or "" when no descriptor is configured.
+    /// @return The descriptor's data-URI, or "" when no descriptor is configured or it reverted.
     function tokenURI(uint256 id) public view override returns (string memory) {
         _requireOwned(id);
         address descriptor = positionDescriptor;
         if (descriptor == address(0)) return "";
-        return IWalletDescriptor(descriptor).tokenURI(address(this), id);
+        try IWalletDescriptor(descriptor).tokenURI(address(this), id) returns (string memory uri) {
+            return uri;
+        } catch {
+            return "";
+        }
     }
 
     // ────────── Ether-balance tracking (envelop `SmartWallet` event model) ──────────
@@ -473,13 +485,10 @@ abstract contract BaseLPManager is SingletonNFTOwned, V4PositionManager {
         if (p.recipient == address(0)) revert RecipientZero();
         if (!isManagedStable[p.requestedCurrency]) revert UnmanagedStable(p.requestedCurrency);
         if (p.amount == 0) revert ZeroAmount();
-        for (uint256 i = 0; i < p.pulls.length; ++i) {
-            uint128 have = _positions[p.pulls[i].salt].liquidity;
-            if (have == 0) revert UnknownPosition(p.pulls[i].salt);
-            if (p.pulls[i].liquidityToPull > have) revert DeltaExceedsLiquidity(p.pulls[i].liquidityToPull, have);
-        }
+        // Per-pull validation (UnknownPosition / DeltaExceedsLiquidity) runs in `_pullLiquidity`, inside the
+        // unlock — the revert bubbles unchanged and the pre-pass copy is gone (task_056, EIP-170).
         POOL_MANAGER.unlock(abi.encode(OP_WITHDRAW_TO, abi.encode(p)));
-        emit IERC4906.MetadataUpdate(TOKEN_ID);
+        _metadataUpdated();
     }
 
     function _handleWithdrawTo(bytes memory payload) internal returns (bytes memory) {
@@ -513,9 +522,13 @@ abstract contract BaseLPManager is SingletonNFTOwned, V4PositionManager {
     /// @dev Pull `liq` from the position keyed `salt` (at its stored range), skim the protocol fee off
     /// the accrued-fee component (principal untouched), and decrement/remove the registry entry. The
     /// pool key + range come from the stored position, so this is identical for both products.
+    /// Reverts `UnknownPosition` for a salt with nothing open (even on a zero pull, as the pre-pass
+    /// in `withdrawTo` used to) and `DeltaExceedsLiquidity` for an over-pull.
     function _pullLiquidity(bytes32 salt, uint128 liq) internal {
-        if (liq == 0) return;
         StoredPosition memory pos = _positions[salt];
+        if (pos.liquidity == 0) revert UnknownPosition(salt);
+        if (liq > pos.liquidity) revert DeltaExceedsLiquidity(liq, pos.liquidity);
+        if (liq == 0) return;
         PoolKey memory key = pools[_indexOf(pos.poolId)].key;
         (, BalanceDelta fees) = POOL_MANAGER.modifyLiquidity(
             key,
@@ -588,11 +601,17 @@ abstract contract BaseLPManager is SingletonNFTOwned, V4PositionManager {
         }
         results = new bytes[](targets.length);
         for (uint256 i = 0; i < targets.length; ++i) {
-            if (datas[i].length == 0) {
-                Address.sendValue(payable(targets[i]), values[i]);
-            } else {
-                results[i] = Address.functionCallWithValue(targets[i], datas[i], values[i]);
+            // One raw call covers both shapes (empty data is a plain native send) and bubbles the
+            // callee's revert data verbatim. Replaces OZ `Address` (task_056, EIP-170): what is given up
+            // is its `AddressEmptyCode` check — calldata sent to an address with no code now succeeds
+            // as a no-op, which only the owner can do and only to themselves.
+            (bool ok, bytes memory ret) = targets[i].call{value: values[i]}(datas[i]);
+            if (!ok) {
+                assembly ("memory-safe") {
+                    revert(add(ret, 0x20), mload(ret))
+                }
             }
+            results[i] = ret;
         }
     }
 
