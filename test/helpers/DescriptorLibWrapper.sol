@@ -17,4 +17,16 @@ contract DescriptorLibWrapper {
     function tokenIcon(string memory sym, uint256 x, uint256 y) external pure returns (string memory) {
         return DescriptorLib.tokenIcon(sym, x, y);
     }
+
+    function clean(bytes memory s, uint256 maxLen, bool json) external pure returns (string memory) {
+        return DescriptorLib.clean(s, maxLen, json);
+    }
+
+    function q0to1(uint256 a0, uint160 sp) external pure returns (uint256) {
+        return DescriptorLib.q0to1(a0, sp);
+    }
+
+    function q1to0(uint256 a1, uint160 sp) external pure returns (uint256) {
+        return DescriptorLib.q1to0(a1, sp);
+    }
 }

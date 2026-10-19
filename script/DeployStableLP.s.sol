@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {Script} from "forge-std/Script.sol";
 import {console2} from "forge-std/console2.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {FeeRedeemer} from "../src/FeeRedeemer.sol";
@@ -12,6 +11,7 @@ import {LPManagerFactory} from "../src/LPManagerFactory.sol";
 import {UniLens} from "../src/UniLens.sol";
 import {WalletPositionDescriptor} from "../src/WalletPositionDescriptor.sol";
 import {ChainlinkPriceOracle} from "../src/oracle/ChainlinkPriceOracle.sol";
+import {DescriptorConfig} from "./DescriptorConfig.sol";
 
 /// @notice Deploys the LP-manager stack for the current chain — either the FULL set or an arbitrary
 /// SUBSET selected from `script/chain_params.json`.
@@ -59,7 +59,7 @@ import {ChainlinkPriceOracle} from "../src/oracle/ChainlinkPriceOracle.sol";
 /// Per-chain `poolManager` (required) and `initialOwner` (optional protocol admin) come from
 /// `script/chain_params.json` keyed by `block.chainid`. A zero `initialOwner` falls back to the
 /// broadcaster.
-contract DeployStableLP is Script {
+contract DeployStableLP is DescriptorConfig {
     string internal constant CONFIG_PATH = "./script/chain_params.json";
     /// @dev Mirrors foundry.toml; recorded into deployments/<chainId>.json so a later reader knows what
     /// the runtime at each address was compiled with without digging through git history.
@@ -219,7 +219,11 @@ contract DeployStableLP is Script {
 
         // 4. Standalone components.
         if (flags.lens) d.lens = new UniLens();
-        if (flags.descriptor) d.descriptor = new WalletPositionDescriptor(stablecoins);
+        if (flags.descriptor) {
+            // WETH / native ticker / reference pools from chain_params (task_055); the allowlist is the argument.
+            DescriptorParams memory dp = readDescriptorParams(block.chainid);
+            d.descriptor = new WalletPositionDescriptor(pm, admin, dp.weth, dp.nativeSymbol, stablecoins, dp.refs);
+        }
         if (flags.oracle) {
             d.oracle = new ChainlinkPriceOracle(
                 admin,

@@ -30,9 +30,10 @@ contract DescriptorLibTest is Test {
         assertEq(lib.formatUsd(999e18), "999.00");
     }
 
-    function test_formatUsd_truncatesToCents() public view {
-        // 1.239 ⇒ truncated, not rounded
-        assertEq(lib.formatUsd(1.239e18), "1.23");
+    function test_formatUsd_roundsToCents() public view {
+        // 1.239 ⇒ rounded half-up (task_055; it used to truncate to 1.23)
+        assertEq(lib.formatUsd(1.239e18), "1.24");
+        assertEq(lib.formatUsd(1.234e18), "1.23");
     }
 
     // ────────── formatPercentBps ──────────

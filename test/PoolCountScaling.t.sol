@@ -232,7 +232,14 @@ contract PoolCountScalingTest is Test {
 
         StableLPManager impl = new StableLPManager(IPoolManager(address(c.pm)), treasury);
         LPManagerFactory f = FactoryHelper.single(address(this), address(impl));
-        WalletPositionDescriptor descriptor = new WalletPositionDescriptor(new address[](0));
+        WalletPositionDescriptor descriptor = new WalletPositionDescriptor(
+            IPoolManager(address(c.pm)),
+            address(this),
+            address(0),
+            "ETH",
+            new address[](0),
+            new WalletPositionDescriptor.RefInit[](0)
+        );
 
         StableLPManager.StablePoolInit[] memory cfgs = new StableLPManager.StablePoolInit[](n);
         for (uint256 i = 0; i < n; ++i) {

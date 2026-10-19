@@ -1,52 +1,58 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {Script} from "forge-std/Script.sol";
+import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {DescriptorConfig} from "./DescriptorConfig.sol";
 import {console2} from "forge-std/console2.sol";
 import {WalletPositionDescriptor} from "../src/WalletPositionDescriptor.sol";
 
 /// @notice Deploys a standalone {WalletPositionDescriptor} — the shared on-chain `tokenURI`
-/// renderer used by the NFT-owned LP managers (`StableLPManager`, `VolatileLPManager`).
+/// renderer used by the NFT-owned LP managers (`StableLPManager`, `VolatileLPManager`, Open).
 ///
 /// Use this to ship a new descriptor without re-running the whole StableLP stack
 /// (`DeployStableLP.s.sol`), which would also redeploy the factory/impl/treasury and orphan
-/// existing clones. The per-chain stablecoin `$1` allowlist is read from `chain_params.json`
-/// (`.["<chainId>"].stablecoins`) — the same list `DeployStableLP` uses. The new address is
-/// recorded into `deployments/<chainId>.json` (`.descriptor`); afterwards wire it into each
-/// wallet/manager with the `cast send … setPositionDescriptor` command from `script/README.md`
-/// (the NFT owner must sign that call).
+/// existing clones. Constructor inputs come from `chain_params.json` (see {DescriptorConfig}): the
+/// `$1` stablecoin allowlist, WETH, the native ticker and the reference pools (task_055). The admin
+/// of the allowlist / reference registry (Ownable2Step) is `.initialOwner`, or the broadcaster when
+/// that is zero. The new address is recorded into `deployments/<chainId>.json` (`.descriptor`);
+/// afterwards each manager owner re-points with `setPositionDescriptor` (see `script/README.md`).
 ///
 ///   forge script script/DeployDescriptor.s.sol --sig "run()" --rpc-url $RPC \
 ///     --account $KEYSTORE --sender $SENDER --broadcast --verify
-contract DeployDescriptor is Script {
-    string internal constant CONFIG_PATH = "./script/chain_params.json";
-
+contract DeployDescriptor is DescriptorConfig {
     function run() external returns (WalletPositionDescriptor descriptor) {
-        address[] memory stablecoins = _readStablecoins(block.chainid);
+        DescriptorParams memory p = readDescriptorParams(block.chainid);
+        address owner = _owner(block.chainid);
+        if (owner == address(0)) owner = msg.sender;
+        address pm = vm.parseJsonAddress(
+            vm.readFile(DESCRIPTOR_CONFIG_PATH), string.concat('.["', vm.toString(block.chainid), '"].poolManager')
+        );
 
         vm.startBroadcast();
-        descriptor = deploy(stablecoins);
+        descriptor = deploy(IPoolManager(pm), owner, p);
         vm.stopBroadcast();
 
         console2.log("Chain ID:   ", block.chainid);
         console2.log("Descriptor: ", address(descriptor));
-        console2.log("Stablecoins:", stablecoins.length);
+        console2.log("Owner:      ", owner);
+        console2.log("Stablecoins:", p.stablecoins.length);
+        console2.log("References: ", p.refs.length);
 
         _record(address(descriptor));
     }
 
-    /// @notice Deploy the descriptor with the given `$1` stablecoin allowlist. Public + side-effect-free
-    /// so tests can drive it without broadcasting or touching the filesystem.
-    function deploy(address[] memory stablecoins) public returns (WalletPositionDescriptor) {
-        return new WalletPositionDescriptor(stablecoins);
+    /// @notice Deploy the descriptor. Public + side-effect-free so tests can drive it.
+    function deploy(IPoolManager pm, address owner, DescriptorParams memory p)
+        public
+        returns (WalletPositionDescriptor)
+    {
+        return new WalletPositionDescriptor(pm, owner, p.weth, p.nativeSymbol, p.stablecoins, p.refs);
     }
 
-    /// @dev Read `.["<chainId>"].stablecoins` from `chain_params.json`; missing ⇒ empty allowlist.
-    function _readStablecoins(uint256 chainId) internal view returns (address[] memory) {
-        if (!vm.exists(CONFIG_PATH)) return new address[](0);
-        string memory json = vm.readFile(CONFIG_PATH);
-        string memory path = string.concat('.["', vm.toString(chainId), '"].stablecoins');
-        return vm.keyExistsJson(json, path) ? vm.parseJsonAddressArray(json, path) : new address[](0);
+    function _owner(uint256 chainId) internal view returns (address) {
+        string memory json = vm.readFile(DESCRIPTOR_CONFIG_PATH);
+        string memory path = string.concat('.["', vm.toString(chainId), '"].initialOwner');
+        return vm.keyExistsJson(json, path) ? vm.parseJsonAddress(json, path) : address(0);
     }
 
     /// @notice Patch only the `descriptor` key in `deployments/<chainId>.json`, preserving the rest

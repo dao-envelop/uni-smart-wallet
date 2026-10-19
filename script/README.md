@@ -299,9 +299,17 @@ Volatile and open configs omit `.tickLower` / `.tickUpper` (ranges are per-call)
 
 To ship a new `WalletPositionDescriptor` (e.g. after a rendering change) without redeploying the
 whole stack — which would also redeploy the factory/impl/treasury and orphan existing clones —
-run `DeployDescriptor`. It has no constructor args, deploys just the descriptor, and rewrites the
-`.descriptor` key in `deployments/<chainId>.json` (other keys are preserved; a minimal file is
-created if none exists).
+run `DeployDescriptor`. It deploys just the descriptor and rewrites the `.descriptor` key in
+`deployments/<chainId>.json` (other keys are preserved; a minimal file is created if none exists).
+
+Constructor inputs come from `chain_params.json` (`script/DescriptorConfig.sol`, task_055): the
+`stablecoins` allowlist ($1) and a `descriptor` object — `weth` (aliased to native for pricing),
+`nativeSymbol`, and `references`: one Uniswap pool per non-stable token (`v3Pool` address or a hookless
+`v4` key) through which the card prices it, token/stable or token/WETH (then WETH's own entry). The
+admin (Ownable2Step) is `.initialOwner`, or the broadcaster when that is zero; after deploy it can
+change both lists with `setStable(token, bool)` and `setReference(token, v3Pool, v4Key)` (both empty
+clears). Pick the deepest pool per hop and re-check now and then — the registry is the card's only
+price source besides the manager's own pool (flagged "own pool" on the card).
 
 ```bash
 forge script script/DeployDescriptor.s.sol --sig "run()" \
