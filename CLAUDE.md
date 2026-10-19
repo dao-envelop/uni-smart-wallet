@@ -81,7 +81,9 @@ The repo implements **NFT-owned Uniswap V4 LP managers** that interact with the 
 - **`VolatileLPManager`** (`src/VolatileLPManager.sol`) — arbitrary/volatile pairs. **`salt ≠ poolId`**:
   a pool holds **many positions** (each a caller-chosen salt) at **per-call ranges**; the position
   records its `poolId`. Adds `minAmountOut` on the balancing pre-swap, `recenter` (single-call
-  remove→swap→re-add within one pool), `moveLiquidity` (the same across two pools, task_051), and an
+  remove→swap→re-add within one pool), `moveLiquidity` (the same across two pools, task_051; since task_058 an overload adds a `BridgeSwap` in a
+  third configured pool between the pull and the add, for pairs with no shared currency — the
+  three-argument form is kept verbatim and routes into the same handler), and an
   external `IPriceOracle` guard (`setPriceOracle`) that gates **operator**
   swaps fail-closed (owner swaps bypass; see Authorization model). Like Stable,
   the add is sized from desired amounts with a `minLiquidity` floor — no `amount*Max` (owed ≤ desired
@@ -147,7 +149,7 @@ caller offered. The hookless products get that invariant by construction and pay
 
 `OpenVolatileLPManager` (task_043, `ORACLE_TYPE 3002`) exists because forbidding hooked pools outright is
 a product decision the owner should be able to make. It is a separate implementation rather than a flag:
-each implementation gets its own EIP-170 budget (headroom after task_056: Stable 2 191 B, Volatile 1 300 B, Open 1 238 B), and the factory's owner-curated
+each implementation gets its own EIP-170 budget (headroom after task_058: Stable 2 166 B, Volatile 612 B, Open 550 B), and the factory's owner-curated
 `isImplementation` allowlist already makes choosing it the explicit opt-in. For that product the
 invariant "the manager's own code protects the principal" **does not hold** — it holds as far as the
 chosen hook is honest. `test/OpenVolatileLPManager.t.sol` demonstrates that with a passing test

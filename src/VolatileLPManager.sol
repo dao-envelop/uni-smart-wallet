@@ -76,6 +76,18 @@ contract VolatileLPManager is BaseLPManager {
         uint128 minLiquidity; // floor on the re-added L (slippage on the add; owed ≤ freed by construction)
     }
 
+    /// @notice A single-hop exactIn swap run by `moveLiquidity` between freeing the source and adding to
+    /// the destination, in **any configured pool** — typically a third pool that bridges two pools with
+    /// no currency in common (task_058). Same guards as every other swap of the product: full fill,
+    /// `priceLimit`, `minOut`, and for an operator the oracle (fail-closed). `amountIn == 0` ⇒ no swap.
+    struct BridgeSwap {
+        PoolId poolId; // a configured pool (UnknownPool otherwise); its key comes from `pools`
+        bool zeroForOne; // input side in that pool
+        uint256 amountIn; // exactIn; 0 = no bridge swap
+        uint160 priceLimit; // sqrtPriceLimitX96 — price bound on the swap
+        uint256 minOut; // floor on the swap output
+    }
+
     /// @notice The pre-swap delivered less than `minAmountOut` of the output currency.
     error SwapMinOut(PoolId poolId);
     /// @notice A top-up targeted an existing `salt` with a different pool or range than it was opened at.
@@ -393,17 +405,51 @@ contract VolatileLPManager is BaseLPManager {
     /// budget: arrays of structs need their own calldata-to-memory encoder and memory decoder, and the
     /// pair costs more than the manager has left. Moving one position is also the case that exists —
     /// an operator repeats the call to move several.
+    ///
+    /// This three-argument form can only rebalance inside the destination pool (`add`'s own pre-swap), so
+    /// it cannot reach a destination that shares no currency with the source. The four-argument overload
+    /// adds a {BridgeSwap} in any configured pool; this one is kept verbatim for the callers that already
+    /// encode it (frontend, MCP, insight) and is exactly that overload with no bridge.
     /// @param fromSalt The open position to free.
     /// @param liquidity How much of it to pull; the whole amount closes the position.
     /// @param add Where the proceeds go — an ordinary allocate leg, with its own pool, range, optional
     /// pre-swap and floors. May be a fresh salt or a top-up of an existing position.
-    function moveLiquidity(bytes32 fromSalt, uint128 liquidity, VolatileAllocLeg calldata add)
-        external
-        nonReentrant
-        fixEtherBalance
-    {
+    function moveLiquidity(bytes32 fromSalt, uint128 liquidity, VolatileAllocLeg calldata add) external {
+        BridgeSwap memory none;
+        _moveLiquidity(fromSalt, liquidity, add, none);
+    }
+
+    /// @notice {moveLiquidity} with a swap in another configured pool between the pull and the add
+    /// (task_058): free the source → `bridge` → `add` (with its own optional pre-swap) → settle once.
+    /// Lets an operator move between pools with no currency in common, e.g. ETH/ARB → USDC/USDT through
+    /// a configured ETH/USDC pool. Single hop; the bridge pool must be in the owner-fixed set, so the
+    /// settlement still only touches managed currencies (and Open's hook policy is unchanged). The
+    /// oracle judges the bridge swap like any other (`checkOp` on the bridge pool's key): an operator
+    /// needs USD feeds for both of its currencies.
+    /// @param fromSalt The open position to free.
+    /// @param liquidity How much of it to pull; the whole amount closes the position.
+    /// @param add Where the proceeds go (see the three-argument form).
+    /// @param bridge The swap between the pull and the add; `amountIn == 0` ⇒ none.
+    function moveLiquidity(
+        bytes32 fromSalt,
+        uint128 liquidity,
+        VolatileAllocLeg calldata add,
+        BridgeSwap calldata bridge
+    ) external {
+        _moveLiquidity(fromSalt, liquidity, add, bridge);
+    }
+
+    /// @dev The one body behind both overloads: same op code, same handler, same event. The
+    /// `nonReentrant` / `fixEtherBalance` modifiers sit here rather than on each overload — a modifier is
+    /// inlined per use, and two copies of the pair cost the bytes the second selector needed (task_058).
+    function _moveLiquidity(
+        bytes32 fromSalt,
+        uint128 liquidity,
+        VolatileAllocLeg calldata add,
+        BridgeSwap memory bridge
+    ) internal nonReentrant fixEtherBalance {
         // `_requireAuthorized()` is the `onlyAuthorized` check, returning byOwner, evaluated first.
-        POOL_MANAGER.unlock(abi.encode(OP_MOVE, abi.encode(_requireAuthorized(), fromSalt, liquidity, add)));
+        POOL_MANAGER.unlock(abi.encode(OP_MOVE, abi.encode(_requireAuthorized(), fromSalt, liquidity, add, bridge)));
         emit LiquidityMoved(fromSalt, add.salt, liquidity);
         _metadataUpdated();
     }
@@ -415,12 +461,16 @@ contract VolatileLPManager is BaseLPManager {
     /// what makes this cheaper than two transactions: settlement walks the managed currency union once,
     /// no matter how many pools were touched.
     function _handleMove(bytes memory payload) internal returns (bytes memory) {
-        (bool byOwner, bytes32 fromSalt, uint128 liquidity, VolatileAllocLeg memory add) =
-            abi.decode(payload, (bool, bytes32, uint128, VolatileAllocLeg));
+        (bool byOwner, bytes32 fromSalt, uint128 liquidity, VolatileAllocLeg memory add, BridgeSwap memory b) =
+            abi.decode(payload, (bool, bytes32, uint128, VolatileAllocLeg, BridgeSwap));
         // `_pullLiquidity` returns silently on a zero pull, which would turn this into a plain allocate
         // funded from whatever happens to sit on the balance. Reject it, where the revert is clear.
         if (liquidity == 0) revert ZeroLiquidity();
         _pullLiquidity(fromSalt, liquidity);
+        // The bridge (task_058) runs on the freed credit, before the destination's own pre-swap.
+        if (b.amountIn > 0) {
+            _guardedSwap(pools[_indexOf(b.poolId)].key, b.zeroForOne, b.amountIn, b.priceLimit, b.minOut, byOwner);
+        }
         _allocateLegV(add, byOwner);
         _settleManaged();
         return "";
