@@ -295,6 +295,13 @@ implementation address differs — so it is the config for pools that carry hook
 Volatile and open configs omit `.tickLower` / `.tickUpper` (ranges are per-call). See
 `script/manager_config.example.json` (stable) and `script/manager_config.volatile.example.json`.
 
+The clone is born wired (task_057): `InitParams.descriptor` defaults to `.descriptor` and
+`InitParams.oracle` to `.oracle` of `deployments/<chainId>.json`, so operator swaps and adds work from
+the first block without a follow-up `setPriceOracle`. A config key `"descriptor"` / `"oracle"` overrides
+either; the zero address opts out (for the oracle that means operators stay fail-closed until the owner
+sets one). The owner can replace or clear both later. Only managers on v2.2.0+ implementations accept
+the `oracle` field — `initialize`'s selector changed with it.
+
 ## Deploy the descriptor standalone
 
 To ship a new `WalletPositionDescriptor` (e.g. after a rendering change) without redeploying the

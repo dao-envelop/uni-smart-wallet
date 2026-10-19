@@ -246,7 +246,11 @@ contract PoolCountScalingTest is Test {
             cfgs[i] = StableLPManager.StablePoolInit({key: c.keys[i], tickLower: TL, tickUpper: TU});
         }
         StableLPManager.InitParams memory p = StableLPManager.InitParams({
-            owner: owner, name: bytes32("Envelop StableLP"), descriptor: address(descriptor), pools: cfgs
+            owner: owner,
+            name: bytes32("Envelop StableLP"),
+            descriptor: address(descriptor),
+            oracle: address(0),
+            pools: cfgs
         });
 
         uint256 g = gasleft();

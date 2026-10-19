@@ -86,7 +86,9 @@ contract Audit20260904SwaplessDrainPoC is Test {
         cfgs[0] = keyA;
         cfgs[1] = keyB;
         mgr.initialize(
-            VolatileLPManager.InitParams({owner: owner, name: bytes32("Vol"), descriptor: address(0), pools: cfgs})
+            VolatileLPManager.InitParams({
+                owner: owner, name: bytes32("Vol"), descriptor: address(0), oracle: address(0), pools: cfgs
+            })
         );
         MockERC20(Currency.unwrap(c0)).mint(address(mgr), 500e18);
         MockERC20(Currency.unwrap(c1)).mint(address(mgr), 500e18);

@@ -50,6 +50,7 @@ contract StableLPManager is BaseLPManager {
         address owner; // receives the singleton NFT
         bytes32 name; // NFT name, packed (≤31 chars); "" ⇒ default "Envelop LP Uniswap Manager"
         address descriptor; // default tokenURI renderer; zero ⇒ none (owner sets later)
+        address oracle; // default operator price guard; zero ⇒ none (operators fail-closed until set)
         StablePoolInit[] pools; // 1..MAX_POOLS hookless stable pools + the position bounds for each
     }
 
@@ -64,7 +65,8 @@ contract StableLPManager is BaseLPManager {
 
     /// @notice One-shot initializer, called by the factory on the freshly-cloned proxy: registers the
     /// pools + their fixed ranges + managed stables, mints the singleton NFT, and reverts if called twice.
-    /// @param p Init parameters: owner, packed NFT name (empty ⇒ default), and 1..MAX_POOLS pools+ranges.
+    /// @param p Init parameters: owner, packed NFT name (empty ⇒ default), default descriptor and
+    /// operator price oracle (zero ⇒ none), and 1..MAX_POOLS pools+ranges.
     function initialize(InitParams calldata p) external {
         _beginInit(p.name);
         uint256 n = p.pools.length;
@@ -76,7 +78,7 @@ contract StableLPManager is BaseLPManager {
             _registerPool(c.key); // hookless gate + dedup + managed-currency union
             rangeOf[c.key.toId()] = Range({tickLower: c.tickLower, tickUpper: c.tickUpper});
         }
-        _finishInit(p.owner, n, p.descriptor);
+        _finishInit(p.owner, n, p.descriptor, p.oracle);
     }
 
     // ────────── Product identity ──────────

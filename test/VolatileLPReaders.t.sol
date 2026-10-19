@@ -91,7 +91,9 @@ contract VolatileLPReadersTest is Test {
         cfgs[0] = keyA;
         cfgs[1] = keyB;
         mgr.initialize(
-            VolatileLPManager.InitParams({owner: owner, name: bytes32("Vol"), descriptor: address(0), pools: cfgs})
+            VolatileLPManager.InitParams({
+                owner: owner, name: bytes32("Vol"), descriptor: address(0), oracle: address(0), pools: cfgs
+            })
         );
 
         // Fund the manager with all three managed currencies so allocate/idle balances are meaningful.

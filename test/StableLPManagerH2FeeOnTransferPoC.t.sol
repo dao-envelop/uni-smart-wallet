@@ -93,7 +93,9 @@ contract StableLPManagerH2FeeOnTransferPoC is Test {
         mgr = FactoryHelper.cloneStable(
             factory,
             address(impl),
-            StableLPManager.InitParams({owner: owner, name: bytes32("FOT"), descriptor: address(0), pools: cfgs})
+            StableLPManager.InitParams({
+                owner: owner, name: bytes32("FOT"), descriptor: address(0), oracle: address(0), pools: cfgs
+            })
         );
 
         // Fund + open a position while the token still behaves like a plain ERC-20.

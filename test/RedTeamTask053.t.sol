@@ -96,7 +96,9 @@ abstract contract RedTeamBase is Test {
         PoolKey[] memory cfgs = new PoolKey[](1);
         cfgs[0] = key;
         mgr.initialize(
-            VolatileLPManager.InitParams({owner: owner, name: bytes32("Vol"), descriptor: address(0), pools: cfgs})
+            VolatileLPManager.InitParams({
+                owner: owner, name: bytes32("Vol"), descriptor: address(0), oracle: address(0), pools: cfgs
+            })
         );
         if (fund0 > 0) MockERC20(Currency.unwrap(c0)).mint(address(mgr), fund0);
         if (fund1 > 0) MockERC20(Currency.unwrap(c1)).mint(address(mgr), fund1);

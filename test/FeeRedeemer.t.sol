@@ -142,7 +142,7 @@ contract FeeRedeemerNativeTest is Test {
             factory,
             address(impl),
             StableLPManager.InitParams({
-                owner: owner, name: bytes32("Envelop StableLP"), descriptor: address(0), pools: cfgs
+                owner: owner, name: bytes32("Envelop StableLP"), descriptor: address(0), oracle: address(0), pools: cfgs
             })
         );
 

@@ -50,10 +50,14 @@ contract CreateManager is Script {
         // overrides). Wired at init so the clone renders `tokenURI` without a follow-up owner call.
         address descriptor =
             vm.keyExistsJson(json, ".descriptor") ? vm.parseJsonAddress(json, ".descriptor") : _readDescriptor(chainId);
+        // Same for the operator price guard (task_057): the chain's oracle unless the config names one.
+        // A config `"oracle": "0x0000000000000000000000000000000000000000"` creates the manager without
+        // one — operator swaps and adds then stay fail-closed until the owner calls `setPriceOracle`.
+        address oracle = vm.keyExistsJson(json, ".oracle") ? vm.parseJsonAddress(json, ".oracle") : _readOracle(chainId);
 
         (address impl, bytes memory initData, uint256 poolCount) = isVolatile
-            ? _volatileInit(json, chainId, owner, name, descriptor, isOpen ? ".openImpl" : ".volatileImpl")
-            : _stableInit(json, chainId, owner, name, descriptor);
+            ? _volatileInit(json, chainId, owner, name, [descriptor, oracle], isOpen ? ".openImpl" : ".volatileImpl")
+            : _stableInit(json, chainId, owner, name, [descriptor, oracle]);
 
         vm.startBroadcast();
         manager = LPManagerFactory(factory).createManager(impl, owner, initData);
@@ -64,11 +68,13 @@ contract CreateManager is Script {
         console2.log("Owner:          ", owner);
         console2.log("Pools:          ", poolCount);
         console2.log("Factory:        ", factory);
+        console2.log("Price oracle:   ", oracle);
     }
 
     // ────────── per-product init encoding ──────────
 
-    function _stableInit(string memory json, uint256 chainId, address owner, bytes32 name, address descriptor)
+    /// @dev `wiring` = [descriptor, oracle] — one stack slot for two addresses (the script is not via-ir).
+    function _stableInit(string memory json, uint256 chainId, address owner, bytes32 name, address[2] memory wiring)
         internal
         view
         returns (address impl, bytes memory initData, uint256 poolCount)
@@ -82,8 +88,9 @@ contract CreateManager is Script {
             pools[i] =
                 StableLPManager.StablePoolInit({key: keys[i], tickLower: int24(lower[i]), tickUpper: int24(upper[i])});
         }
-        StableLPManager.InitParams memory p =
-            StableLPManager.InitParams({owner: owner, name: name, descriptor: descriptor, pools: pools});
+        StableLPManager.InitParams memory p = StableLPManager.InitParams({
+            owner: owner, name: name, descriptor: wiring[0], oracle: wiring[1], pools: pools
+        });
         initData = abi.encodeCall(StableLPManager.initialize, (p));
     }
 
@@ -93,14 +100,15 @@ contract CreateManager is Script {
         uint256 chainId,
         address owner,
         bytes32 name,
-        address descriptor,
+        address[2] memory wiring,
         string memory implKey
     ) internal view returns (address impl, bytes memory initData, uint256 poolCount) {
         impl = _readImpl(chainId, implKey);
         PoolKey[] memory keys = _parseKeys(json);
         poolCount = keys.length;
-        VolatileLPManager.InitParams memory p =
-            VolatileLPManager.InitParams({owner: owner, name: name, descriptor: descriptor, pools: keys});
+        VolatileLPManager.InitParams memory p = VolatileLPManager.InitParams({
+            owner: owner, name: name, descriptor: wiring[0], oracle: wiring[1], pools: keys
+        });
         initData = abi.encodeCall(VolatileLPManager.initialize, (p));
     }
 
@@ -157,6 +165,12 @@ contract CreateManager is Script {
 
     function _readImpl(uint256 chainId, string memory key) internal view returns (address) {
         return vm.parseJsonAddress(_deployments(chainId), key);
+    }
+
+    /// @dev The chain's deployed oracle (`.oracle` in the deployments file), or zero if absent.
+    function _readOracle(uint256 chainId) internal view returns (address) {
+        string memory json = _deployments(chainId);
+        return vm.keyExistsJson(json, ".oracle") ? vm.parseJsonAddress(json, ".oracle") : address(0);
     }
 
     /// @dev The chain's deployed descriptor (`.descriptor` in the deployments file), or zero if absent.

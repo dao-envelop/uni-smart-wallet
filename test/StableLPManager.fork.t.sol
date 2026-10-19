@@ -102,7 +102,11 @@ contract StableLPManagerForkTest is Test {
             factory,
             address(impl),
             StableLPManager.InitParams({
-                owner: address(this), name: bytes32("Envelop ETH-USDC"), descriptor: address(0), pools: cfgs
+                owner: address(this),
+                name: bytes32("Envelop ETH-USDC"),
+                descriptor: address(0),
+                oracle: address(0),
+                pools: cfgs
             })
         );
 

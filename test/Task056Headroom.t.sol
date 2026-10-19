@@ -206,7 +206,11 @@ contract Task056HeadroomTest is StableLPTestBase {
         v = VolatileLPManager(payable(Clones.clone(address(vImpl))));
         PoolKey[] memory cfgs = new PoolKey[](1);
         cfgs[0] = poolKeys[0];
-        v.initialize(VolatileLPManager.InitParams({owner: owner, name: "", descriptor: address(0), pools: cfgs}));
+        v.initialize(
+            VolatileLPManager.InitParams({
+                owner: owner, name: "", descriptor: address(0), oracle: address(0), pools: cfgs
+            })
+        );
     }
 
     function test_volatile_strangerGetsNotAuthorized_beforeAnyValidation() public {

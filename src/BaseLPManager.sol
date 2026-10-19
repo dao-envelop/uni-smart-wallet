@@ -272,14 +272,19 @@ abstract contract BaseLPManager is SingletonNFTOwned, V4PositionManager {
         return false;
     }
 
-    /// @dev Finish the one-shot init: optionally wire the `tokenURI` renderer, mint the singleton NFT
-    /// to `owner_`, and emit the init/oracle events. Called LAST in a product's `initialize`.
+    /// @dev Finish the one-shot init: optionally wire the `tokenURI` renderer and the operator price
+    /// guard, mint the singleton NFT to `owner_`, and emit the init/oracle events. Called LAST in a
+    /// product's `initialize`.
     /// @param owner_ The manager owner (receives the singleton NFT).
     /// @param poolCount_ Number of configured pools (for the `Initialized` event).
     /// @param descriptor_ The default `tokenURI` renderer to set at init; zero ⇒ none (owner can set
     /// it later via `setPositionDescriptor`).
-    function _finishInit(address owner_, uint256 poolCount_, address descriptor_) internal {
+    /// @param oracle_ The default operator price guard (the chain's oracle, as the UI supplies it); zero
+    /// ⇒ none, so operator swaps and adds stay fail-closed until the owner calls `setPriceOracle`
+    /// (task_057). Either way the owner can replace or clear it later.
+    function _finishInit(address owner_, uint256 poolCount_, address descriptor_, address oracle_) internal {
         if (descriptor_ != address(0)) positionDescriptor = descriptor_;
+        if (oracle_ != address(0)) _setPriceOracle(oracle_);
         _mintSingleton(owner_);
         _metadataUpdated();
         emit EnvelopWrappedV2(owner_, TOKEN_ID, 0x0000, "");
@@ -339,6 +344,12 @@ abstract contract BaseLPManager is SingletonNFTOwned, V4PositionManager {
     /// weaken the owner (who always has full freedom) but disables operator-triggered swaps entirely.
     /// @param oracle The {IPriceOracle} to enforce on operator swaps; zero ⇒ operators cannot swap.
     function setPriceOracle(address oracle) external onlyOwnerNFT {
+        _setPriceOracle(oracle);
+    }
+
+    /// @dev The one place `priceOracle` is written and {PriceOracleSet} emitted — shared by
+    /// `setPriceOracle` and init (task_057), so an indexer sees the init-time oracle the same way.
+    function _setPriceOracle(address oracle) internal {
         priceOracle = oracle;
         emit PriceOracleSet(oracle);
     }

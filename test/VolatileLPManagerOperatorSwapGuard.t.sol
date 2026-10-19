@@ -63,7 +63,9 @@ contract VolatileLPManagerOperatorSwapGuardTest is Test {
         PoolKey[] memory cfgs = new PoolKey[](1);
         cfgs[0] = key;
         mgr.initialize(
-            VolatileLPManager.InitParams({owner: owner, name: bytes32("Vol"), descriptor: address(0), pools: cfgs})
+            VolatileLPManager.InitParams({
+                owner: owner, name: bytes32("Vol"), descriptor: address(0), oracle: address(0), pools: cfgs
+            })
         );
 
         MockERC20(Currency.unwrap(c0)).mint(address(mgr), FUND);
