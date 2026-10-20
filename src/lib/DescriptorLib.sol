@@ -2,6 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
+import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 
 /// @title DescriptorLib
 /// @notice Pure SVG/markup + number-formatting helpers for {WalletPositionDescriptor}. Kept in a
@@ -53,16 +54,102 @@ library DescriptorLib {
         );
     }
 
-    /// @dev Format a 1e18-scaled value as `1,234.56` (2 decimals, thousands-separated integer).
+    /// @dev Format a 1e18-scaled value as `1,234.56`, rounded half-up to the cent. A non-zero value that
+    /// rounds to nothing renders `<0.01` (XML-escaped: this goes into the SVG) rather than a misleading
+    /// `0.00` (task_055).
     function formatUsd(uint256 scaled1e18) internal pure returns (string memory) {
-        uint256 whole = scaled1e18 / 1e18;
-        uint256 cents = (scaled1e18 % 1e18) / 1e16; // 0..99
-        return string.concat(_commas(whole), ".", _two(cents));
+        if (scaled1e18 != 0 && scaled1e18 < 5e15) return "&lt;0.01";
+        uint256 c = scaled1e18 / 1e16 + ((scaled1e18 % 1e16) >= 5e15 ? 1 : 0); // whole cents, rounded
+        return string.concat(_commas(c / 100), ".", _two(c % 100));
+    }
+
+    /// @dev token0 raw → token1 raw at `sp`: a0 · sqrtP² / 2^192. Exact single mulDiv while sqrtP² fits
+    /// 256 bits, else pre-scaled by 2^64 (the split `OracleLibrary.getQuoteAtTick` uses).
+    function q0to1(uint256 a0, uint160 sp) internal pure returns (uint256) {
+        if (sp <= type(uint128).max) return FullMath.mulDiv(a0, uint256(sp) * sp, 1 << 192);
+        return FullMath.mulDiv(a0, FullMath.mulDiv(sp, sp, 1 << 64), 1 << 128);
+    }
+
+    /// @dev token1 raw → token0 raw at `sp`: a1 · 2^192 / sqrtP².
+    function q1to0(uint256 a1, uint160 sp) internal pure returns (uint256) {
+        if (sp <= type(uint128).max) return FullMath.mulDiv(a1, 1 << 192, uint256(sp) * sp);
+        return FullMath.mulDiv(a1, 1 << 128, FullMath.mulDiv(sp, sp, 1 << 64));
     }
 
     /// @dev Format basis points as a percentage: `1234` ⇒ `12.34%`.
     function formatPercentBps(uint256 bps) internal pure returns (string memory) {
         return string.concat((bps / 100).toString(), ".", _two(bps % 100), "%");
+    }
+
+    /// @dev Make untrusted text (a token `symbol()`, a manager `name()`) safe to embed: keep at most
+    /// `maxLen` bytes without splitting a UTF-8 sequence, replace every byte that is not part of a
+    /// well-formed sequence — and every control character — with `?`, then escape for the target:
+    /// JSON string (`"` and `\`) or XML text (`&`, `<`, `>`, `"`, `'`). One pass, linear.
+    function clean(bytes memory s, uint256 maxLen, bool json) internal pure returns (string memory) {
+        bytes memory out = new bytes(s.length * 6 + 6); // worst case: every byte → `&apos;`
+        uint256 o;
+        uint256 i;
+        while (i < s.length) {
+            uint8 b = uint8(s[i]);
+            uint256 n = _seqLen(s, i);
+            if (i + (n == 0 ? 1 : n) > maxLen) break; // never cut a code point; stop at the cap
+            if (n > 1) {
+                for (uint256 k; k < n; ++k) {
+                    out[o++] = s[i + k];
+                }
+                i += n;
+                continue;
+            }
+            ++i;
+            bytes memory e;
+            if (n == 0 || b < 0x20 || b == 0x7f) e = "?";
+            else if (json && b == 0x22) e = '\\"';
+            else if (json && b == 0x5c) e = "\\\\";
+            else if (!json && b == 0x26) e = "&amp;";
+            else if (!json && b == 0x3c) e = "&lt;";
+            else if (!json && b == 0x3e) e = "&gt;";
+            else if (!json && b == 0x22) e = "&quot;";
+            else if (!json && b == 0x27) e = "&apos;";
+            else e = abi.encodePacked(b);
+            for (uint256 k; k < e.length; ++k) {
+                out[o++] = e[k];
+            }
+        }
+        assembly ("memory-safe") {
+            mstore(out, o)
+        }
+        return string(out);
+    }
+
+    /// @dev Length of the well-formed UTF-8 sequence starting at `s[i]` (1 for ASCII), or 0 when the
+    /// bytes there are not one (stray continuation, overlong form, surrogate, > U+10FFFF, truncated).
+    function _seqLen(bytes memory s, uint256 i) private pure returns (uint256) {
+        uint8 b = uint8(s[i]);
+        if (b < 0x80) return 1;
+        uint256 n;
+        uint8 lo = 0x80;
+        uint8 hi = 0xbf;
+        if (b >= 0xc2 && b <= 0xdf) {
+            n = 2;
+        } else if (b >= 0xe0 && b <= 0xef) {
+            n = 3;
+            if (b == 0xe0) lo = 0xa0;
+            if (b == 0xed) hi = 0x9f;
+        } else if (b >= 0xf0 && b <= 0xf4) {
+            n = 4;
+            if (b == 0xf0) lo = 0x90;
+            if (b == 0xf4) hi = 0x8f;
+        } else {
+            return 0;
+        }
+        if (i + n > s.length) return 0;
+        uint8 c = uint8(s[i + 1]);
+        if (c < lo || c > hi) return 0;
+        for (uint256 k = 2; k < n; ++k) {
+            c = uint8(s[i + k]);
+            if (c < 0x80 || c > 0xbf) return 0;
+        }
+        return n;
     }
 
     /// @dev Decimal string of `n` with a comma every three integer digits.
@@ -83,5 +170,15 @@ library DescriptorLib {
     /// @dev Two-digit zero-padded string for `x < 100`.
     function _two(uint256 x) private pure returns (string memory) {
         return x < 10 ? string.concat("0", x.toString()) : x.toString();
+    }
+}
+
+/// @title DescriptorArt
+/// @notice Holds the static Envelop watermark for {WalletPositionDescriptor}. The descriptor deploys it
+/// from its constructor and reads it per render: ~5 KB of SVG paths live here instead of in the
+/// descriptor's runtime code, which keeps that under EIP-170 with the task_055 pricing logic.
+contract DescriptorArt {
+    function logo() external pure returns (string memory) {
+        return DescriptorLib.logo();
     }
 }

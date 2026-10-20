@@ -182,3 +182,94 @@ contract MockBrickingHook is BaseTestHooks {
         revert Bricked();
     }
 }
+
+/// @notice ERC-20 with configurable metadata (task_055 descriptor tests): any symbol (including
+/// markup / broken UTF-8) and any `decimals()` value, returned as a full uint256 word so values
+/// above 255 can be modelled.
+contract MockMetaERC20 is ERC20 {
+    string private _sym;
+    uint256 private _dec;
+
+    constructor(string memory sym_, uint256 dec_) ERC20("Meta", sym_) {
+        _sym = sym_;
+        _dec = dec_;
+    }
+
+    function mint(address to, uint256 amount) external {
+        _mint(to, amount);
+    }
+
+    function symbol() public view override returns (string memory) {
+        return _sym;
+    }
+
+    /// @dev Raw word so a test can return 78 / 300; ERC20 callers decoding uint8 would revert, the
+    /// descriptor reads the word itself.
+    function decimals() public view override returns (uint8) {
+        uint256 d = _dec;
+        assembly ("memory-safe") {
+            mstore(0, d)
+            return(0, 32)
+        }
+    }
+}
+
+/// @notice A token whose metadata calls misbehave: `symbol()` returns a megabyte, reverts, or returns a
+/// malformed ABI string; `decimals()` reverts. Transfers work (it is a plain mintable ERC-20).
+contract HostileMetaERC20 is ERC20 {
+    uint8 public mode; // 0 = huge return, 1 = revert, 2 = bad ABI offset, 3 = gas burn
+
+    constructor(uint8 mode_) ERC20("Hostile", "H") {
+        mode = mode_;
+    }
+
+    function mint(address to, uint256 amount) external {
+        _mint(to, amount);
+    }
+
+    function symbol() public view override returns (string memory) {
+        uint8 m = mode;
+        if (m == 1) revert("no symbol");
+        if (m == 3) {
+            uint256 x;
+            while (gasleft() > 1000) {
+                x++;
+            }
+        }
+        assembly ("memory-safe") {
+            if eq(m, 0) {
+                mstore(0, 0x20)
+                mstore(0x20, 1000000)
+                return(0, 1000064)
+            }
+            // bad ABI: offset points past the data
+            mstore(0, 0xffff)
+            mstore(0x20, 3)
+            return(0, 0x60)
+        }
+    }
+
+    function decimals() public pure override returns (uint8) {
+        revert("no decimals");
+    }
+}
+
+/// @notice The three Uniswap v3 pool getters the descriptor reads for a reference price.
+contract MockV3Pool {
+    address public token0;
+    address public token1;
+    uint160 public sqrtPriceX96;
+
+    constructor(address a, address b, uint160 sp) {
+        (token0, token1) = a < b ? (a, b) : (b, a);
+        sqrtPriceX96 = sp;
+    }
+
+    function setPrice(uint160 sp) external {
+        sqrtPriceX96 = sp;
+    }
+
+    function slot0() external view returns (uint160, int24, uint16, uint16, uint16, uint8, bool) {
+        return (sqrtPriceX96, 0, 0, 0, 0, 0, true);
+    }
+}

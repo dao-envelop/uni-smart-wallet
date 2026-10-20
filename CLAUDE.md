@@ -174,6 +174,13 @@ validation + `liquidityFromAmounts`.
 `openSalts`, reads each position via `positionOf`, and values it with `src/lib/PositionState.sol`
 (view-only: principal via `SqrtPriceMath`, fees via feeGrowth deltas — V4 has no `tokensOwed`). Every
 position mutation emits ERC-4906 `MetadataUpdate(TOKEN_ID)`; `supportsInterface` advertises `0x49064906`.
+Valuation (task_055) uses Uniswap pool prices only: stables on an allowlist = $1, other tokens through
+an admin-curated **reference pool** registry (v3 pool or hookless v4 key, ≤ 2 hops; `setStable` /
+`setReference`, Ownable2Step), else the manager's own pool against a stable leg (card flags "own pool"),
+else "unpriced" — never $1 per token. Fees are shown net of the 10 % cut, APR only when a manager exposes
+a `feesSince(salt)` clock (none do yet), at most `MAX_POSITIONS` (40) are rendered, and every token /
+manager string is UTF-8-trimmed and escaped. The watermark lives in a `DescriptorArt` contract the
+descriptor deploys from its constructor (keeps the runtime under EIP-170).
 
 ### Read aggregator
 
