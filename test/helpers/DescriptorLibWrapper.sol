@@ -10,10 +10,6 @@ contract DescriptorLibWrapper {
         return DescriptorLib.formatUsd(scaled1e18);
     }
 
-    function formatPercentBps(uint256 bps) external pure returns (string memory) {
-        return DescriptorLib.formatPercentBps(bps);
-    }
-
     function tokenIcon(string memory sym, uint256 x, uint256 y) external pure returns (string memory) {
         return DescriptorLib.tokenIcon(sym, x, y);
     }

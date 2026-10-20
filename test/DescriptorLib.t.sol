@@ -36,16 +36,6 @@ contract DescriptorLibTest is Test {
         assertEq(lib.formatUsd(1.234e18), "1.23");
     }
 
-    // ────────── formatPercentBps ──────────
-
-    function test_formatPercentBps() public view {
-        assertEq(lib.formatPercentBps(0), "0.00%");
-        assertEq(lib.formatPercentBps(1234), "12.34%");
-        assertEq(lib.formatPercentBps(5), "0.05%");
-        assertEq(lib.formatPercentBps(100), "1.00%");
-        assertEq(lib.formatPercentBps(10000), "100.00%");
-    }
-
     // ────────── tokenIcon ──────────
 
     function test_tokenIcon_knownStableBrandColor() public view {

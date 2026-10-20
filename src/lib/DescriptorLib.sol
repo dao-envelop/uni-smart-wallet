@@ -76,11 +76,6 @@ library DescriptorLib {
         return FullMath.mulDiv(a1, 1 << 128, FullMath.mulDiv(sp, sp, 1 << 64));
     }
 
-    /// @dev Format basis points as a percentage: `1234` ⇒ `12.34%`.
-    function formatPercentBps(uint256 bps) internal pure returns (string memory) {
-        return string.concat((bps / 100).toString(), ".", _two(bps % 100), "%");
-    }
-
     /// @dev Make untrusted text (a token `symbol()`, a manager `name()`) safe to embed: keep at most
     /// `maxLen` bytes without splitting a UTF-8 sequence, replace every byte that is not part of a
     /// well-formed sequence — and every control character — with `?`, then escape for the target:

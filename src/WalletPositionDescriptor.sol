@@ -29,7 +29,9 @@ import {DescriptorLib, DescriptorArt} from "./lib/DescriptorLib.sol";
 ///   3. otherwise, when the other leg of the manager's **own** pool is a stablecoin, through that pool's
 ///      price — flagged "own pool" on the card, since a thin pool picked by the creator sets it;
 ///   4. otherwise the leg is **unpriced** and the card says so instead of printing a number.
-/// Fees are shown net of the 10 % protocol cut. Idle balances are not included ("Positions value").
+/// The card shows two sums (task_059): **Liquidity** — the open positions' principal at the live price,
+/// idle balances excluded — and **Unclaimed fees**, net of the 10 % protocol cut. No APR: fees reset on
+/// every realization, so an on-chain renderer has no honest denominator for one.
 contract WalletPositionDescriptor is IWalletDescriptor, Ownable2Step {
     using Strings for uint256;
     using StateLibrary for IPoolManager;
@@ -40,7 +42,7 @@ contract WalletPositionDescriptor is IWalletDescriptor, Ownable2Step {
     /// @notice Positions valued and listed per render; a larger portfolio renders the first `MAX_POSITIONS`
     /// and says so (bounds `tokenURI` gas for Volatile managers, whose position count is unbounded).
     uint256 public constant MAX_POSITIONS = 40;
-    /// @dev Gas handed to each untrusted metadata call (`symbol`, `decimals`, `name`, the fee clock).
+    /// @dev Gas handed to each untrusted metadata call (`symbol`, `decimals`, `name`).
     uint256 private constant META_GAS = 40_000;
 
     // Pricing flags per position / portfolio.
@@ -208,7 +210,7 @@ contract WalletPositionDescriptor is IWalletDescriptor, Ownable2Step {
         (uint256 e1, uint8 h1) = _legUsd(r.p.key, own, false, r.f1);
         r.flags = g0 | g1 | h0 | h1;
         // An absurd figure (a broken pool or token) is not a price; the cap also keeps the portfolio sums
-        // and the APR products in {_totals} far from overflow. (An overflow here reverts → caught → unpriced.)
+        // in {_totals} far from overflow. (An overflow here reverts → caught → unpriced.)
         if (p0 + p1 + e0 + e1 > 2 ** 200) r.flags |= UNPRICED;
         if (r.flags & UNPRICED == 0) (r.principalUsd, r.feeUsd) = (p0 + p1, e0 + e1);
     }
@@ -329,18 +331,11 @@ contract WalletPositionDescriptor is IWalletDescriptor, Ownable2Step {
         return DescriptorLib.clean(s, 12, false);
     }
 
-    /// @dev Optional per-position fee clock a manager may expose: when its fees started accruing (the
-    /// last realization or the open). Present ⇒ an honest APR; absent (every v2.1 manager) ⇒ no APR.
-    function _feesSince(address wallet, bytes32 salt) private view returns (uint256 t) {
-        (bool ok, bytes memory d) = _boundedCall(wallet, abi.encodeWithSignature("feesSince(bytes32)", salt));
-        if (ok && d.length >= 32) t = uint256(bytes32(d));
-    }
-
     // ────────── JSON ──────────
 
     function _json(address wallet, uint256 tokenId, uint256 n, Row[] memory rows) private view returns (string memory) {
         bytes memory rawName = _text(wallet, 0x06fdde03); // name()
-        (uint256 total, uint256 aprBps, uint8 flags, bool hasApr) = _totals(wallet, rows);
+        (uint256 liq, uint256 fees, uint8 flags) = _totals(rows);
         if (n > rows.length) flags |= 4; // truncated
 
         string memory head = string.concat(
@@ -351,41 +346,20 @@ contract WalletPositionDescriptor is IWalletDescriptor, Ownable2Step {
             '","description":"',
             DESCRIPTION,
             '","image":"data:image/svg+xml;base64,',
-            Base64.encode(bytes(_svg(DescriptorLib.clean(rawName, 48, false), n, rows, total, flags, aprBps, hasApr)))
+            Base64.encode(bytes(_svg(DescriptorLib.clean(rawName, 48, false), n, rows, liq, fees, flags)))
         );
         return string.concat(
-            head,
-            '","attributes":[',
-            _attributes(n, total, flags, aprBps, hasApr),
-            '],"positions":[',
-            _positionsJson(rows),
-            "]}"
+            head, '","attributes":[', _attributes(n, liq, fees, flags), '],"positions":[', _positionsJson(rows), "]}"
         );
     }
 
-    /// @dev Portfolio totals over the rendered rows. APR only when every row is priced and the manager
-    /// exposes a fee clock for each (fees reset on every realization, so `openedAt` is no denominator).
-    function _totals(address wallet, Row[] memory rows)
-        private
-        view
-        returns (uint256 total, uint256 aprBps, uint8 flags, bool hasApr)
-    {
-        uint256 principal;
-        uint256 annual;
-        hasApr = rows.length != 0;
+    /// @dev Portfolio sums over the rendered rows: principal ("Liquidity") and net unclaimed fees.
+    function _totals(Row[] memory rows) private pure returns (uint256 liq, uint256 fees, uint8 flags) {
         for (uint256 i = 0; i < rows.length; ++i) {
-            Row memory r = rows[i];
-            flags |= r.flags;
-            total += r.principalUsd + r.feeUsd;
-            principal += r.principalUsd;
-            if (hasApr) {
-                uint256 since = _feesSince(wallet, r.salt);
-                if (since == 0 || since >= block.timestamp) hasApr = false;
-                else annual += (r.feeUsd * 365 days) / (block.timestamp - since);
-            }
+            flags |= rows[i].flags;
+            liq += rows[i].principalUsd;
+            fees += rows[i].feeUsd;
         }
-        if (flags & UNPRICED != 0 || principal == 0) hasApr = false;
-        if (hasApr) aprBps = (annual * 10_000) / principal;
     }
 
     function _pricing(uint8 flags) private pure returns (string memory) {
@@ -395,11 +369,7 @@ contract WalletPositionDescriptor is IWalletDescriptor, Ownable2Step {
         return "reference pools";
     }
 
-    function _attributes(uint256 n, uint256 total, uint8 flags, uint256 aprBps, bool hasApr)
-        private
-        pure
-        returns (string memory out)
-    {
+    function _attributes(uint256 n, uint256 liq, uint256 fees, uint8 flags) private pure returns (string memory out) {
         out = string.concat(
             '{"trait_type":"Open Positions","value":"',
             n.toString(),
@@ -408,9 +378,15 @@ contract WalletPositionDescriptor is IWalletDescriptor, Ownable2Step {
             '"}'
         );
         if (flags & (UNPRICED | 4) == 0) {
-            out = string.concat(out, ',{"trait_type":"Positions Value (USD)","value":"', _usdAttr(total), '"}');
+            out = string.concat(
+                out,
+                ',{"trait_type":"Liquidity (USD)","value":"',
+                _usdAttr(liq),
+                '"},{"trait_type":"Unclaimed Fees (USD)","value":"',
+                _usdAttr(fees),
+                '"}'
+            );
         }
-        if (hasApr) out = string.concat(out, ',{"trait_type":"Est. APR (bps)","value":"', aprBps.toString(), '"}');
     }
 
     /// @dev Machine-readable USD: rounded to the cent, no separators.
@@ -472,22 +448,20 @@ contract WalletPositionDescriptor is IWalletDescriptor, Ownable2Step {
         return string.concat(
             a,
             b,
-            r.flags & UNPRICED == 0 ? string.concat('","valueUsd":"', _usdAttr(r.principalUsd + r.feeUsd)) : "",
+            r.flags & UNPRICED == 0
+                ? string.concat('","liquidityUsd":"', _usdAttr(r.principalUsd), '","feesUsd":"', _usdAttr(r.feeUsd))
+                : "",
             '"}'
         );
     }
 
     // ────────── image ──────────
 
-    function _svg(
-        string memory nm,
-        uint256 n,
-        Row[] memory rows,
-        uint256 total,
-        uint8 flags,
-        uint256 aprBps,
-        bool hasApr
-    ) private view returns (string memory) {
+    function _svg(string memory nm, uint256 n, Row[] memory rows, uint256 liq, uint256 fees, uint8 flags)
+        private
+        view
+        returns (string memory)
+    {
         string memory top = string.concat(
             '<svg xmlns="http://www.w3.org/2000/svg" width="320" height="320">',
             '<rect width="320" height="320" fill="#0b1021"/>',
@@ -496,12 +470,12 @@ contract WalletPositionDescriptor is IWalletDescriptor, Ownable2Step {
             nm,
             '</text><text x="20" y="92" fill="#9aa7bd" font-family="monospace" font-size="13">Open positions: ',
             n.toString(),
-            '</text><text x="20" y="128" fill="#9aa7bd" font-family="monospace" font-size="13">Positions value (excl. idle)</text>'
+            '</text><text x="20" y="128" fill="#9aa7bd" font-family="monospace" font-size="13">Liquidity</text>'
         );
-        string memory value = flags & UNPRICED != 0
-            ? "unpriced"
-            : string.concat(flags & 4 != 0 ? "&#8805; $" : "$", DescriptorLib.formatUsd(total));
-        string memory note = flags & UNPRICED != 0
+        bool priced = flags & UNPRICED == 0;
+        string memory atLeast = flags & 4 != 0 ? "&#8805; $" : "$";
+        string memory value = priced ? string.concat(atLeast, DescriptorLib.formatUsd(liq)) : "unpriced";
+        string memory note = !priced
             ? "no pool price for some tokens"
             : flags & 4 != 0
                 ? string.concat("first ", rows.length.toString(), " of ", n.toString(), " positions")
@@ -512,7 +486,7 @@ contract WalletPositionDescriptor is IWalletDescriptor, Ownable2Step {
             '</text><text x="20" y="182" fill="#5b6b86" font-family="monospace" font-size="11">',
             note,
             '</text><text x="20" y="206" fill="#9aa7bd" font-family="monospace" font-size="13">',
-            hasApr ? string.concat("~APR: ", DescriptorLib.formatPercentBps(aprBps)) : "",
+            priced ? string.concat("Unclaimed fees: ", atLeast, DescriptorLib.formatUsd(fees)) : "",
             "</text>"
         );
         return string.concat(
