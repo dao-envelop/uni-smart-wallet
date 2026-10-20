@@ -37,7 +37,7 @@ from <https://developers.uniswap.org/contracts/v4/deployments>); addresses are w
 `deployments/<chainId>.json`. See `script/README.md`.
 
 `foundry.toml` enables `ffi = true`, sets `solc = 0.8.26`, `evm = cancun`, `optimizer_runs = 200`,
-`via_ir = false`, `cbor_metadata = false` + `bytecode_hash = "none"` (task_056: −53 B per contract), and grants `fs_permissions` for `./script` and `./test`.
+`via_ir = false`, and grants `fs_permissions` for `./script` and `./test`.
 
 **CI pins Forge to 1.8.1** (`.github/workflows/test.yml`) — match it locally (`foundryup --install
 1.8.1`) before trusting a green run. The version matters for more than reproducibility: 1.8 gives each
@@ -145,7 +145,7 @@ caller offered. The hookless products get that invariant by construction and pay
 
 `OpenVolatileLPManager` (task_043, `ORACLE_TYPE 3002`) exists because forbidding hooked pools outright is
 a product decision the owner should be able to make. It is a separate implementation rather than a flag:
-each implementation gets its own EIP-170 budget (headroom after task_056: Stable 2 244 B, Volatile 1 353 B, Open 1 291 B), and the factory's owner-curated
+each implementation gets its own EIP-170 budget (headroom after task_056: Stable 2 191 B, Volatile 1 300 B, Open 1 238 B), and the factory's owner-curated
 `isImplementation` allowlist already makes choosing it the explicit opt-in. For that product the
 invariant "the manager's own code protects the principal" **does not hold** — it holds as far as the
 chosen hook is honest. `test/OpenVolatileLPManager.t.sol` demonstrates that with a passing test
