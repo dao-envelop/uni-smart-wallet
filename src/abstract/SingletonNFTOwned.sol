@@ -81,8 +81,12 @@ abstract contract SingletonNFTOwned is ERC721 {
     /// @dev The body of {onlyAuthorized}, kept in its own frame: a modifier is inlined at every use, and
     /// there are seven of them across the products — sharing one copy costs a jump and saves 264 bytes
     /// of an EIP-170 budget that has under 200 to spare.
-    function _requireAuthorized() internal {
-        if (ownerOf(TOKEN_ID) == msg.sender) return;
+    ///
+    /// Returns whether the caller is the owner, so the entry points that thread that bit into an unlock
+    /// call this directly instead of the modifier plus a second `ownerOf` read (task_056, EIP-170).
+    /// @return byOwner True for the NFT holder, false for an operator (anyone else reverts).
+    function _requireAuthorized() internal returns (bool byOwner) {
+        if (ownerOf(TOKEN_ID) == msg.sender) return true;
         if (!operators[msg.sender]) revert NotAuthorized();
         bool seen;
         assembly ("memory-safe") {

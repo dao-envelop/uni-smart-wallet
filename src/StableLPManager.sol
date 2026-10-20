@@ -4,7 +4,6 @@
 
 pragma solidity ^0.8.20;
 
-import "@openzeppelin/contracts/interfaces/IERC4906.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
@@ -116,11 +115,9 @@ contract StableLPManager is BaseLPManager {
     /// @notice Auto mode: deploy liquidity per `legs`, drawing from whatever managed stables sit on
     /// the manager's balance; residuals net back to the manager. Owner-or-operator (off-chain sizing).
     /// @param legs Per-pool actions (optional pre-swap + desired add amounts + slippage floor).
-    function allocate(AllocLeg[] calldata legs) external onlyAuthorized nonReentrant fixEtherBalance {
-        _validateLegs(legs);
-        POOL_MANAGER.unlock(abi.encode(OP_ALLOCATE, abi.encode(_isOwnerCall(), legs)));
-        emit Allocated(legs.length);
-        emit IERC4906.MetadataUpdate(TOKEN_ID);
+    function allocate(AllocLeg[] calldata legs) external nonReentrant fixEtherBalance {
+        _unlockAllocate(_requireAuthorized(), legs); // the `onlyAuthorized` check, returning byOwner
+        _allocated(legs.length);
     }
 
     /// @notice Manual mode: deploy a specific just-deposited `stable` (>= `amount` must already sit
@@ -132,15 +129,14 @@ contract StableLPManager is BaseLPManager {
     /// @param legs Per-pool actions (optional pre-swap + desired add amounts + slippage floor).
     function allocateFrom(Currency stable, uint256 amount, AllocLeg[] calldata legs)
         external
-        onlyAuthorized
         nonReentrant
         fixEtherBalance
     {
+        bool byOwner = _requireAuthorized(); // the `onlyAuthorized` check, returning byOwner
         if (!isManagedStable[stable]) revert UnmanagedStable(stable);
         if (amount == 0) revert ZeroAmount();
         uint256 have = stable.balanceOfSelf();
         if (have < amount) revert NotDeposited(stable, have, amount);
-        _validateLegs(legs);
 
         uint256 n = managedStables.length;
         uint256[] memory pre = new uint256[](n);
@@ -148,7 +144,7 @@ contract StableLPManager is BaseLPManager {
             pre[i] = managedStables[i].balanceOfSelf();
         }
 
-        POOL_MANAGER.unlock(abi.encode(OP_ALLOCATE, abi.encode(_isOwnerCall(), legs)));
+        _unlockAllocate(byOwner, legs);
 
         // Only `stable` may have decreased; every other managed stable must end >= its pre-balance.
         for (uint256 i = 0; i < n; ++i) {
@@ -157,15 +153,21 @@ contract StableLPManager is BaseLPManager {
             if (c.balanceOfSelf() < pre[i]) revert UnexpectedStableSpend(c);
         }
 
-        emit Allocated(legs.length);
-        emit IERC4906.MetadataUpdate(TOKEN_ID);
+        _allocated(legs.length);
     }
 
-    function _validateLegs(AllocLeg[] calldata legs) internal view {
+    /// @dev The part `allocate` and `allocateFrom` share, kept in one copy (task_056, EIP-170). An
+    /// unknown pool reverts `UnknownPool` from `_allocateLeg` inside the unlock (the revert bubbles
+    /// unchanged); the pre-pass copy of that loop was dropped for the same reason.
+    function _unlockAllocate(bool byOwner, AllocLeg[] calldata legs) internal {
         if (legs.length == 0) revert NoLegs();
-        for (uint256 i = 0; i < legs.length; ++i) {
-            _indexOf(legs[i].poolId); // reverts UnknownPool if not configured
-        }
+        POOL_MANAGER.unlock(abi.encode(OP_ALLOCATE, abi.encode(byOwner, legs)));
+    }
+
+    /// @dev The shared tail of `allocate` / `allocateFrom`.
+    function _allocated(uint256 legs) internal {
+        emit Allocated(legs);
+        _metadataUpdated();
     }
 
     function _handleAllocate(bytes memory payload) internal returns (bytes memory) {
@@ -182,16 +184,22 @@ contract StableLPManager is BaseLPManager {
     function _allocateLeg(AllocLeg memory leg, bool byOwner) internal virtual returns (uint128 L) {
         PoolKey memory key = pools[_indexOf(leg.poolId)].key;
         Range memory rg = rangeOf[leg.poolId];
-        if (leg.swapAmountIn > 0) {
-            BalanceDelta sd = _swap(key, leg.zeroForOne, -int256(leg.swapAmountIn), leg.swapPriceLimit);
-            int128 inDelta = leg.zeroForOne ? sd.amount0() : sd.amount1();
-            // exactIn: a partial fill (price limit hit) leaves |inDelta| < requested input.
-            if (uint256(uint128(-inDelta)) < leg.swapAmountIn) revert SwapSlippage(leg.poolId);
-            int128 outDelta = leg.zeroForOne ? sd.amount1() : sd.amount0();
-            // Operator swaps must be oracle-vouched (fail-closed); owner has full freedom.
-            _guardSwap(byOwner, key, leg.zeroForOne, uint256(uint128(-inDelta)), uint256(uint128(outDelta)));
-        }
+        _preSwap(leg, key, byOwner);
         L = _addLiquidity(leg.poolId, key, rg, leg.amount0Desired, leg.amount1Desired, leg.minLiquidity, byOwner);
+    }
+
+    /// @dev The optional balancing pre-swap of a leg — one copy for allocate and reinvest (task_056,
+    /// EIP-170; Volatile's equivalent is `_guardedSwap`). exactIn with a full-fill requirement: a partial
+    /// fill (price limit hit) leaves |inDelta| < requested input. Reinvest once lacked that check, which
+    /// also broke the oracle's assumption that a swap never reaches its guard with a zero input (audit
+    /// 2026-09-04, R-12). Operator swaps must be oracle-vouched (fail-closed); the owner swaps freely.
+    function _preSwap(AllocLeg memory leg, PoolKey memory key, bool byOwner) internal {
+        if (leg.swapAmountIn == 0) return;
+        BalanceDelta sd = _swap(key, leg.zeroForOne, -int256(leg.swapAmountIn), leg.swapPriceLimit);
+        int128 inDelta = leg.zeroForOne ? sd.amount0() : sd.amount1();
+        if (uint256(uint128(-inDelta)) < leg.swapAmountIn) revert SwapSlippage(leg.poolId);
+        int128 outDelta = leg.zeroForOne ? sd.amount1() : sd.amount0();
+        _guardSwap(byOwner, key, leg.zeroForOne, uint256(uint128(-inDelta)), uint256(uint128(outDelta)));
     }
 
     /// @dev Shared by allocate and reinvest: size liquidity at the current price, add it at the pool's
@@ -248,7 +256,7 @@ contract StableLPManager is BaseLPManager {
     /// @param salt The position key (`== poolId`).
     function claimFees(bytes32 salt) external onlyAuthorized nonReentrant fixEtherBalance {
         _pokeFromConfig(salt);
-        emit IERC4906.MetadataUpdate(TOKEN_ID);
+        _metadataUpdated();
     }
 
     /// @dev POKE handler (replaces the base one): realize fees, skim the protocol cut, net the
@@ -270,10 +278,10 @@ contract StableLPManager is BaseLPManager {
     /// Owner-or-operator.
     /// @param leg The pool action: which pool (`leg.poolId`), optional balancing pre-swap, and the
     /// `minLiquidity` floor. The add is sized from the realized fee deltas, not `amount{0,1}Desired`.
-    function reinvest(AllocLeg calldata leg) external onlyAuthorized nonReentrant fixEtherBalance {
-        _indexOf(leg.poolId); // reverts UnknownPool if not configured
-        POOL_MANAGER.unlock(abi.encode(OP_REINVEST, abi.encode(_isOwnerCall(), leg)));
-        emit IERC4906.MetadataUpdate(TOKEN_ID);
+    function reinvest(AllocLeg calldata leg) external nonReentrant fixEtherBalance {
+        // `onlyAuthorized`, returning byOwner. An unknown pool reverts UnknownPool as the handler's first step.
+        POOL_MANAGER.unlock(abi.encode(OP_REINVEST, abi.encode(_requireAuthorized(), leg)));
+        _metadataUpdated();
     }
 
     function _handleReinvest(bytes memory payload) internal returns (bytes memory) {
@@ -290,17 +298,7 @@ contract StableLPManager is BaseLPManager {
         );
         _skimFees(key, salt, fees);
 
-        if (leg.swapAmountIn > 0) {
-            BalanceDelta sd = _swap(key, leg.zeroForOne, -int256(leg.swapAmountIn), leg.swapPriceLimit);
-            int128 inDelta = leg.zeroForOne ? sd.amount0() : sd.amount1();
-            // exactIn: a partial fill (price limit hit) leaves |inDelta| < requested input. Allocate has
-            // always required this; reinvest did not, which also broke the oracle's assumption that a
-            // swap can never reach its guard with a zero input (audit 2026-09-04, R-12).
-            if (uint256(uint128(-inDelta)) < leg.swapAmountIn) revert SwapSlippage(leg.poolId);
-            int128 outDelta = leg.zeroForOne ? sd.amount1() : sd.amount0();
-            // Operator swaps must be oracle-vouched (fail-closed); owner has full freedom.
-            _guardSwap(byOwner, key, leg.zeroForOne, uint256(uint128(-inDelta)), uint256(uint128(outDelta)));
-        }
+        _preSwap(leg, key, byOwner);
 
         // Size the add from the realized (positive) deltas of the two pool currencies. Kept in its own
         // frame: the stack is tight here without via-ir.
