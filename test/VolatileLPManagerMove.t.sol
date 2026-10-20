@@ -6,9 +6,12 @@ import {Vm} from "forge-std/Vm.sol";
 import {Clones} from "@openzeppelin/contracts/proxy/Clones.sol";
 
 import {VolatileLPManager} from "../src/VolatileLPManager.sol";
+import {OpenVolatileLPManager} from "../src/OpenVolatileLPManager.sol";
+import {SingletonNFTOwned} from "../src/abstract/SingletonNFTOwned.sol";
 import {BaseLPManager} from "../src/BaseLPManager.sol";
 import {V4PositionManager} from "../src/abstract/V4PositionManager.sol";
-import {MockERC20, MockPriceOracle} from "./helpers/Mocks.sol";
+import {MockERC20, MockPriceOracle, MockObserverHook} from "./helpers/Mocks.sol";
+import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 
 import {PoolManager} from "@uniswap/v4-core/src/PoolManager.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
@@ -422,5 +425,308 @@ contract VolatileLPManagerMoveTest is Test {
         emit log_named_uint("withdrawTo + allocate, two unlocks", g - gasleft());
         vm.stopPrank();
         emit log_named_uint("plus one more intrinsic transaction cost", 21_000);
+    }
+}
+
+/// @notice task_058: `moveLiquidity` with a bridge swap in a THIRD configured pool. The scenario the
+/// overload exists for: the source (E/A) and the destination (U/T) share no currency, so the destination's
+/// own pre-swap cannot fund it. Freed E is bridged to U through the E/U pool, then the destination leg
+/// pre-swaps part of the U into T and adds. A stays idle on the manager — yield, not loss.
+contract VolatileLPManagerMoveBridgeTest is Test {
+    PoolManager internal poolManager;
+    PoolModifyLiquidityTest internal lpRouter;
+    MockPriceOracle internal oracle;
+    VolatileLPManager internal volImpl;
+    OpenVolatileLPManager internal openImpl;
+    VolatileLPManager internal mgr;
+
+    Currency internal E; // "ETH"
+    Currency internal A; // "ARB"
+    Currency internal U; // "USDC"
+    Currency internal T; // "USDT"
+
+    PoolKey internal keySrc; // E/A
+    PoolKey internal keyBridge; // E/U
+    PoolKey internal keyDst; // U/T
+
+    address internal owner = address(0xA11CE);
+    address internal bot = address(0xB07);
+    address internal treasury = address(0xFEE5);
+    address internal lp = address(0xABCD);
+    address internal stranger = address(0xDEAD);
+
+    bytes32 internal constant SALT_SRC = bytes32(uint256(1));
+    bytes32 internal constant SALT_DST = bytes32(uint256(2));
+
+    function setUp() public {
+        poolManager = new PoolManager(address(this));
+        lpRouter = new PoolModifyLiquidityTest(IPoolManager(address(poolManager)));
+        oracle = new MockPriceOracle();
+        oracle.setMode(MockPriceOracle.Mode.Pass);
+
+        E = _mk();
+        A = _mk();
+        U = _mk();
+        T = _mk();
+        keySrc = _key(E, A, IHooks(address(0)));
+        keyBridge = _key(E, U, IHooks(address(0)));
+        keyDst = _key(U, T, IHooks(address(0)));
+        _openAndSeed(keySrc);
+        _openAndSeed(keyBridge);
+        _openAndSeed(keyDst);
+
+        volImpl = new VolatileLPManager(IPoolManager(address(poolManager)), treasury);
+        openImpl = new OpenVolatileLPManager(IPoolManager(address(poolManager)), treasury);
+        mgr = _manager(address(volImpl), keyBridge);
+    }
+
+    // ────────── helpers ──────────
+
+    function _mk() internal returns (Currency) {
+        return Currency.wrap(address(new MockERC20()));
+    }
+
+    function _key(Currency a, Currency b, IHooks h) internal pure returns (PoolKey memory) {
+        (Currency c0, Currency c1) = Currency.unwrap(a) < Currency.unwrap(b) ? (a, b) : (b, a);
+        return PoolKey({currency0: c0, currency1: c1, fee: 3000, tickSpacing: 60, hooks: h});
+    }
+
+    function _openAndSeed(PoolKey memory k) internal {
+        poolManager.initialize(k, TickMath.getSqrtPriceAtTick(0));
+        uint256 amt = 2_000_000e18;
+        MockERC20(Currency.unwrap(k.currency0)).mint(lp, amt);
+        MockERC20(Currency.unwrap(k.currency1)).mint(lp, amt);
+        vm.startPrank(lp);
+        MockERC20(Currency.unwrap(k.currency0)).approve(address(lpRouter), type(uint256).max);
+        MockERC20(Currency.unwrap(k.currency1)).approve(address(lpRouter), type(uint256).max);
+        lpRouter.modifyLiquidity(
+            k,
+            ModifyLiquidityParams({
+                tickLower: -887220, tickUpper: 887220, liquidityDelta: int256(1_000_000e18), salt: 0
+            }),
+            ""
+        );
+        vm.stopPrank();
+    }
+
+    /// @dev A manager over [source, bridge, destination] with an operator and a vouching oracle, and a
+    /// 100e18-each position opened in the source by the owner.
+    function _manager(address implementation, PoolKey memory bridgeKey) internal returns (VolatileLPManager m) {
+        m = VolatileLPManager(payable(Clones.clone(implementation)));
+        PoolKey[] memory cfgs = new PoolKey[](3);
+        cfgs[0] = keySrc;
+        cfgs[1] = bridgeKey;
+        cfgs[2] = keyDst;
+        m.initialize(
+            VolatileLPManager.InitParams({
+                owner: owner, name: "", descriptor: address(0), oracle: address(oracle), pools: cfgs
+            })
+        );
+        MockERC20(Currency.unwrap(E)).mint(address(m), 100e18);
+        MockERC20(Currency.unwrap(A)).mint(address(m), 100e18);
+        VolatileLPManager.VolatileAllocLeg[] memory legs = new VolatileLPManager.VolatileAllocLeg[](1);
+        legs[0] = _plainLeg(keySrc.toId(), SALT_SRC, 100e18, 100e18);
+        vm.startPrank(owner);
+        m.allocate(legs);
+        m.setOperator(bot, true);
+        vm.stopPrank();
+    }
+
+    function _plainLeg(PoolId pid, bytes32 salt, uint256 a0, uint256 a1)
+        internal
+        pure
+        returns (VolatileLPManager.VolatileAllocLeg memory)
+    {
+        return VolatileLPManager.VolatileAllocLeg({
+            poolId: pid,
+            salt: salt,
+            tickLower: -600,
+            tickUpper: 600,
+            zeroForOne: false,
+            swapAmountIn: 0,
+            swapPriceLimit: 0,
+            minAmountOut: 0,
+            amount0Desired: a0,
+            amount1Desired: a1,
+            minLiquidity: 0
+        });
+    }
+
+    /// @dev The destination leg: pre-swap 20e18 U → T inside U/T, then add ~19e18 of each.
+    function _dstLeg() internal view returns (VolatileLPManager.VolatileAllocLeg memory leg) {
+        leg = _plainLeg(keyDst.toId(), SALT_DST, 19e18, 19e18);
+        bool uIsZero = Currency.unwrap(keyDst.currency0) == Currency.unwrap(U);
+        leg.zeroForOne = uIsZero;
+        leg.swapAmountIn = 20e18;
+        leg.swapPriceLimit = uIsZero ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1;
+    }
+
+    /// @dev Bridge: 45e18 E → U through E/U.
+    function _bridge() internal view returns (VolatileLPManager.BridgeSwap memory b) {
+        bool eIsZero = Currency.unwrap(keyBridge.currency0) == Currency.unwrap(E);
+        b = VolatileLPManager.BridgeSwap({
+            poolId: keyBridge.toId(),
+            zeroForOne: eIsZero,
+            amountIn: 45e18,
+            priceLimit: eIsZero ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1,
+            minOut: 0
+        });
+    }
+
+    function _bal(Currency c, address who) internal view returns (uint256) {
+        return MockERC20(Currency.unwrap(c)).balanceOf(who);
+    }
+
+    // ────────── the move ──────────
+
+    function test_bridge_operatorMovesAcrossPairsWithNoSharedCurrency() public {
+        uint128 liq = mgr.positionOf(SALT_SRC).liquidity;
+        vm.prank(bot);
+        mgr.moveLiquidity(SALT_SRC, liq, _dstLeg(), _bridge());
+
+        assertEq(mgr.positionOf(SALT_SRC).liquidity, 0, "source closed");
+        V4PositionManager.Position memory dst = mgr.positionOf(SALT_DST);
+        assertGt(dst.liquidity, 0, "destination funded");
+        assertEq(PoolId.unwrap(dst.key.toId()), PoolId.unwrap(keyDst.toId()), "in the U/T pool");
+        assertGt(_bal(A, address(mgr)), 0, "the unbridged side stays idle on the manager");
+    }
+
+    /// @dev Without the bridge the same destination is unreachable: the freed E/A cannot pay for U/T.
+    function test_noBridge_sameDestinationFails() public {
+        uint128 liq = mgr.positionOf(SALT_SRC).liquidity;
+        vm.prank(bot);
+        vm.expectRevert(); // the U the destination pre-swap needs was never freed ⇒ unlock cannot settle
+        mgr.moveLiquidity(SALT_SRC, liq, _dstLeg());
+    }
+
+    function test_bridge_ownerNeedsNoOracle() public {
+        vm.prank(owner);
+        mgr.setPriceOracle(address(0));
+        uint128 liq = mgr.positionOf(SALT_SRC).liquidity;
+        vm.prank(owner);
+        mgr.moveLiquidity(SALT_SRC, liq, _dstLeg(), _bridge());
+        assertGt(mgr.positionOf(SALT_DST).liquidity, 0);
+    }
+
+    function test_bridge_emitsSameLiquidityMoved() public {
+        uint128 liq = mgr.positionOf(SALT_SRC).liquidity;
+        vm.expectEmit(true, true, false, true, address(mgr));
+        emit VolatileLPManager.LiquidityMoved(SALT_SRC, SALT_DST, liq);
+        vm.prank(bot);
+        mgr.moveLiquidity(SALT_SRC, liq, _dstLeg(), _bridge());
+    }
+
+    // ────────── the oracle judges the bridge swap ──────────
+
+    function test_bridge_operatorWithoutOracle_reverts() public {
+        vm.prank(owner);
+        mgr.setPriceOracle(address(0));
+        uint128 liq = mgr.positionOf(SALT_SRC).liquidity;
+        vm.prank(bot);
+        vm.expectRevert(BaseLPManager.OperatorSwapGuardRequired.selector);
+        mgr.moveLiquidity(SALT_SRC, liq, _dstLeg(), _bridge());
+    }
+
+    /// @dev `NotEnforced` declines every call; the first one reached is the bridge swap, so the revert
+    /// names the BRIDGE pool — proof that it is the bridge pool's key the oracle was asked about.
+    function test_bridge_oracleCannotVouch_namesTheBridgePool() public {
+        oracle.setMode(MockPriceOracle.Mode.NotEnforced);
+        uint128 liq = mgr.positionOf(SALT_SRC).liquidity;
+        vm.prank(bot);
+        vm.expectRevert(abi.encodeWithSelector(BaseLPManager.OperatorSwapUnverified.selector, keyBridge.toId()));
+        mgr.moveLiquidity(SALT_SRC, liq, _dstLeg(), _bridge());
+    }
+
+    function test_bridge_oracleRejectsDeviation_reverts() public {
+        oracle.setMode(MockPriceOracle.Mode.Revert);
+        uint128 liq = mgr.positionOf(SALT_SRC).liquidity;
+        vm.prank(bot);
+        vm.expectRevert(MockPriceOracle.MockPriceOutOfBounds.selector);
+        mgr.moveLiquidity(SALT_SRC, liq, _dstLeg(), _bridge());
+    }
+
+    // ────────── swap guards ──────────
+
+    function test_bridge_minOutNotMet_reverts() public {
+        VolatileLPManager.BridgeSwap memory b = _bridge();
+        b.minOut = 45e18; // 1:1 pool with a 0.3% fee cannot deliver the full input back
+        uint128 liq = mgr.positionOf(SALT_SRC).liquidity;
+        vm.prank(bot);
+        vm.expectRevert(abi.encodeWithSelector(VolatileLPManager.SwapMinOut.selector, keyBridge.toId()));
+        mgr.moveLiquidity(SALT_SRC, liq, _dstLeg(), b);
+    }
+
+    function test_bridge_partialFill_reverts() public {
+        VolatileLPManager.BridgeSwap memory b = _bridge();
+        uint160 p = TickMath.getSqrtPriceAtTick(0);
+        b.priceLimit = b.zeroForOne ? p - 1 : p + 1; // stops almost at once ⇒ partial fill
+        uint128 liq = mgr.positionOf(SALT_SRC).liquidity;
+        vm.prank(bot);
+        vm.expectRevert(abi.encodeWithSelector(BaseLPManager.SwapSlippage.selector, keyBridge.toId()));
+        mgr.moveLiquidity(SALT_SRC, liq, _dstLeg(), b);
+    }
+
+    function test_bridge_unknownPool_reverts() public {
+        VolatileLPManager.BridgeSwap memory b = _bridge();
+        PoolId ghost = PoolId.wrap(keccak256("not configured"));
+        b.poolId = ghost;
+        uint128 liq = mgr.positionOf(SALT_SRC).liquidity;
+        vm.prank(bot);
+        vm.expectRevert(abi.encodeWithSelector(BaseLPManager.UnknownPool.selector, ghost));
+        mgr.moveLiquidity(SALT_SRC, liq, _dstLeg(), b);
+    }
+
+    /// @dev `amountIn == 0` is "no bridge": the pool id is not even looked up, and the call is exactly the
+    /// three-argument form — here a same-pair move inside the source pool's currencies.
+    function test_bridge_zeroAmount_isTheOldForm() public {
+        VolatileLPManager.BridgeSwap memory none;
+        none.poolId = PoolId.wrap(keccak256("ignored when amountIn == 0"));
+        uint128 liq = mgr.positionOf(SALT_SRC).liquidity;
+        VolatileLPManager.VolatileAllocLeg memory back = _plainLeg(keySrc.toId(), SALT_DST, 90e18, 90e18);
+        vm.prank(bot);
+        mgr.moveLiquidity(SALT_SRC, liq, back, none);
+        assertGt(mgr.positionOf(SALT_DST).liquidity, 0);
+    }
+
+    function test_bridge_stranger_reverts() public {
+        uint128 liq = mgr.positionOf(SALT_SRC).liquidity;
+        vm.prank(stranger);
+        vm.expectRevert(SingletonNFTOwned.NotAuthorized.selector);
+        mgr.moveLiquidity(SALT_SRC, liq, _dstLeg(), _bridge());
+    }
+
+    function test_bothOverloads_haveDistinctSelectors() public pure {
+        bytes4 old3 = bytes4(
+            keccak256(
+                "moveLiquidity(bytes32,uint128,(bytes32,bytes32,int24,int24,bool,uint256,uint160,uint256,uint256,uint256,uint128))"
+            )
+        );
+        bytes4 new4 = bytes4(
+            keccak256(
+                "moveLiquidity(bytes32,uint128,(bytes32,bytes32,int24,int24,bool,uint256,uint160,uint256,uint256,uint256,uint128),(bytes32,bool,uint256,uint160,uint256))"
+            )
+        );
+        assertEq(old3, bytes4(0xf959740c), "the three-argument selector callers already encode is unchanged");
+        assertEq(new4, bytes4(0x6b154b41), "the bridge overload");
+    }
+
+    // ────────── Open: a hooked bridge pool is a configured pool like any other ──────────
+
+    function test_open_bridgeThroughHookedPool() public {
+        MockObserverHook proto = new MockObserverHook();
+        uint160 flags = Hooks.BEFORE_ADD_LIQUIDITY_FLAG | Hooks.BEFORE_REMOVE_LIQUIDITY_FLAG;
+        address hookAddr = address(uint160(0x4444 << 144) | flags);
+        vm.etch(hookAddr, address(proto).code);
+        PoolKey memory hookedBridge = _key(E, U, IHooks(hookAddr));
+        _openAndSeed(hookedBridge);
+
+        VolatileLPManager open = _manager(address(openImpl), hookedBridge);
+        VolatileLPManager.BridgeSwap memory b = _bridge();
+        b.poolId = hookedBridge.toId();
+        uint128 liq = open.positionOf(SALT_SRC).liquidity;
+        vm.prank(bot);
+        open.moveLiquidity(SALT_SRC, liq, _dstLeg(), b);
+        assertGt(open.positionOf(SALT_DST).liquidity, 0, "moved through the hooked bridge");
+        assertGt(MockObserverHook(hookAddr).beforeAddCalls(), 0, "the hooked pool is live (seeded through it)");
     }
 }
