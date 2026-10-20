@@ -186,9 +186,9 @@ contract WalletPositionDescriptorTest is V4WalletTestBase {
         assertTrue(_startsWith(uri, JSON_PREFIX), "data:application/json prefix");
         string memory json = _decodeJson(uri);
         assertEq(_attr(json, "Open Positions"), "0", "no positions");
-        assertEq(_attr(json, "Positions Value (USD)"), "0.00", "zero value");
+        assertEq(_attr(json, "Liquidity (USD)"), "0.00", "zero liquidity");
+        assertEq(_attr(json, "Unclaimed Fees (USD)"), "0.00", "zero fees");
         assertEq(_attr(json, "Pricing"), "reference pools", "nothing to flag");
-        assertFalse(_hasAttr(json, "Est. APR (bps)"), "no APR");
     }
 
     function test_tokenURI_unmintedId_reverts() public {
@@ -233,8 +233,10 @@ contract WalletPositionDescriptorTest is V4WalletTestBase {
 
         string memory json = _decodeJson(wallet.tokenURI(1));
         assertEq(_attr(json, "Pricing"), "unpriced", "pricing attr");
-        assertFalse(_hasAttr(json, "Positions Value (USD)"), "no value attribute");
-        assertFalse(vm.keyExistsJson(json, ".positions[0].valueUsd"), "no per-position value");
+        assertFalse(_hasAttr(json, "Liquidity (USD)"), "no liquidity attribute");
+        assertFalse(_hasAttr(json, "Unclaimed Fees (USD)"), "no fees attribute");
+        assertFalse(vm.keyExistsJson(json, ".positions[0].liquidityUsd"), "no per-position liquidity");
+        assertFalse(vm.keyExistsJson(json, ".positions[0].feesUsd"), "no per-position fees");
         string memory svg = _decodeImage(json);
         assertTrue(_contains(svg, ">unpriced<"), "card says unpriced");
         assertFalse(_contains(svg, "$"), "no dollar figure anywhere");
@@ -270,7 +272,8 @@ contract WalletPositionDescriptorTest is V4WalletTestBase {
         string memory json = _decodeJson(wallet.tokenURI(1));
         assertEq(_attr(json, "Pricing"), "own pool", "flag in attributes");
         assertTrue(_contains(_decodeImage(json), "priced by own pool"), "flag on card");
-        assertEq(_attr(json, "Positions Value (USD)"), _usd2(r.principalUsd + r.feeUsd), "value attr");
+        assertEq(_attr(json, "Liquidity (USD)"), _usd2(r.principalUsd), "liquidity attr");
+        assertEq(_attr(json, "Unclaimed Fees (USD)"), _usd2(r.feeUsd), "fees attr");
     }
 
     function test_referenceV4_beatsSkewedOwnPool() public {
@@ -371,7 +374,7 @@ contract WalletPositionDescriptorTest is V4WalletTestBase {
         assertGt(r.principalUsd, 0, "value");
     }
 
-    // ────────── bug 3/4: fees net of the protocol cut; APR only with a fee clock ──────────
+    // ────────── bug 3/4 + task_059: fees net of the protocol cut; two sums, no APR ──────────
 
     function test_fees_netOfProtocolCut() public {
         bytes32 salt = bytes32(uint256(1));
@@ -386,43 +389,35 @@ contract WalletPositionDescriptorTest is V4WalletTestBase {
         assertEq(r.f1, g1 - (g1 * 1000 + 9999) / 10_000, "fees1 net");
     }
 
-    function test_apr_hiddenWithoutFeeClock() public {
+    /// @notice task_059: the card shows Liquidity (principal) and Unclaimed fees (net) as separate sums and
+    /// no APR; a claim zeroes the fees and leaves the liquidity where it was.
+    function test_twoSums_liquidityAndUnclaimedFees_noApr() public {
         (PoolKey memory k, MockMetaERC20 s,, int24 tick) = _stablePair(false, 18, 18, 1);
         descriptor.setStable(address(s), true);
         bytes32 salt = bytes32(uint256(0xE1));
         _openAround(k, tick, 1e21, salt);
-        _swapIn(k, true, -1e18);
-        _swapIn(k, false, -1e18);
-        vm.warp(block.timestamp + 30 days);
-
-        string memory json = _decodeJson(wallet.tokenURI(1));
-        assertFalse(_hasAttr(json, "Est. APR (bps)"), "no APR without a clock");
-        assertFalse(_contains(_decodeImage(json), "APR"), "no APR on the card");
-    }
-
-    /// @notice With a fee clock the APR is fees-since-clock annualised; after a claim the window restarts,
-    /// so the APR is not diluted by `openedAt` (the old formula divided post-claim fees by the full age).
-    function test_apr_fromFeeClock_survivesClaim() public {
-        (PoolKey memory k, MockMetaERC20 s,, int24 tick) = _stablePair(false, 18, 18, 1);
-        descriptor.setStable(address(s), true);
-        bytes32 salt = bytes32(uint256(0xE2));
-        _openAround(k, tick, 1e21, salt);
-        mw.setFeesSince(salt, block.timestamp);
-
-        vm.warp(block.timestamp + 300 days);
-        vm.prank(owner);
-        wallet.pokePosition(salt); // claim: fee counters reset
-        mw.setFeesSince(salt, block.timestamp);
         _swapIn(k, true, -1e19);
         _swapIn(k, false, -1e19);
-        vm.warp(block.timestamp + 10 days);
+        vm.warp(block.timestamp + 30 days);
 
         WalletPositionDescriptor.Row memory r = _row(salt);
-        uint256 expected = (r.feeUsd * 365 days / 10 days) * 10_000 / r.principalUsd;
-        assertGt(expected, 0, "fees accrued");
+        assertGt(r.feeUsd, 0, "fees accrued");
         string memory json = _decodeJson(wallet.tokenURI(1));
-        assertEq(_attr(json, "Est. APR (bps)"), vm.toString(expected), "APR over the fee window");
-        assertTrue(_contains(_decodeImage(json), "~APR: "), "APR on the card");
+        assertEq(_attr(json, "Liquidity (USD)"), _usd2(r.principalUsd), "liquidity = principal only");
+        assertEq(_attr(json, "Unclaimed Fees (USD)"), _usd2(r.feeUsd), "fees net");
+        assertEq(json.readString(".positions[0].liquidityUsd"), _usd2(r.principalUsd), "per-position liquidity");
+        assertEq(json.readString(".positions[0].feesUsd"), _usd2(r.feeUsd), "per-position fees");
+        assertFalse(_hasAttr(json, "Est. APR (bps)"), "no APR attribute");
+        string memory svg = _decodeImage(json);
+        assertTrue(_contains(svg, ">Liquidity<"), "liquidity label");
+        assertTrue(_contains(svg, "Unclaimed fees: $"), "fees line");
+        assertFalse(_contains(svg, "APR"), "no APR on the card");
+
+        vm.prank(owner);
+        wallet.pokePosition(salt); // claim: fee counters reset
+        json = _decodeJson(wallet.tokenURI(1));
+        assertEq(_attr(json, "Unclaimed Fees (USD)"), "0.00", "claimed");
+        assertEq(_attr(json, "Liquidity (USD)"), _usd2(r.principalUsd), "liquidity untouched by the claim");
     }
 
     // ────────── bug 5/6: escaping ──────────
@@ -575,7 +570,8 @@ contract WalletPositionDescriptorTest is V4WalletTestBase {
         descriptor.setStable(Currency.unwrap(currency1), true);
         json = _decodeJson(wallet.tokenURI(1));
         assertEq(_attr(json, "Pricing"), "truncated", "truncated");
-        assertFalse(_hasAttr(json, "Positions Value (USD)"), "no total for a partial render");
+        assertFalse(_hasAttr(json, "Liquidity (USD)"), "no liquidity for a partial render");
+        assertFalse(_hasAttr(json, "Unclaimed Fees (USD)"), "no fees for a partial render");
         assertTrue(_contains(_decodeImage(json), "first 40 of 120 positions"), "card says so");
     }
 

@@ -306,6 +306,10 @@ tier × (USDC/USDT/ETH) через v3-фабрику и v4 StateView.
 
 ### Что должен адаптировать фронт (`stablelp-ui`, отдельная задача)
 
+> **Уточнено task_059:** вместо `Positions Value (USD)` и `Est. APR (bps)` дескриптор отдаёт две суммы —
+> `Liquidity (USD)` и `Unclaimed Fees (USD)`, APR убран; в `positions[]` вместо `valueUsd` — `liquidityUsd`
+> и `feesUsd`. Актуальный список для фронта — в `tasks/task_059_descriptor_liquidity_fees.md`.
+
 - `src/lib/server/managerMeta.ts:37`: атрибут `Total Value (USD)` переименован в
   `Positions Value (USD)`. Он **отсутствует**, когда `Pricing` = `unpriced` или `truncated`. Нужно
   читать новое имя (и старое, пока не все менеджеры переключены). Если атрибута нет — показывать
@@ -324,6 +328,5 @@ tier × (USDC/USDT/ETH) через v3-фабрику и v4 StateView.
 ### Не сделано / на потом
 
 - Деплой — делает человек: `DeployDescriptor` на 1/130/8453/42161, админ — `initialOwner`.
-- Часы комиссий `feesSince(bytes32)` в менеджерах: без них APR не показывается. У Open/Volatile нет
-  байт (запас 46/108 B), так что это решение для релиза v2.2.0 после task_056.
+- ~~Часы комиссий `feesSince(bytes32)` в менеджерах~~ — не нужны: APR с карточки убран (task_059).
 - Референсы для новых токенов добавляет админ через `setReference`; глубину стоит перепроверять.
