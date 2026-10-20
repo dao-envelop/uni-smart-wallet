@@ -104,7 +104,9 @@ bleed value through an adverse swap: any **operator-triggered** swap in either p
 `allocate`/`reinvest` pre-swaps, Volatile `allocate`/`recenter`) is gated by the shared `priceOracle`
 (in `BaseLPManager`) and **fail-closed** — it reverts unless the oracle vouches for the realized price
 (audit `2026-07-18` H-VOL-1 / M-VOL-2, task_031 + task_032). The **NFT owner keeps full freedom** — owner
-swaps bypass the oracle. (Stable has no operator-callable principal-removal path, so its operator exposure
+swaps bypass the oracle. Since task_057 the oracle can be wired at birth: both `InitParams` carry
+`address oracle` (zero ⇒ none, fail-closed as before), set through the same `_setPriceOracle` as
+`setPriceOracle`; `CreateManager` defaults it to the chain's `.oracle`. (Stable has no operator-callable principal-removal path, so its operator exposure
 was idle+fees, not principal; Volatile's `recenter` frees principal, hence the HIGH there.)
 
 Since task_053 the same guard covers operator **liquidity adds**, not only swaps (audit `2026-09-04`

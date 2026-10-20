@@ -194,6 +194,8 @@ contract LPManagerFactoryTest is StableLPTestBase {
     function _volatileParams(address owner_) internal view returns (VolatileLPManager.InitParams memory p) {
         PoolKey[] memory pools = new PoolKey[](1);
         pools[0] = poolKeys[0];
-        p = VolatileLPManager.InitParams({owner: owner_, name: bytes32("Vol"), descriptor: address(0), pools: pools});
+        p = VolatileLPManager.InitParams({
+            owner: owner_, name: bytes32("Vol"), descriptor: address(0), oracle: address(0), pools: pools
+        });
     }
 }

@@ -39,6 +39,7 @@ contract VolatileLPManager is BaseLPManager {
         address owner; // receives the singleton NFT
         bytes32 name; // NFT name, packed (≤31 chars); "" ⇒ default "Envelop Volatile LP Manager"
         address descriptor; // default tokenURI renderer; zero ⇒ none (owner sets later)
+        address oracle; // default operator price guard; zero ⇒ none (operators fail-closed until set)
         PoolKey[] pools; // 1..MAX_POOLS hookless pools (identity only)
     }
 
@@ -100,7 +101,8 @@ contract VolatileLPManager is BaseLPManager {
 
     /// @notice One-shot initializer, called by the factory on the freshly-cloned proxy: registers the
     /// pools (identity only) + managed currencies, mints the singleton NFT, and reverts if called twice.
-    /// @param p Init parameters: owner, packed NFT name (empty ⇒ default), and 1..MAX_POOLS pool keys.
+    /// @param p Init parameters: owner, packed NFT name (empty ⇒ default), default descriptor and
+    /// operator price oracle (zero ⇒ none), and 1..MAX_POOLS pool keys.
     function initialize(InitParams calldata p) external {
         _beginInit(p.name);
         uint256 n = p.pools.length;
@@ -109,7 +111,7 @@ contract VolatileLPManager is BaseLPManager {
         for (uint256 i = 0; i < n; ++i) {
             _registerPool(p.pools[i]); // hookless gate + dedup + managed-currency union
         }
-        _finishInit(p.owner, n, p.descriptor);
+        _finishInit(p.owner, n, p.descriptor, p.oracle);
     }
 
     // ────────── Product identity ──────────

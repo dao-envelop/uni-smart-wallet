@@ -177,7 +177,7 @@ contract GasCompareVolatileForkTest is Test {
         PoolKey[] memory pools = new PoolKey[](1);
         pools[0] = key;
         p = VolatileLPManager.InitParams({
-            owner: owner, name: bytes32("Envelop VolLP"), descriptor: address(0), pools: pools
+            owner: owner, name: bytes32("Envelop VolLP"), descriptor: address(0), oracle: address(0), pools: pools
         });
     }
 

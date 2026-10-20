@@ -74,7 +74,9 @@ contract OpenVolatileLPManagerTest is Test {
         cfgs[0] = k;
         VolatileLPManager(payable(mgr))
             .initialize(
-                VolatileLPManager.InitParams({owner: owner, name: bytes32("Open"), descriptor: address(0), pools: cfgs})
+                VolatileLPManager.InitParams({
+                    owner: owner, name: bytes32("Open"), descriptor: address(0), oracle: address(0), pools: cfgs
+                })
             );
     }
 
@@ -185,7 +187,9 @@ contract OpenVolatileLPManagerTest is Test {
         vm.expectPartialRevert(BaseLPManager.DuplicatePool.selector);
         VolatileLPManager(payable(mgr))
             .initialize(
-                VolatileLPManager.InitParams({owner: owner, name: bytes32("Open"), descriptor: address(0), pools: cfgs})
+                VolatileLPManager.InitParams({
+                    owner: owner, name: bytes32("Open"), descriptor: address(0), oracle: address(0), pools: cfgs
+                })
             );
     }
 
@@ -200,7 +204,9 @@ contract OpenVolatileLPManagerTest is Test {
         vm.expectRevert(abi.encodeWithSelector(V4PositionManager.HookNotAllowed.selector, address(DUMMY_HOOK)));
         VolatileLPManager(payable(mgr))
             .initialize(
-                VolatileLPManager.InitParams({owner: owner, name: bytes32("Vol"), descriptor: address(0), pools: cfgs})
+                VolatileLPManager.InitParams({
+                    owner: owner, name: bytes32("Vol"), descriptor: address(0), oracle: address(0), pools: cfgs
+                })
             );
     }
 
@@ -225,7 +231,9 @@ contract OpenVolatileLPManagerTest is Test {
         VolatileLPManager mgr = FactoryHelper.cloneVolatile(
             f,
             address(impl),
-            VolatileLPManager.InitParams({owner: owner, name: bytes32("Open"), descriptor: address(0), pools: cfgs})
+            VolatileLPManager.InitParams({
+                owner: owner, name: bytes32("Open"), descriptor: address(0), oracle: address(0), pools: cfgs
+            })
         );
         assertEq(OpenVolatileLPManager(payable(address(mgr))).ORACLE_TYPE(), 3002, "clone reports 3002");
         assertEq(mgr.ownerOf(1), owner, "singleton NFT minted to owner");

@@ -108,7 +108,7 @@ abstract contract StableLPTestBase is Test {
             cfgs[i] = StableLPManager.StablePoolInit({key: poolKeys[i], tickLower: TL, tickUpper: TU});
         }
         p = StableLPManager.InitParams({
-            owner: owner_, name: bytes32("Envelop StableLP"), descriptor: address(0), pools: cfgs
+            owner: owner_, name: bytes32("Envelop StableLP"), descriptor: address(0), oracle: address(0), pools: cfgs
         });
     }
 

@@ -84,7 +84,11 @@ contract StableLPManagerVolatilePoolTest is Test {
             factory,
             address(impl),
             StableLPManager.InitParams({
-                owner: owner, name: bytes32("Envelop VolatileLP"), descriptor: address(0), pools: cfgs
+                owner: owner,
+                name: bytes32("Envelop VolatileLP"),
+                descriptor: address(0),
+                oracle: address(0),
+                pools: cfgs
             })
         );
 

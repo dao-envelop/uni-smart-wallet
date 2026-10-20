@@ -25,6 +25,7 @@ contract CreateManagerHarness is CreateManager {
             owner: vm.parseJsonAddress(json, ".owner"),
             name: _readName(json, keccak256(bytes("stable"))),
             descriptor: address(0),
+            oracle: address(0),
             pools: pools
         });
     }

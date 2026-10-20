@@ -266,7 +266,7 @@ contract GasCompareStableLPForkTest is Test {
         cfgs[1] = _cfg(kDAIUSDT);
         cfgs[2] = _cfg(kDAIUSDC);
         p = StableLPManager.InitParams({
-            owner: owner, name: bytes32("Envelop StableLP"), descriptor: address(0), pools: cfgs
+            owner: owner, name: bytes32("Envelop StableLP"), descriptor: address(0), oracle: address(0), pools: cfgs
         });
     }
 
