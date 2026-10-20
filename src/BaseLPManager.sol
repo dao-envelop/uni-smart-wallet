@@ -205,6 +205,12 @@ abstract contract BaseLPManager is SingletonNFTOwned, V4PositionManager {
     error OperatorSwapGuardRequired();
     /// @notice An operator-triggered swap ran but the oracle had no fresh reference to enforce a bound.
     error OperatorSwapUnverified(PoolId poolId);
+    /// @notice An operator swap spent more of `c` than the manager holds (balance plus this unlock's
+    /// credit): a notional above holdings, settled net, only pays pool fees (task_060).
+    error OperatorSwapExceedsHoldings(Currency c);
+    /// @notice An operator swap buys back `c`, which an earlier swap of the same op sold: a round trip
+    /// (or a cycle through other currencies) moves nothing but pays the pool fee on every hop (task_060).
+    error OperatorSwapRoundTrip(Currency c);
 
     /// @notice Deploy the implementation: set the shared immutables and lock the impl from being
     /// initialized. Clones (the actual managers) are created by a factory, not this constructor.
@@ -364,10 +370,10 @@ abstract contract BaseLPManager is SingletonNFTOwned, V4PositionManager {
     ///   both products (Stable `allocate`/`reinvest` pre-swaps, Volatile `allocate`/`recenter`).
     function _guardSwap(bool byOwner, PoolKey memory key, bool zeroForOne, uint256 amountIn, uint256 amountOut)
         internal
-        view
     {
         address o = _operatorOracle(byOwner);
         if (o == address(0)) return; // owner: full freedom
+        if (amountIn != 0) _boundOperatorSwap(key, zeroForOne);
         if (!IPriceOracle(o).check(key, zeroForOne, amountIn, amountOut)) revert OperatorSwapUnverified(key.toId());
     }
 
@@ -385,12 +391,37 @@ abstract contract BaseLPManager is SingletonNFTOwned, V4PositionManager {
         uint256 amountOut,
         int24 tickLower,
         int24 tickUpper
-    ) internal view {
+    ) internal {
         address o = _operatorOracle(byOwner);
         if (o == address(0)) return;
+        if (amountIn != 0) _boundOperatorSwap(key, zeroForOne);
         if (!IPriceOracle(o).checkOp(key, zeroForOne, amountIn, amountOut, tickLower, tickUpper)) {
             revert OperatorSwapUnverified(key.toId());
         }
+    }
+
+    /// @dev Volume bound on a just-executed operator swap (task_060). The oracle judges each swap alone
+    /// and settlement is net, so without this an operator could swap a notional far above holdings —
+    /// out and straight back — and the manager would pay only the pool fee on it, about 2·fee·notional,
+    /// to whoever is the pool's LP in that block (the operator, as a JIT LP). Two rules close it:
+    /// - the input currency's unlock delta plus the manager's balance stays non-negative, i.e. the swap
+    ///   spent nothing the manager does not hold (pulled liquidity counts, it is a credit);
+    /// - a currency the op has sold cannot be bought back: each swap marks its input as sold and
+    ///   reverts if its output is marked. That rules out the round trip and any cycle through other
+    ///   currencies, while chains (bridge X→Y, then pre-swap Y→Z) and repeats in one direction stay
+    ///   allowed. The mark is a transient slot keyed by the currency address, so it lasts the
+    ///   transaction, which for an operator is one op (one op per tx).
+    function _boundOperatorSwap(PoolKey memory key, bool zeroForOne) internal {
+        (Currency cIn, Currency cOut) = zeroForOne ? (key.currency0, key.currency1) : (key.currency1, key.currency0);
+        if (POOL_MANAGER.currencyDelta(address(this), cIn) + int256(cIn.balanceOfSelf()) < 0) {
+            revert OperatorSwapExceedsHoldings(cIn);
+        }
+        bool boughtBack;
+        assembly ("memory-safe") {
+            boughtBack := tload(cOut)
+            tstore(cIn, 1)
+        }
+        if (boughtBack) revert OperatorSwapRoundTrip(cOut);
     }
 
     /// @dev The oracle an operator call must satisfy, or zero when the caller is the owner and nothing

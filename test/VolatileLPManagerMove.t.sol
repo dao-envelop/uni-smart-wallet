@@ -591,6 +591,27 @@ contract VolatileLPManagerMoveBridgeTest is Test {
         assertGt(_bal(A, address(mgr)), 0, "the unbridged side stays idle on the manager");
     }
 
+    /// @dev task_060: the chain above (E→U, then U→T) is allowed, but buying back a currency the op
+    /// already sold is not, even through another pool: E→U in E/U, then A→E in E/A, is a cycle's last hop.
+    function test_operatorCannotBuyBackASoldCurrency() public {
+        MockERC20(Currency.unwrap(E)).mint(address(mgr), 10e18);
+        MockERC20(Currency.unwrap(A)).mint(address(mgr), 10e18);
+        VolatileLPManager.VolatileAllocLeg[] memory legs = new VolatileLPManager.VolatileAllocLeg[](2);
+        legs[0] = _plainLeg(keyBridge.toId(), SALT_DST, 1e18, 1e18);
+        legs[0].zeroForOne = Currency.unwrap(keyBridge.currency0) == Currency.unwrap(E); // E → U
+        legs[0].swapAmountIn = 5e18;
+        legs[0].swapPriceLimit = legs[0].zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1;
+        legs[1] = _plainLeg(keySrc.toId(), bytes32(uint256(3)), 1e18, 1e18);
+        legs[1].zeroForOne = Currency.unwrap(keySrc.currency0) == Currency.unwrap(A); // A → E
+        legs[1].swapAmountIn = 5e18;
+        legs[1].swapPriceLimit = legs[1].zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1;
+        vm.prank(bot);
+        vm.expectRevert(abi.encodeWithSelector(BaseLPManager.OperatorSwapRoundTrip.selector, E));
+        mgr.allocate(legs);
+        vm.prank(owner);
+        mgr.allocate(legs); // the owner is not bound
+    }
+
     /// @dev Without the bridge the same destination is unreachable: the freed E/A cannot pay for U/T.
     function test_noBridge_sameDestinationFails() public {
         uint128 liq = mgr.positionOf(SALT_SRC).liquidity;

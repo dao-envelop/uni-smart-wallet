@@ -248,4 +248,52 @@ contract StableLPManagerOperatorSwapGuardTest is StableLPTestBase {
         mgr.allocate(legs);
         assertGt(mgr.positionOf(_saltFor(P)).liquidity, 0, "swapless allocate under a vouching oracle");
     }
+
+    // ────────── task_060: operator swap volume bound ──────────
+
+    /// @dev A leg in pool `P` swapping `amountIn` USDT→pair (`toPair`) or pair→USDT, tiny add.
+    function _dirLeg(bool toPair, uint256 amountIn) internal view returns (BaseLPManager.AllocLeg memory leg) {
+        bool quoteIsZero = Currency.unwrap(poolKeys[P].currency0) == Currency.unwrap(USDT);
+        bool zeroForOne = toPair == quoteIsZero;
+        leg = BaseLPManager.AllocLeg({
+            poolId: poolKeys[P].toId(),
+            zeroForOne: zeroForOne,
+            swapAmountIn: amountIn,
+            swapPriceLimit: zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1,
+            amount0Desired: 1e18,
+            amount1Desired: 1e18,
+            minLiquidity: 0
+        });
+    }
+
+    function test_operatorSwapAboveHoldings_reverts() public {
+        vm.prank(owner);
+        mgr.setPriceOracle(address(oracle));
+        oracle.setMode(MockPriceOracle.Mode.Pass);
+        BaseLPManager.AllocLeg[] memory legs = new BaseLPManager.AllocLeg[](1);
+        legs[0] = _dirLeg(true, MockERC20(Currency.unwrap(USDT)).balanceOf(address(mgr)) + 1e18);
+        vm.prank(bot);
+        vm.expectRevert(abi.encodeWithSelector(BaseLPManager.OperatorSwapExceedsHoldings.selector, USDT));
+        mgr.allocate(legs);
+    }
+
+    function test_operatorRoundTrip_reverts() public {
+        vm.prank(owner);
+        mgr.setPriceOracle(address(oracle));
+        oracle.setMode(MockPriceOracle.Mode.Pass);
+        BaseLPManager.AllocLeg[] memory legs = new BaseLPManager.AllocLeg[](2);
+        legs[0] = _dirLeg(true, 10e18);
+        legs[1] = _dirLeg(false, 5e18);
+        vm.prank(bot);
+        vm.expectRevert(abi.encodeWithSelector(BaseLPManager.OperatorSwapRoundTrip.selector, USDT));
+        mgr.allocate(legs);
+    }
+
+    function test_ownerRoundTrip_succeeds() public {
+        BaseLPManager.AllocLeg[] memory legs = new BaseLPManager.AllocLeg[](2);
+        legs[0] = _dirLeg(true, 10e18);
+        legs[1] = _dirLeg(false, 5e18);
+        vm.prank(owner);
+        mgr.allocate(legs);
+    }
 }
