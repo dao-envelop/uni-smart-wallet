@@ -145,7 +145,7 @@ with addresses that were never deployed. Revert it before committing.
 
 ## Security
 
-Six audit passes live under [`audits/`](./audits):
+Seven audit passes live under [`audits/`](./audits):
 
 | Date | Scope |
 |---|---|
@@ -155,6 +155,7 @@ Six audit passes live under [`audits/`](./audits):
 | [`2026-07-02`](./audits/2026-07-02/AUDIT-REPORT.en.md) | StableLPManager and its dependencies |
 | [`2026-07-18`](./audits/2026-07-18/AUDIT-REPORT.en.md) | VolatileLPManager and the post-v1.0.0 refactor |
 | [`2026-09-04`](./audits/2026-09-04/AUDIT-REPORT.en.md) | everything changed after `2026-07-18`, plus a [review of the fixes](./audits/2026-09-04/fix-review/FIX-REVIEW.md) |
+| [`2026-10-20`](./audits/2026-10-20/AUDIT-REPORT.md) | release v2.2.0 before deploy (descriptor, init oracle, move bridge) |
 
 Two findings shaped the current design: a treasury token blocklist could lock LP principal (fixed by
 skimming the fee as ERC-6909 claims), and an operator could drain a bounded slice per operation with no
