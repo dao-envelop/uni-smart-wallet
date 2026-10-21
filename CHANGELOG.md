@@ -6,20 +6,97 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-10-21
+
+New Stable and Volatile implementations and a new NFT card renderer. **Existing managers keep their
+implementation** (EIP-1167 clones are immutable); everything under Security, Added and Changed reaches
+managers created from now on. The card renderer is the exception: any manager, v2.1 included, can switch
+to it with `setPositionDescriptor`.
+
+**Breaking for integrators:** `initialize` takes a new `oracle` field in both `InitParams`, so its
+selector and the `initData` a frontend encodes change (task_057). The NFT card drops `Total Value (USD)`
+and `Est. APR (bps)` (task_059).
+
+### Security
+
+- **An operator swap is bounded by what the manager holds, and cannot buy back what it sold** (task_060,
+  audit `2026-10-20`, HIGH). An operator could route a large swap through a pool it had stuffed with JIT
+  liquidity and back again within one operation; every oracle check passed, and the PoC took 30 % of a
+  manager per transaction (v2.1.0 is exposed the same way through two `allocate` legs: −21 %). Now, for
+  operators only, a swap may not spend more of a currency than the manager holds plus what the same
+  operation freed (`OperatorSwapExceedsHoldings(Currency)`), and a currency sold earlier in the
+  transaction cannot be bought back, directly or around a cycle (`OperatorSwapRoundTrip(Currency)`).
+  Chains (bridge E→U, then the leg's U→T pre-swap) stay allowed. The owner is not constrained.
+- **Superseded implementations are revoked at deploy** (task_062). `DeployStableLP` with
+  `deploy.revokeReplaced` removes the implementations it replaces (and the per-chain `revokeImpls` list)
+  from the factory allowlist once the fresh ones are in. On 2026-10-21 the v2.1.0 and v2.0.0
+  implementations were revoked on every chain, so the v2.1.0 operator round-trip can no longer be cloned
+  into a new manager. Existing clones are unaffected — `isImplementation` gates creation only.
+
 ### Added
 
-- **Deployment provenance** (task_049). `deployments/<chainId>.json` now records `commit`, `tag`,
-  `deployedAt` and the compiler settings of the last write; `DeployStableLP.s.sol` refuses to
-  broadcast without `DEPLOY_COMMIT` (`ProvenanceMissing`). The five files are back-filled from the
-  forge broadcast records of 2026-09-08 (`12bcb45`, source-identical to `v2.1.0`).
-- `script/probe/probe_deployment.mjs` — checks that the runtime at every recorded address carries
-  every external selector of the current build, on every chain, and CI runs it after the build. It
-  is what would have shown the v2.0.0 stack sitting 47 days behind `master`.
+- **Oracle at creation** (task_057). `address oracle` follows `descriptor` in both `InitParams`
+  (Open inherits Volatile's); `CreateManager.s.sol` defaults it to the chain's `.oracle`. Zero keeps the
+  old behaviour — no oracle, operator fail-closed until `setPriceOracle`. Set and replaced through the
+  same `_setPriceOracle` as before (one `PriceOracleSet`).
+- **`moveLiquidity` with a bridge swap** (task_058). A new overload
+  `moveLiquidity(fromSalt, liquidity, add, BridgeSwap bridge)` swaps in a third configured pool between
+  the pull and the add, so a move between pools with no shared currency (ETH/ARB → USDC/USDT) is one
+  call instead of two transactions with idle capital in between. The three-argument form is unchanged
+  and routes into the same handler; same `OP_MOVE`, same `LiquidityMoved` event. Operator bridge swaps
+  pass the same oracle guard as every other operator swap.
+- **Deployment provenance** (task_049). `deployments/<chainId>.json` records `commit`, `tag`,
+  `deployedAt` and the compiler settings; `DeployStableLP.s.sol` refuses to broadcast without
+  `DEPLOY_COMMIT` (`ProvenanceMissing`). `script/probe/probe_deployment.mjs` checks that the runtime at
+  every recorded address carries every external selector of the current build; CI runs it.
 
-### Not yet deployed
+### Changed
 
-- `OpenVolatileLPManager` (task_043, in 2.1.0) has no `openImpl` on any chain; the probe reports it
-  as `not deployed`. Whether to deploy it is an owner decision, not a CI failure.
+- **NFT card valued from Uniswap pools, never $1 per token** (task_055). A volatile manager on Arbitrum
+  showed $259.66 for ~$99: every non-stable token was counted at $1. Stables on an allowlist are $1;
+  other tokens go through an admin-curated reference-pool registry (a v3 pool or a hookless v4 key, at
+  most two hops; `setStable` / `setReference`, `Ownable2Step`), else the manager's own pool against a
+  stable leg (the card says "own pool"), else "unpriced". Also: names and symbols are UTF-8-trimmed and
+  escaped in JSON and SVG, `symbol()`/`decimals()` are read defensively, rendering is capped at
+  `MAX_POSITIONS` (40) with "+k more", the native symbol comes from the constructor. The watermark lives
+  in a `DescriptorArt` contract the descriptor deploys, to stay under EIP-170.
+- **The card shows two sums, no APR** (task_059). `Liquidity (USD)` — open positions' principal at the
+  live price, idle excluded — and `Unclaimed Fees (USD)`, net of the 10 % protocol cut, named as on
+  Uniswap's position page. An honest APR is not computable on chain (fees reset on every realisation;
+  capital moves by transfers the manager does not see). Both attributes are omitted when the card is
+  unpriced or truncated.
+- **Card layout** (task_063). Dust prints as `<$0.01`; a 32-byte name drops to a smaller font instead
+  of running off the card; chip labels are capped at 8 bytes; chips carry a mark chosen by token
+  **address**, not symbol — ETH for native/WETH, USDC / USDT / DAI families and a generic `$` for the
+  stable allowlist — so a token calling itself `USDC` stays plain.
+- **`tokenURI` cannot be bricked by its descriptor** (task_056). A descriptor that reverts or runs out
+  of gas yields `""` (try/catch).
+- **EIP-170 headroom without touching the ABI** (task_056). No CBOR metadata, one `_metadataUpdated()`
+  for every `MetadataUpdate`, a low-level call with revert bubbling in `executeEncodedTxBatch` instead
+  of OZ `Address`, no duplicate pre-validation outside `unlock`, a shared Stable pre-swap. Every public
+  selector and error is unchanged. The three OZ `Address` errors (`AddressEmptyCode`, `FailedCall`,
+  `InsufficientBalance`) are no longer in the ABI; v2.1.0 managers still emit them.
+- **The v2.2 deploy keeps the live oracle and lens** (task_061): `chain_params.json` redeploys only the
+  two implementations and the descriptor; factory, `UniLens`, `ChainlinkPriceOracle` and `FeeRedeemer`
+  stay.
+
+Sizes after the release (runtime, free under 24 576 B): `StableLPManager` 22 667 (1 909),
+`VolatileLPManager` 24 345 (231), `OpenVolatileLPManager` 24 407 (169), `WalletPositionDescriptor`
+21 023 (3 553).
+
+### Deployed
+
+- From `7898d9c` (deployment record `d2adc03`), solc 0.8.26, 200 runs, no via-IR, on Ethereum (1),
+  Arbitrum One (42161), Base (8453), Unichain (130) and Unichain Sepolia (1301): new `StableLPManager`
+  and `VolatileLPManager` implementations, allowlisted on the existing `LPManagerFactory`, and a new
+  `WalletPositionDescriptor` (not on 1301, which keeps the v2.1.0 one). `LPManagerFactory`, `UniLens`,
+  `ChainlinkPriceOracle` and `FeeRedeemer` are unchanged. Addresses in
+  [Deployments](./README.md#deployments) / `deployments/<chainId>.json`;
+  `probe_deployment.mjs` is in sync on every chain except the 1301 descriptor.
+- v2.1.0 and v2.0.0 implementations are revoked on the factory (`isImplementation == false`, checked on
+  all five chains).
+- A v2.1 manager picks up the new card with `setPositionDescriptor(<descriptor>)` by its NFT owner.
+- `OpenVolatileLPManager` remains undeployed.
 
 ## [2.1.0] - 2026-09-08
 
@@ -244,7 +321,8 @@ First public release of **Envelop StableLP** — an NFT-owned, factory-cloned Un
 - Ethereum (1), Arbitrum One (42161), Base (8453), Unichain (130), and Unichain Sepolia (1301).
   See [Deployments](./README.md#deployments) / `deployments/<chainId>.json`.
 
-[Unreleased]: https://github.com/dao-envelop/uni-smart-wallet/compare/v2.1.0...HEAD
+[Unreleased]: https://github.com/dao-envelop/uni-smart-wallet/compare/v2.2.0...HEAD
+[2.2.0]: https://github.com/dao-envelop/uni-smart-wallet/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/dao-envelop/uni-smart-wallet/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/dao-envelop/uni-smart-wallet/compare/v1.0.0...v2.0.0
 [1.0.0]: https://github.com/dao-envelop/uni-smart-wallet/releases/tag/v1.0.0
