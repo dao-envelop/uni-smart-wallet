@@ -254,7 +254,8 @@ contract DeployStableLPSubsetTest is Test {
             factory: factory,
             lens: lens,
             descriptor: descriptor,
-            oracle: oracle
+            oracle: oracle,
+            revokeReplaced: false
         });
     }
 
@@ -401,6 +402,50 @@ contract DeployStableLPSubsetTest is Test {
         );
         assertTrue(factory.isImplementation(address(d.impl)), "fresh stable auto-allowlisted");
         assertTrue(factory.isImplementation(address(d.volatileImpl)), "fresh volatile auto-allowlisted");
+    }
+
+    /// @notice With `revokeReplaced`, the superseded impls lose the allowlist once the fresh ones have it;
+    /// a product not redeployed this run keeps its impl (task_062).
+    function test_revokeReplacedImplsAfterBlessingFreshOnes() public {
+        address oldStable = makeAddr("oldStable");
+        address oldVolatile = makeAddr("oldVolatile");
+        address[] memory initial = new address[](2);
+        initial[0] = oldStable;
+        initial[1] = oldVolatile;
+        LPManagerFactory factory = new LPManagerFactory(address(deployer), initial);
+        DeployStableLP.Existing memory e = _noExisting();
+        e.exists = true;
+        e.factory = address(factory);
+        e.impl = oldStable;
+        e.volatileImpl = oldVolatile;
+
+        DeployStableLP.Flags memory f = _flags(false, true, false, false, false, false, false);
+        f.revokeReplaced = true;
+        DeployStableLP.Deployment memory d =
+            deployer.deployComponents(pm, admin, f, treasury, e, address(deployer), _oracle(100), new address[](0));
+        assertTrue(factory.isImplementation(address(d.impl)), "fresh stable allowlisted");
+        assertFalse(factory.isImplementation(oldStable), "replaced stable revoked");
+        assertTrue(factory.isImplementation(oldVolatile), "volatile not redeployed: kept");
+    }
+
+    /// @notice Without the flag nothing is revoked, and a non-owner broadcaster revokes nothing either.
+    function test_revokeReplacedOffOrNotOwnerKeepsOldImpls() public {
+        address oldStable = makeAddr("oldStable");
+        address[] memory initial = new address[](1);
+        initial[0] = oldStable;
+        LPManagerFactory factory = new LPManagerFactory(address(deployer), initial);
+        DeployStableLP.Existing memory e = _noExisting();
+        e.exists = true;
+        e.factory = address(factory);
+        e.impl = oldStable;
+
+        DeployStableLP.Flags memory f = _flags(false, true, false, false, false, false, false);
+        deployer.deployComponents(pm, admin, f, treasury, e, address(deployer), _oracle(100), new address[](0));
+        assertTrue(factory.isImplementation(oldStable), "flag off: kept");
+
+        f.revokeReplaced = true;
+        deployer.deployComponents(pm, admin, f, treasury, e, address(this), _oracle(100), new address[](0));
+        assertTrue(factory.isImplementation(oldStable), "not owner: kept");
     }
 
     /// @notice If the broadcaster is not the factory owner, auto-allowlist is skipped (no revert).
