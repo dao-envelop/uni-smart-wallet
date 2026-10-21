@@ -456,6 +456,30 @@ contract WalletPositionDescriptorTest is V4WalletTestBase {
         assertTrue(_contains(svg, 'font-size="16">Short<'), "short name keeps 16 px");
     }
 
+    /// @notice task_063: brand marks follow the stable allowlist, not the symbol.
+    function test_chipBadge_byAllowlist_spoofedSymbolStaysPlain() public {
+        MockMetaERC20 real = _tok("USDC", 6);
+        MockMetaERC20 fake = _tok("USDC", 6);
+        descriptor.setStable(address(real), true);
+        _openIn(_pool(address(real), address(fake), 100, 1, 0), -10, 10, 1e12, bytes32(uint256(0x64)));
+
+        string memory svg = _decodeImage(_decodeJson(wallet.tokenURI(1)));
+        assertEq(_count(svg, 'fill="#2775CA"'), 1, "only the allowlisted USDC gets the brand mark");
+        assertEq(_count(svg, 'fill="#6b7280"'), 1, "the look-alike is plain");
+    }
+
+    function _count(string memory h, string memory n) internal pure returns (uint256 c) {
+        bytes memory hb = bytes(h);
+        bytes memory nb = bytes(n);
+        for (uint256 i = 0; i + nb.length <= hb.length; ++i) {
+            bool ok = true;
+            for (uint256 j = 0; j < nb.length && ok; ++j) {
+                ok = hb[i + j] == nb[j];
+            }
+            if (ok) ++c;
+        }
+    }
+
     function test_clean_utf8AndCaps() public view {
         // multi-byte sequences survive; a sequence crossing the cap is dropped whole
         assertEq(fmt.clean(bytes(unicode"héllo"), 32, false), unicode"héllo", "2-byte kept");

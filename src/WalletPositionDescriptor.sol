@@ -514,7 +514,7 @@ contract WalletPositionDescriptor is IWalletDescriptor, Ownable2Step {
         return atLeast ? string.concat("&#8805; ", f) : f;
     }
 
-    /// @dev Up to three distinct currency chips; `+k` if more exist among the rendered positions.
+    /// @dev Up to three distinct currency chips (badge by address: native/WETH, stable allowlist); `+k` if more exist among the rendered positions.
     function _icons(Row[] memory rows) private view returns (string memory out) {
         Currency[] memory curs = new Currency[](2 * rows.length);
         uint256 cn;
@@ -524,8 +524,12 @@ contract WalletPositionDescriptor is IWalletDescriptor, Ownable2Step {
             cn = _pushDistinct(curs, cn, rows[i].p.key.currency1);
         }
         uint256 show = cn > 3 ? 3 : cn;
+        bool ethNative = keccak256(bytes(nativeSymbol)) == keccak256("ETH");
         for (uint256 i = 0; i < show; ++i) {
-            out = string.concat(out, DescriptorLib.tokenIcon(_symbol(curs[i]), 20 + i * 92, 236));
+            address t = Currency.unwrap(curs[i]);
+            string memory sym = _symbol(curs[i]);
+            uint8 kind = DescriptorLib.badgeKind(sym, ethNative && _canon(t) == address(0), isStable[t]);
+            out = string.concat(out, DescriptorLib.tokenIcon(sym, ART.badge(kind), 20 + i * 92, 236));
         }
         if (cn > 3) {
             out = string.concat(

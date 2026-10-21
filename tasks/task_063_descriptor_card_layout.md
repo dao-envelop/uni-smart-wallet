@@ -15,9 +15,18 @@
 * `_svg(…, longName, …)`: имя длиннее 28 сырых байт — 13 px вместо 16 (32 знака ≈ 250 px).
 * `_symbol`: подпись чипа обрезается до 8 байт (UTF-8 не режется посреди символа, как и раньше). В JSON символы не
   выводятся, атрибуты не меняются.
-* Тесты: `test_cardLayout_longNameSmallerFont_symbolsCappedForChips`, обновлён `test_tinyPosition_cardShowsLessThanCent`.
+* Знаки на чипах вместо цвета по символу (было: любой токен с символом `USDC` красился в синий). Знак выбирается по
+  **адресу**: нативный/WETH на ETH-сетях — ромб ETH; токен из allowlist стейблов — упрощённый фирменный знак по
+  семейству (USDC/USDbC, USDT/USD₮0, DAI), прочие стейблы из allowlist (USDe, USDS, PYUSD…) — бирюзовый `$`;
+  остальное — серый кружок. Разметка знаков — `DescriptorLib.badge`, лежит в `DescriptorArt` (`ART.badge(kind)`),
+  в рантайме дескриптора — только выбор вида. Полные официальные логотипы (1–2 KB SVG каждый) влезли бы туда же,
+  но их надо брать из брендбуков, а не рисовать; упрощённые знаки на 18 px неотличимы.
+* Тесты: `test_cardLayout_longNameSmallerFont_symbolsCappedForChips`, `test_chipBadge_byAllowlist_spoofedSymbolStaysPlain`,
+  `test_badgeKind_byAllowlistNotBySymbol`, `test_tokenIcon_brandMarksAndTicker`; обновлён
+  `test_tinyPosition_cardShowsLessThanCent`.
 
-Размер `WalletPositionDescriptor`: 20 365 → 20 580 B (запас 3 996 B). Менеджеры не затронуты.
+Размеры: `WalletPositionDescriptor` 20 365 → 21 023 B (запас 3 553 B), `DescriptorArt` 6 004 → 7 391 B. Менеджеры не
+затронуты. Повторный рендер: 8 живых менеджеров (Arbitrum ×7, Unichain) + галерея знаков — всё в рамке.
 
 ## Деплой
 Только дескриптор. Новые менеджеры получают его адрес из `InitParams.descriptor` (UI берёт `deployments.descriptor`),
@@ -25,5 +34,4 @@
 `script/DeployDescriptor.s.sol` и `npm run sync-deployments` во фронте; пересоздавать менеджеры не нужно.
 
 ## Не делали (косметика, на решение)
-* Цвет чипа по символу: `USD₮0` серый, хотя в списке стейблов; можно красить по allowlist.
 * USDC и USDC.e на Arbitrum оба называются `USDC` — на карточке два одинаковых чипа.

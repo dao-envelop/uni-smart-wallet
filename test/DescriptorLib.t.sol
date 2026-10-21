@@ -38,16 +38,26 @@ contract DescriptorLibTest is Test {
 
     // ────────── tokenIcon ──────────
 
-    function test_tokenIcon_knownStableBrandColor() public view {
-        assertTrue(_contains(lib.tokenIcon("USDC", 20, 100), "#2775CA"), "usdc brand");
-        assertTrue(_contains(lib.tokenIcon("USDT", 20, 100), "#26A17B"), "usdt brand");
-        assertTrue(_contains(lib.tokenIcon("DAI", 20, 100), "#F5AC37"), "dai brand");
+    function test_badgeKind_byAllowlistNotBySymbol() public view {
+        assertEq(lib.badgeKind("USDC", false, true), 2, "allowlisted USDC");
+        assertEq(lib.badgeKind("USDbC", false, true), 2, "bridged USDC family");
+        assertEq(lib.badgeKind("USDT", false, true), 3, "USDT");
+        assertEq(lib.badgeKind(unicode"USD₮0", false, true), 3, "USDT0 family");
+        assertEq(lib.badgeKind("DAI", false, true), 4, "DAI");
+        assertEq(lib.badgeKind("USDe", false, true), 5, "other stable: generic");
+        assertEq(lib.badgeKind("USDC", false, false), 0, "a token merely named USDC: plain");
+        assertEq(lib.badgeKind("WETH", true, false), 1, "native / WETH: ETH mark");
     }
 
-    function test_tokenIcon_unknownFallbackColorAndTicker() public view {
-        string memory icon = lib.tokenIcon("MCK", 20, 100);
+    function test_tokenIcon_brandMarksAndTicker() public view {
+        assertTrue(_contains(lib.tokenIcon("USDC", 2, 20, 100), "#2775CA"), "usdc brand");
+        assertTrue(_contains(lib.tokenIcon("USDT", 3, 20, 100), "#26A17B"), "usdt brand");
+        assertTrue(_contains(lib.tokenIcon("DAI", 4, 20, 100), "#F5AC37"), "dai brand");
+        assertTrue(_contains(lib.tokenIcon("ETH", 1, 20, 100), "#627EEA"), "eth mark");
+        string memory icon = lib.tokenIcon("MCK", 0, 20, 100);
         assertTrue(_contains(icon, "#6b7280"), "fallback color");
-        assertTrue(_contains(icon, "MCK"), "ticker text");
+        assertTrue(_contains(icon, "translate(20 100)"), "anchored");
+        assertTrue(_contains(icon, ">MCK</text>"), "ticker text");
     }
 
     function _contains(string memory haystack, string memory needle) internal pure returns (bool) {

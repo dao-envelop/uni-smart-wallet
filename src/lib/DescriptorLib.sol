@@ -29,22 +29,70 @@ library DescriptorLib {
             "</defs>" "</g>";
     }
 
-    /// @dev A small coin glyph + ticker for one stable, anchored at top-left (`x`,`y`). Known
-    /// stables get their brand color; everything else a neutral coin.
-    function tokenIcon(string memory sym, uint256 x, uint256 y) internal pure returns (string memory) {
+    /// @dev Chip badge kinds (task_063). The descriptor picks one from the token's ADDRESS (stable
+    /// allowlist, native/WETH), never from its symbol alone, so a token named "USDC" gets no brand mark.
+    uint8 internal constant BADGE_PLAIN = 0;
+    uint8 internal constant BADGE_ETH = 1;
+    uint8 internal constant BADGE_USDC = 2;
+    uint8 internal constant BADGE_USDT = 3;
+    uint8 internal constant BADGE_DAI = 4;
+    uint8 internal constant BADGE_STABLE = 5;
+
+    /// @dev Badge for a chip: native ETH ⇒ the ETH mark; an allowlisted stable ⇒ its brand mark by family
+    /// (USDC/USDbC, USDT/USD₮0, DAI), any other allowlisted stable ⇒ a generic `$` coin; else plain.
+    function badgeKind(string memory sym, bool nativeEth, bool stable) internal pure returns (uint8) {
+        if (nativeEth) return BADGE_ETH;
+        if (!stable) return BADGE_PLAIN;
         bytes32 h = keccak256(bytes(sym));
-        string memory color = "#6b7280";
-        if (h == keccak256("USDC")) color = "#2775CA";
-        else if (h == keccak256("USDT")) color = "#26A17B";
-        else if (h == keccak256("DAI")) color = "#F5AC37";
+        if (h == keccak256("USDC") || h == keccak256("USDbC")) return BADGE_USDC;
+        if (h == keccak256("USDT") || h == keccak256(unicode"USD₮0")) return BADGE_USDT;
+        if (h == keccak256("DAI")) return BADGE_DAI;
+        return BADGE_STABLE;
+    }
+
+    /// @dev Simplified brand marks in an 18×18 box (circle r = 9 at 9,9), position-free: the chip wraps
+    /// them in a `translate`.
+    function badge(uint8 kind) internal pure returns (string memory) {
+        if (kind == BADGE_ETH) {
+            return '<circle cx="9" cy="9" r="9" fill="#627EEA"/>' '<path d="M9 2.6 5 9.3 9 11.6 13 9.3Z" fill="#fff"/>'
+                '<path d="M9 12.4 5 10.1 9 15.4 13 10.1Z" fill="#fff" fill-opacity=".8"/>';
+        }
+        if (kind == BADGE_USDC) {
+            return '<circle cx="9" cy="9" r="9" fill="#2775CA"/>'
+                '<path d="M6.3 3.6A6 6 0 0 0 6.3 14.4M11.7 3.6A6 6 0 0 1 11.7 14.4" fill="none" stroke="#fff" stroke-width="1.2"/>'
+                '<text x="9" y="12.2" fill="#fff" font-family="sans-serif" font-size="9" font-weight="700" text-anchor="middle">$</text>';
+        }
+        if (kind == BADGE_USDT) {
+            return '<circle cx="9" cy="9" r="9" fill="#26A17B"/>'
+                '<path d="M4.6 4.4h8.8v2.1H10.1v7.7H7.9V6.5H4.6Z" fill="#fff"/>'
+                '<ellipse cx="9" cy="8.9" rx="4.7" ry="1.4" fill="none" stroke="#fff" stroke-width=".9"/>';
+        }
+        if (kind == BADGE_DAI) {
+            return '<circle cx="9" cy="9" r="9" fill="#F5AC37"/>'
+                '<path d="M6 4.6h2.6a4.4 4.4 0 0 1 0 8.8H6Z" fill="none" stroke="#fff" stroke-width="1.6"/>'
+                '<path d="M4.2 8.2h9.6M4.2 10h9.6" stroke="#fff" stroke-width=".9"/>';
+        }
+        if (kind == BADGE_STABLE) {
+            return '<circle cx="9" cy="9" r="9" fill="#14b8a6"/>'
+                '<text x="9" y="12.6" fill="#0b1021" font-family="sans-serif" font-size="10" font-weight="700" text-anchor="middle">$</text>';
+        }
+        return '<circle cx="9" cy="9" r="9" fill="#6b7280"/>';
+    }
+
+    /// @dev A chip: `badge` markup (from {badge}) + ticker, anchored at top-left (`x`,`y`).
+    function tokenIcon(string memory sym, string memory badgeSvg, uint256 x, uint256 y)
+        internal
+        pure
+        returns (string memory)
+    {
         return string.concat(
-            '<circle cx="',
-            (x + 9).toString(),
-            '" cy="',
-            (y + 9).toString(),
-            '" r="9" fill="',
-            color,
-            '"/><text x="',
+            '<g transform="translate(',
+            x.toString(),
+            " ",
+            y.toString(),
+            ')">',
+            badgeSvg,
+            '</g><text x="',
             (x + 24).toString(),
             '" y="',
             (y + 13).toString(),
@@ -169,11 +217,15 @@ library DescriptorLib {
 }
 
 /// @title DescriptorArt
-/// @notice Holds the static Envelop watermark for {WalletPositionDescriptor}. The descriptor deploys it
+/// @notice Holds the static Envelop watermark and the chip badges for {WalletPositionDescriptor}. The descriptor deploys it
 /// from its constructor and reads it per render: ~5 KB of SVG paths live here instead of in the
 /// descriptor's runtime code, which keeps that under EIP-170 with the task_055 pricing logic.
 contract DescriptorArt {
     function logo() external pure returns (string memory) {
         return DescriptorLib.logo();
+    }
+
+    function badge(uint8 kind) external pure returns (string memory) {
+        return DescriptorLib.badge(kind);
     }
 }
