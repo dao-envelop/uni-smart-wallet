@@ -27,7 +27,8 @@
         { "symbol": "LINK", "token": "0x514910771AF9Ca656af840dff83E8264EcF986CA", "v3Pool": "0xa6Cc3C2531FdaA6Ae1A3CA84c2855806728693e8", "note": "v3 LINK/WETH 0.3%" }
       ]
     },
-    "deploy": { "feeRedeemer": false, "stableImpl": true, "volatileImpl": true, "openImpl": false, "factory": false, "lens": false, "descriptor": true, "oracle": false }
+    "deploy": { "feeRedeemer": false, "stableImpl": true, "volatileImpl": true, "openImpl": false, "factory": false, "lens": false, "descriptor": true, "oracle": false, "revokeReplaced": true },
+    "revokeImpls": ["0x5a4417E55880De60A5b8C25F2100e7ba42BC43Bb"]
   },
   "10": {
     "name": "optimism",
@@ -63,7 +64,8 @@
         { "symbol": "UNI", "token": "0x8f187aA05619a017077f5308904739877ce9eA21", "v4": { "currency0": "0x0000000000000000000000000000000000000000", "currency1": "0x8f187aA05619a017077f5308904739877ce9eA21", "fee": 3000, "tickSpacing": 60 }, "note": "v4 ETH/UNI 0.3%" }
       ]
     },
-    "deploy": { "feeRedeemer": false, "stableImpl": true, "volatileImpl": true, "openImpl": false, "factory": false, "lens": false, "descriptor": true, "oracle": false }
+    "deploy": { "feeRedeemer": false, "stableImpl": true, "volatileImpl": true, "openImpl": false, "factory": false, "lens": false, "descriptor": true, "oracle": false, "revokeReplaced": true },
+    "revokeImpls": ["0x71B7a17299592e06b80c28C6aB1C1DB5dC67D06D"]
   },
   "137": {
     "name": "polygon",
@@ -130,7 +132,8 @@
         { "symbol": "AERO", "token": "0x940181a94A35A4569E4529A3CDfB74e38FD98631", "v3Pool": "0x3d5D143381916280ff91407FeBEB52f2b60f33Cf", "note": "v3 AERO/WETH 0.3%" }
       ]
     },
-    "deploy": { "feeRedeemer": false, "stableImpl": true, "volatileImpl": true, "openImpl": false, "factory": false, "lens": false, "descriptor": true, "oracle": false }
+    "deploy": { "feeRedeemer": false, "stableImpl": true, "volatileImpl": true, "openImpl": false, "factory": false, "lens": false, "descriptor": true, "oracle": false, "revokeReplaced": true },
+    "revokeImpls": ["0x9C10eD902Ae7fD997D92eeD7535849f204b727b7"]
   },
   "42161": {
     "name": "arbitrum-one",
@@ -160,7 +163,8 @@
         { "symbol": "ETHFI", "token": "0x7189fb5B6504bbfF6a852B13B7B82a3c118fDc27", "v3Pool": "0x7e9cb8aD4a7683070E233F3Eb1D07d87272b9b26", "note": "v3 ETHFI/WETH 0.3% (thin: ~$1k per 1%)" }
       ]
     },
-    "deploy": { "feeRedeemer": false, "stableImpl": true, "volatileImpl": true, "openImpl": false, "factory": false, "lens": false, "descriptor": true, "oracle": false }
+    "deploy": { "feeRedeemer": false, "stableImpl": true, "volatileImpl": true, "openImpl": false, "factory": false, "lens": false, "descriptor": true, "oracle": false, "revokeReplaced": true },
+    "revokeImpls": ["0x7f373092bDAFdc47a34c406Ec7Ac903B7780C4a2"]
   },
   "42220": {
     "name": "celo",
@@ -198,7 +202,7 @@
     "initialOwner": "0x0000000000000000000000000000000000000000",
     "oracleMaxSpotDeviationBps": 50,
     "oracleMaxMidOffsetBps": 10,
-    "deploy": { "feeRedeemer": false, "stableImpl": true, "volatileImpl": true, "openImpl": false, "factory": false, "lens": false, "descriptor": false, "oracle": false }
+    "deploy": { "feeRedeemer": false, "stableImpl": true, "volatileImpl": true, "openImpl": false, "factory": false, "lens": false, "descriptor": false, "oracle": false, "revokeReplaced": true }
   },
   "11155111": {
     "name": "sepolia",

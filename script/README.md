@@ -113,6 +113,11 @@ Dependency resolution:
   else `.impl`/`.volatileImpl`/`.openImpl` from the deployments file). When `factory: false` but fresh impls were
   deployed, the script best-effort calls `setImplementation` on the existing `.factory` **only if the
   broadcaster is the factory owner** — otherwise it logs a warning and you allowlist manually.
+- **Retiring a release** (task_062): with `"revokeReplaced": true` in `deploy`, once the fresh impls are
+  allowlisted on the existing factory the script revokes the ones they replace (the previous `.impl` /
+  `.volatileImpl` / `.openImpl`). Older releases go in a per-chain `"revokeImpls": [..]` list and are
+  revoked in the same run. Both are owner-only and skip with a WARN otherwise. The allowlist gates
+  creation only — managers already cloned from a revoked impl keep working.
 - **Oracle** is standalone: deployed + recorded under `.oracle`. Since v2.2 (task_057) a new manager gets it at `initialize` (`InitParams.oracle`; `CreateManager` reads `.oracle`); clones created before that are wired later
   via the owner-only `setPriceOracle` (see below) — this script does not wire it.
 

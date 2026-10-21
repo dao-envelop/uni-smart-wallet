@@ -103,6 +103,10 @@ contract DeployStableLP is DescriptorConfig {
         bool lens;
         bool descriptor;
         bool oracle;
+        /// @dev After blessing fresh impls on the existing factory, revoke the ones they replace (the
+        /// previous `.impl`/`.volatileImpl`/`.openImpl`), so new managers can no longer be cloned from a
+        /// superseded release (task_062). Existing clones are untouched: the allowlist gates creation only.
+        bool revokeReplaced;
     }
 
     /// @notice Addresses already recorded in `deployments/<chainId>.json` (all zero if the file is absent).
@@ -141,6 +145,7 @@ contract DeployStableLP is DescriptorConfig {
 
         vm.startBroadcast();
         d = deployComponents(c.poolManager, admin, c.flags, treasury, existing, broadcaster, c.oracle, c.stablecoins);
+        if (c.revokeImpls.length != 0) _revokeListedImpls(existing.factory, c.revokeImpls, d, broadcaster);
         vm.stopBroadcast();
 
         _log(c.poolManager, admin, c.name, c.flags, d);
@@ -158,7 +163,8 @@ contract DeployStableLP is DescriptorConfig {
             factory: true,
             lens: true,
             descriptor: true,
-            oracle: true
+            oracle: true,
+            revokeReplaced: false
         });
         OracleParams memory oracle = OracleParams({
             maxDeviationBps: DEFAULT_ORACLE_MAX_DEVIATION_BPS,
@@ -212,9 +218,11 @@ contract DeployStableLP is DescriptorConfig {
         if (flags.factory) {
             d.factory = new LPManagerFactory(admin, _implList(stableAddr, volatileAddr, openAddr));
         } else {
-            _allowlistFreshImpls(
+            bool blessed = _allowlistFreshImpls(
                 existing.factory, address(d.impl), address(d.volatileImpl), address(d.openImpl), broadcaster
             );
+            // Only once the replacements are allowlisted, so there is never a moment with nothing to clone.
+            if (blessed && flags.revokeReplaced) _revokeReplacedImpls(existing, d);
         }
 
         // 4. Standalone components.
@@ -244,22 +252,23 @@ contract DeployStableLP is DescriptorConfig {
         address volatileImpl,
         address openImpl,
         address broadcaster
-    ) internal {
+    ) internal returns (bool blessed) {
         // no fresh impls ⇒ nothing to bless
-        if (stableImpl == address(0) && volatileImpl == address(0) && openImpl == address(0)) return;
+        if (stableImpl == address(0) && volatileImpl == address(0) && openImpl == address(0)) return false;
         if (factory == address(0)) {
             console2.log("WARN: fresh impls deployed but no factory to allowlist them on; set .factory or deploy one");
-            return;
+            return false;
         }
         try LPManagerFactory(factory).owner() returns (address o) {
             if (o != broadcaster) {
                 console2.log("WARN: broadcaster is not the factory owner; skipping auto-allowlist. Factory owner:", o);
-                return;
+                return false;
             }
         } catch {
             console2.log("WARN: could not read factory owner (stale .factory?); skipping auto-allowlist:", factory);
-            return;
+            return false;
         }
+        blessed = true;
         if (stableImpl != address(0)) {
             LPManagerFactory(factory).setImplementation(stableImpl, true);
             console2.log("Allowlisted stable impl on factory:", stableImpl);
@@ -272,6 +281,40 @@ contract DeployStableLP is DescriptorConfig {
             LPManagerFactory(factory).setImplementation(openImpl, true);
             console2.log("Allowlisted open (hooked) impl on factory:", openImpl);
         }
+    }
+
+    /// @dev Revoke each recorded impl that a fresh one of the same product replaced this run. Called only
+    /// after {_allowlistFreshImpls} confirmed the broadcaster owns the factory.
+    function _revokeReplacedImpls(Existing memory existing, Deployment memory d) internal {
+        LPManagerFactory factory = LPManagerFactory(existing.factory);
+        _revokeIfReplaced(factory, existing.impl, address(d.impl), "stable");
+        _revokeIfReplaced(factory, existing.volatileImpl, address(d.volatileImpl), "volatile");
+        _revokeIfReplaced(factory, existing.openImpl, address(d.openImpl), "open");
+    }
+
+    /// @dev Revoke impls named in `revokeImpls` — releases older than the one `.impl` records, which
+    /// `revokeReplaced` cannot know about. Never one of this run's fresh impls; owner-only like the rest.
+    function _revokeListedImpls(address factoryAddr, address[] memory list, Deployment memory d, address broadcaster)
+        internal
+    {
+        LPManagerFactory factory = LPManagerFactory(factoryAddr);
+        if (factoryAddr == address(0) || factory.owner() != broadcaster) {
+            console2.log("WARN: revokeImpls skipped: no factory or broadcaster is not its owner");
+            return;
+        }
+        for (uint256 i; i < list.length; ++i) {
+            address a = list[i];
+            if (a == address(d.impl) || a == address(d.volatileImpl) || a == address(d.openImpl)) continue;
+            if (!factory.isImplementation(a)) continue;
+            factory.setImplementation(a, false);
+            console2.log("Revoked listed impl on factory:", a);
+        }
+    }
+
+    function _revokeIfReplaced(LPManagerFactory factory, address old, address fresh, string memory kind) internal {
+        if (fresh == address(0) || old == address(0) || old == fresh || !factory.isImplementation(old)) return;
+        factory.setImplementation(old, false);
+        console2.log(string.concat("Revoked replaced ", kind, " impl on factory:"), old);
     }
 
     function _implList(address stableAddr, address volatileAddr, address openAddr)
@@ -300,6 +343,7 @@ contract DeployStableLP is DescriptorConfig {
         Flags flags;
         OracleParams oracle;
         address[] stablecoins; // per-chain $1 allowlist for the descriptor
+        address[] revokeImpls; // older impls to take off the existing factory's allowlist (task_062)
     }
 
     function loadConfig(uint256 chainId) public view returns (Config memory c) {
@@ -318,6 +362,7 @@ contract DeployStableLP is DescriptorConfig {
         c.flags = _readFlags(json, base);
         c.oracle = _readOracle(json, base);
         c.stablecoins = _optAddrArray(json, string.concat(base, ".stablecoins"));
+        c.revokeImpls = _optAddrArray(json, string.concat(base, ".revokeImpls"));
     }
 
     /// @dev Read the `deploy` toggle object; a missing object ⇒ the legacy full set (oracle off).
@@ -332,7 +377,8 @@ contract DeployStableLP is DescriptorConfig {
                 factory: true,
                 lens: true,
                 descriptor: true,
-                oracle: false
+                oracle: false,
+                revokeReplaced: false
             });
         }
         f.feeRedeemer = _optBool(json, string.concat(deployPath, ".feeRedeemer"));
@@ -343,6 +389,7 @@ contract DeployStableLP is DescriptorConfig {
         f.factory = _optBool(json, string.concat(deployPath, ".factory"));
         f.lens = _optBool(json, string.concat(deployPath, ".lens"));
         f.descriptor = _optBool(json, string.concat(deployPath, ".descriptor"));
+        f.revokeReplaced = _optBool(json, string.concat(deployPath, ".revokeReplaced"));
         f.oracle = _optBool(json, string.concat(deployPath, ".oracle"));
     }
 
