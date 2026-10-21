@@ -113,7 +113,7 @@ Dependency resolution:
   else `.impl`/`.volatileImpl`/`.openImpl` from the deployments file). When `factory: false` but fresh impls were
   deployed, the script best-effort calls `setImplementation` on the existing `.factory` **only if the
   broadcaster is the factory owner** — otherwise it logs a warning and you allowlist manually.
-- **Oracle** is standalone: deployed + recorded under `.oracle`, then wired into each manager clone later
+- **Oracle** is standalone: deployed + recorded under `.oracle`. Since v2.2 (task_057) a new manager gets it at `initialize` (`InitParams.oracle`; `CreateManager` reads `.oracle`); clones created before that are wired later
   via the owner-only `setPriceOracle` (see below) — this script does not wire it.
 
 Output is **merged**: only the keys for components deployed this run are (over)written; every other
