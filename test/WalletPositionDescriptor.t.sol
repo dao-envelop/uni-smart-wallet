@@ -438,6 +438,24 @@ contract WalletPositionDescriptorTest is V4WalletTestBase {
         assertFalse(_contains(svg, "<b>"), "no injected tag");
     }
 
+    /// @notice task_063: a 32-byte name and 12-byte symbols stay inside the 320 px card.
+    function test_cardLayout_longNameSmallerFont_symbolsCappedForChips() public {
+        mw.setName("WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW");
+        MockMetaERC20 s = _tok("USDC", 18);
+        descriptor.setStable(address(s), true);
+        MockMetaERC20 v = _tok("SolvBTC.BBNX", 18);
+        _openIn(_pool(address(s), address(v), 500, 10, 0), -1000, 1000, 1e12, bytes32(uint256(0x63)));
+
+        string memory svg = _decodeImage(_decodeJson(wallet.tokenURI(1)));
+        assertTrue(_contains(svg, 'font-size="13">WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW<'), "long name at 13 px");
+        assertTrue(_contains(svg, ">SolvBTC.<"), "chip label capped at 8 bytes");
+        assertFalse(_contains(svg, "SolvBTC.B"), "no overflow into the next chip");
+
+        mw.setName("Short");
+        svg = _decodeImage(_decodeJson(wallet.tokenURI(1)));
+        assertTrue(_contains(svg, 'font-size="16">Short<'), "short name keeps 16 px");
+    }
+
     function test_clean_utf8AndCaps() public view {
         // multi-byte sequences survive; a sequence crossing the cap is dropped whole
         assertEq(fmt.clean(bytes(unicode"héllo"), 32, false), unicode"héllo", "2-byte kept");
@@ -472,7 +490,9 @@ contract WalletPositionDescriptorTest is V4WalletTestBase {
         assertGt(r.principalUsd, 0, "non-zero");
         assertLt(r.principalUsd, 5e15, "below half a cent");
         string memory json = _decodeJson(wallet.tokenURI(1));
-        assertTrue(_contains(_decodeImage(json), "$&lt;0.01"), "<0.01 on the card");
+        string memory svg = _decodeImage(json);
+        assertTrue(_contains(svg, "&lt;$0.01"), "<$0.01 on the card");
+        assertFalse(_contains(svg, "$&lt;"), "the dollar sign goes inside the bound");
     }
 
     // ────────── bug 10/11: decimals and symbol robustness ──────────

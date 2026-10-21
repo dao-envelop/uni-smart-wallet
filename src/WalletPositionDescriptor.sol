@@ -328,7 +328,9 @@ contract WalletPositionDescriptor is IWalletDescriptor, Ownable2Step {
             s = _text(t, 0x95d89b41); // symbol()
         }
         if (s.length == 0) return "?";
-        return DescriptorLib.clean(s, 12, false);
+        // 8 bytes: a chip's label has 68 px before the next chip (92 px pitch, 12 px monospace ≈ 7.2 px a
+        // glyph), and the third chip must stay clear of the `+k` counter at x = 296 (task_063).
+        return DescriptorLib.clean(s, 8, false);
     }
 
     // ────────── JSON ──────────
@@ -346,7 +348,9 @@ contract WalletPositionDescriptor is IWalletDescriptor, Ownable2Step {
             '","description":"',
             DESCRIPTION,
             '","image":"data:image/svg+xml;base64,',
-            Base64.encode(bytes(_svg(DescriptorLib.clean(rawName, 48, false), n, rows, liq, fees, flags)))
+            Base64.encode(
+                bytes(_svg(DescriptorLib.clean(rawName, 48, false), rawName.length > 28, n, rows, liq, fees, flags))
+            )
         );
         return string.concat(
             head, '","attributes":[', _attributes(n, liq, fees, flags), '],"positions":[', _positionsJson(rows), "]}"
@@ -457,7 +461,9 @@ contract WalletPositionDescriptor is IWalletDescriptor, Ownable2Step {
 
     // ────────── image ──────────
 
-    function _svg(string memory nm, uint256 n, Row[] memory rows, uint256 liq, uint256 fees, uint8 flags)
+    /// @param longName More than 28 raw bytes: the title drops to 13 px so 32 monospace glyphs still fit
+    /// the 280 px line (task_063; multi-byte names are narrower per byte, so this is conservative).
+    function _svg(string memory nm, bool longName, uint256 n, Row[] memory rows, uint256 liq, uint256 fees, uint8 flags)
         private
         view
         returns (string memory)
@@ -466,15 +472,17 @@ contract WalletPositionDescriptor is IWalletDescriptor, Ownable2Step {
             '<svg xmlns="http://www.w3.org/2000/svg" width="320" height="320">',
             '<rect width="320" height="320" fill="#0b1021"/>',
             ART.logo(),
-            '<text x="20" y="40" fill="#4AFEBF" font-family="monospace" font-size="16">',
+            '<text x="20" y="40" fill="#4AFEBF" font-family="monospace" font-size="',
+            longName ? "13" : "16",
+            '">',
             nm,
             '</text><text x="20" y="92" fill="#9aa7bd" font-family="monospace" font-size="13">Open positions: ',
             n.toString(),
             '</text><text x="20" y="128" fill="#9aa7bd" font-family="monospace" font-size="13">Liquidity</text>'
         );
         bool priced = flags & UNPRICED == 0;
-        string memory atLeast = flags & 4 != 0 ? "&#8805; $" : "$";
-        string memory value = priced ? string.concat(atLeast, DescriptorLib.formatUsd(liq)) : "unpriced";
+        bool atLeast = flags & 4 != 0;
+        string memory value = priced ? _money(atLeast, liq) : "unpriced";
         string memory note = !priced
             ? "no pool price for some tokens"
             : flags & 4 != 0
@@ -486,7 +494,7 @@ contract WalletPositionDescriptor is IWalletDescriptor, Ownable2Step {
             '</text><text x="20" y="182" fill="#5b6b86" font-family="monospace" font-size="11">',
             note,
             '</text><text x="20" y="206" fill="#9aa7bd" font-family="monospace" font-size="13">',
-            priced ? string.concat("Unclaimed fees: ", atLeast, DescriptorLib.formatUsd(fees)) : "",
+            priced ? string.concat("Unclaimed fees: ", _money(atLeast, fees)) : "",
             "</text>"
         );
         return string.concat(
@@ -496,6 +504,14 @@ contract WalletPositionDescriptor is IWalletDescriptor, Ownable2Step {
             '<text x="20" y="306" fill="#5b6b86" font-family="monospace" font-size="11">Uniswap V4 &#183; NFT owned</text>',
             "</svg>"
         );
+    }
+
+    /// @dev `$1,234.56`, `<$0.01` for dust (the `$` goes inside the bound, task_063), `≥ ` before either
+    /// when the render is truncated.
+    function _money(bool atLeast, uint256 v) private pure returns (string memory) {
+        string memory f = DescriptorLib.formatUsd(v);
+        f = bytes(f)[0] == "&" ? "&lt;$0.01" : string.concat("$", f);
+        return atLeast ? string.concat("&#8805; ", f) : f;
     }
 
     /// @dev Up to three distinct currency chips; `+k` if more exist among the rendered positions.
