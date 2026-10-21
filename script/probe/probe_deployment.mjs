@@ -23,6 +23,11 @@
 // read (the answer is unknown, not "fine"). A component master builds but no file records (e.g.
 // `openImpl` before its first deploy) is reported as `not deployed` and does not fail the run:
 // whether to deploy it is the owner's decision, this only makes the absence visible.
+//
+// A lag the owner chose to keep is declared per chain in script/chain_params.json as
+// `probeAccepted: { <deployments key>: "<reason>" }` (task_064). The probe still checks it and prints
+// `behind (accepted: <reason>)`, but it does not fail the run. Nothing else is waived: NO CODE, an
+// unreadable RPC and every component without an entry fail as before.
 
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -53,6 +58,10 @@ const COMPONENTS = {
 };
 
 const rpcOf = (id) => process.env[`RPC_${id}`] ?? DEFAULT_RPC[id];
+
+const PARAMS_FILE = join(REPO, "script", "chain_params.json");
+const PARAMS = existsSync(PARAMS_FILE) ? JSON.parse(readFileSync(PARAMS_FILE, "utf8")) : {};
+const acceptedOf = (id) => PARAMS[String(id)]?.probeAccepted ?? {};
 
 function selectorsOf(contract) {
   const path = join(OUT, `${contract}.sol`, `${contract}.json`);
@@ -93,6 +102,7 @@ const chains = readdirSync(join(REPO, "deployments"))
   .sort((a, b) => a - b);
 
 let behind = 0;
+let acceptedLag = 0;
 let unknown = 0;
 for (const chainId of chains) {
   const file = JSON.parse(readFileSync(join(REPO, "deployments", `${chainId}.json`), "utf8"));
@@ -100,6 +110,7 @@ for (const chainId of chains) {
   const tag = file.tag ? ` ${file.tag}` : "";
   const commit = file.commit ? ` @${String(file.commit).slice(0, 7)}` : " (no provenance)";
   console.log(`chain ${chainId} ${file.name ?? ""}${tag}${commit}`);
+  const accepted = acceptedOf(chainId);
   if (!rpc) {
     console.log(`  no RPC for chain ${chainId} — set RPC_${chainId}`);
     unknown++;
@@ -135,6 +146,9 @@ for (const chainId of chains) {
     const missing = selectors.filter(({ sel }) => !carries(code, sel)).map(({ sig }) => sig);
     if (missing.length === 0) {
       console.log(`  ${contract.padEnd(24)} ${address} ok (${selectors.length} selectors)`);
+    } else if (accepted[key]) {
+      console.log(`  ${contract.padEnd(24)} ${address} behind (accepted: ${accepted[key]}) — missing ${missing.length} selectors`);
+      acceptedLag++;
     } else {
       console.log(`  ${contract.padEnd(24)} ${address} missing: ${missing.join(", ")}`);
       behind++;
@@ -150,4 +164,8 @@ if (behind > 0) {
   process.exit(1);
 }
 if (unknown > 0) process.exit(2);
-console.log("\nEvery deployed component carries every selector of the current build.");
+console.log(
+  acceptedLag > 0
+    ? `\nEvery deployed component carries every selector of the current build, except ${acceptedLag} accepted lag(s) declared in chain_params.json.`
+    : "\nEvery deployed component carries every selector of the current build.",
+);
