@@ -8,16 +8,19 @@ forge script script/SetOracleFeeds.s.sol --sig "run()" --rpc-url arbitrum --acco
 forge script script/SetOracleFeeds.s.sol --sig "run()" --rpc-url base --account env_deploy_2025 --sender 0x13B9cBcB46aD79878af8c9faa835Bee19B977D3D --broadcast 
 
 
+
 $ #Deploy Implemenation
-$ forge script script/DeployStableLP.s.sol --sig "run()" --rpc-url unichain-sepolia --account three --sender 0x97ba7778dD9CE27bD4953c136F3B3b7b087E14c1 --broadcast --verify
+DEPLOY_COMMIT=$(git rev-parse HEAD) DEPLOY_TAG=<new tag> 
 
-$ forge script script/DeployStableLP.s.sol --sig "run()" --rpc-url unichain --account env_deploy_2025 --sender 0x13B9cBcB46aD79878af8c9faa835Bee19B977D3D --broadcast --verify
+$ DEPLOY_COMMIT=$(git rev-parse HEAD) DEPLOY_TAG=v2.2.0  forge script script/DeployStableLP.s.sol --sig "run()" --rpc-url unichain-sepolia --account three --sender 0x97ba7778dD9CE27bD4953c136F3B3b7b087E14c1 --broadcast --verify
 
-$ forge script script/DeployStableLP.s.sol --sig "run()" --rpc-url arbitrum --account env_deploy_2025 --sender 0x13B9cBcB46aD79878af8c9faa835Bee19B977D3D --broadcast --verify
+$ DEPLOY_COMMIT=$(git rev-parse HEAD) DEPLOY_TAG=v2.2.0 forge script script/DeployStableLP.s.sol --sig "run()" --rpc-url unichain --account env_deploy_2025 --sender 0x13B9cBcB46aD79878af8c9faa835Bee19B977D3D --broadcast --verify
 
-$ forge script script/DeployStableLP.s.sol --sig "run()" --rpc-url base --account env_deploy_2025 --sender 0x13B9cBcB46aD79878af8c9faa835Bee19B977D3D --broadcast --verify
+$ DEPLOY_COMMIT=$(git rev-parse HEAD) DEPLOY_TAG=v2.2.0  forge script script/DeployStableLP.s.sol --sig "run()" --rpc-url arbitrum --account env_deploy_2025 --sender 0x13B9cBcB46aD79878af8c9faa835Bee19B977D3D --broadcast --verify
 
-$ forge script script/DeployStableLP.s.sol --sig "run()" --rpc-url mainnet --account env_deploy_2025 --sender 0x13B9cBcB46aD79878af8c9faa835Bee19B977D3D --broadcast --verify
+$ DEPLOY_COMMIT=$(git rev-parse HEAD) DEPLOY_TAG=v2.2.0 forge script script/DeployStableLP.s.sol --sig "run()" --rpc-url base --account env_deploy_2025 --sender 0x13B9cBcB46aD79878af8c9faa835Bee19B977D3D --broadcast --verify
+
+$ DEPLOY_COMMIT=$(git rev-parse HEAD) DEPLOY_TAG=v2.2.0  forge script script/DeployStableLP.s.sol --sig "run()" --rpc-url mainnet --account env_deploy_2025 --sender 0x13B9cBcB46aD79878af8c9faa835Bee19B977D3D --broadcast --verify
 
 
 
@@ -40,8 +43,6 @@ $ forge script script/DeployDescriptor.s.sol --sig "run()" --rpc-url arbitrum --
 $ forge script script/DeployDescriptor.s.sol --sig "run()" --rpc-url base --account env_deploy_2025 --sender 0x13B9cBcB46aD79878af8c9faa835Bee19B977D3D --broadcast --verify
 
 $ forge script script/DeployDescriptor.s.sol --sig "run()" --rpc-url mainnet --account env_deploy_2025 --sender 0x13B9cBcB46aD79878af8c9faa835Bee19B977D3D --broadcast --verify
-
-
 ```
 # Deploy scripts
 

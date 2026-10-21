@@ -1,19 +1,19 @@
 {
   "chainId": 42161,
-  "commit": "12bcb45f56cffcedfed88212d403c43906a01ecd",
-  "deployedAt": 1788856498,
-  "descriptor": "0x330ce9c5d9271b0aeC08cD363C535Ef126743b0c",
+  "commit": "7898d9c1723aa524acb8f9f2a7183bc683812fe8",
+  "deployedAt": 1792575588,
+  "descriptor": "0xf17e42fF51c6E1155E4883EBfD34F6C2576E7D41",
   "factory": "0x8A56c6be755aC385395E96234b553DB1B9B06bEa",
   "feeRedeemer": "0x430D09A7969A5c6eF2fb5DcE40972d6e66eF5E33",
   "fromBlock": 486143228,
-  "impl": "0xf162F4389f521b8e93B7a62bdeAd52Fc9cd9A419",
+  "impl": "0xBeBC58DbeE56267dD25e3f1b69E6bdbc84C3eD26",
   "lens": "0x15E2f43954e7c32044363B19ea64BB290f85bDbE",
   "name": "arbitrum-one",
   "optimizerRuns": 200,
   "oracle": "0x4F59E6454462C9d3851D4B4126DC200FE6209e2D",
   "poolManager": "0x360E68faCcca8cA495c1B759Fd9EEe466db9FB32",
   "solc": "0.8.26",
-  "tag": "v2.1.0",
+  "tag": "v2.2.0",
   "viaIr": false,
-  "volatileImpl": "0x758A9664D0D10aF83fcE97c943C037E4584dCB8e"
+  "volatileImpl": "0xFdcBA6be322a293A36eB40f8e01fb572762903E3"
 }
