@@ -438,6 +438,48 @@ contract WalletPositionDescriptorTest is V4WalletTestBase {
         assertFalse(_contains(svg, "<b>"), "no injected tag");
     }
 
+    /// @notice task_063: a 32-byte name and 12-byte symbols stay inside the 320 px card.
+    function test_cardLayout_longNameSmallerFont_symbolsCappedForChips() public {
+        mw.setName("WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW");
+        MockMetaERC20 s = _tok("USDC", 18);
+        descriptor.setStable(address(s), true);
+        MockMetaERC20 v = _tok("SolvBTC.BBNX", 18);
+        _openIn(_pool(address(s), address(v), 500, 10, 0), -1000, 1000, 1e12, bytes32(uint256(0x63)));
+
+        string memory svg = _decodeImage(_decodeJson(wallet.tokenURI(1)));
+        assertTrue(_contains(svg, 'font-size="13">WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW<'), "long name at 13 px");
+        assertTrue(_contains(svg, ">SolvBTC.<"), "chip label capped at 8 bytes");
+        assertFalse(_contains(svg, "SolvBTC.B"), "no overflow into the next chip");
+
+        mw.setName("Short");
+        svg = _decodeImage(_decodeJson(wallet.tokenURI(1)));
+        assertTrue(_contains(svg, 'font-size="16">Short<'), "short name keeps 16 px");
+    }
+
+    /// @notice task_063: brand marks follow the stable allowlist, not the symbol.
+    function test_chipBadge_byAllowlist_spoofedSymbolStaysPlain() public {
+        MockMetaERC20 real = _tok("USDC", 6);
+        MockMetaERC20 fake = _tok("USDC", 6);
+        descriptor.setStable(address(real), true);
+        _openIn(_pool(address(real), address(fake), 100, 1, 0), -10, 10, 1e12, bytes32(uint256(0x64)));
+
+        string memory svg = _decodeImage(_decodeJson(wallet.tokenURI(1)));
+        assertEq(_count(svg, 'fill="#2775CA"'), 1, "only the allowlisted USDC gets the brand mark");
+        assertEq(_count(svg, 'fill="#6b7280"'), 1, "the look-alike is plain");
+    }
+
+    function _count(string memory h, string memory n) internal pure returns (uint256 c) {
+        bytes memory hb = bytes(h);
+        bytes memory nb = bytes(n);
+        for (uint256 i = 0; i + nb.length <= hb.length; ++i) {
+            bool ok = true;
+            for (uint256 j = 0; j < nb.length && ok; ++j) {
+                ok = hb[i + j] == nb[j];
+            }
+            if (ok) ++c;
+        }
+    }
+
     function test_clean_utf8AndCaps() public view {
         // multi-byte sequences survive; a sequence crossing the cap is dropped whole
         assertEq(fmt.clean(bytes(unicode"héllo"), 32, false), unicode"héllo", "2-byte kept");
@@ -472,7 +514,9 @@ contract WalletPositionDescriptorTest is V4WalletTestBase {
         assertGt(r.principalUsd, 0, "non-zero");
         assertLt(r.principalUsd, 5e15, "below half a cent");
         string memory json = _decodeJson(wallet.tokenURI(1));
-        assertTrue(_contains(_decodeImage(json), "$&lt;0.01"), "<0.01 on the card");
+        string memory svg = _decodeImage(json);
+        assertTrue(_contains(svg, "&lt;$0.01"), "<$0.01 on the card");
+        assertFalse(_contains(svg, "$&lt;"), "the dollar sign goes inside the bound");
     }
 
     // ────────── bug 10/11: decimals and symbol robustness ──────────

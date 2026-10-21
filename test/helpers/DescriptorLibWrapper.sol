@@ -10,8 +10,12 @@ contract DescriptorLibWrapper {
         return DescriptorLib.formatUsd(scaled1e18);
     }
 
-    function tokenIcon(string memory sym, uint256 x, uint256 y) external pure returns (string memory) {
-        return DescriptorLib.tokenIcon(sym, x, y);
+    function tokenIcon(string memory sym, uint8 kind, uint256 x, uint256 y) external pure returns (string memory) {
+        return DescriptorLib.tokenIcon(sym, DescriptorLib.badge(kind), x, y);
+    }
+
+    function badgeKind(string memory sym, bool nativeEth, bool stable) external pure returns (uint8) {
+        return DescriptorLib.badgeKind(sym, nativeEth, stable);
     }
 
     function clean(bytes memory s, uint256 maxLen, bool json) external pure returns (string memory) {
